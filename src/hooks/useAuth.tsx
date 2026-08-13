@@ -1,13 +1,17 @@
 import { useState, useEffect, createContext, useContext, useCallback, ReactNode, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { clearChatCache } from "@/lib/chatCache";
+import type { Tables } from "@/integrations/supabase/types";
 import type { User } from "@supabase/supabase-js";
+
+type Profile = Tables<"profiles">;
 
 // ⚠️ HARDCODED SUPER ADMIN - DO NOT MODIFY ⚠️
 const SUPER_ADMIN_PHONE = "8700602524";
 
 interface AuthContextType {
   user: User | null;
-  profile: any;
+  profile: Profile | null;
   loading: boolean;
   isAdmin: boolean;
   isVerified: boolean;
@@ -31,20 +35,30 @@ const fetchProfileAndAdmin = async (userId: string) => {
     supabase.from("profiles").select("*").eq("user_id", userId).maybeSingle(),
     supabase.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").maybeSingle(),
   ]);
+  if (profileRes.error) throw profileRes.error;
   return { profile: profileRes.data, isAdmin: !!adminRes.data };
+};
+
+const profileCacheKey = (userId: string) => `cirkle:profile:${userId}`;
+
+const readCachedProfile = (userId: string): Profile | null => {
+  try { return JSON.parse(localStorage.getItem(profileCacheKey(userId)) || "null") as Profile | null; }
+  catch { return null; }
 };
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<any>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const initializedRef = useRef(false);
-  const refreshRetryRef = useRef(0);
 
   const isVerified = !!profile?.is_verified;
 
   const loadUserData = useCallback(async (u: User) => {
+    setUser(u);
+    const cachedProfile = readCachedProfile(u.id);
+    if (cachedProfile) setProfile(cachedProfile);
     try {
       if (isSuperAdminUser(u)) {
         await ensureSuperAdmin(u.id);
@@ -53,7 +67,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(u);
       setProfile(p);
       setIsAdmin(admin);
-      refreshRetryRef.current = 0; // reset on success
+      if (p) localStorage.setItem(profileCacheKey(u.id), JSON.stringify(p));
     } catch (err) {
       // Network error - keep existing user state, don't sign out
       console.warn("Failed to load user data, keeping session:", err);
@@ -69,17 +83,23 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setProfile(null);
         setIsAdmin(false);
         setLoading(false);
+        void clearChatCache();
+        if ("caches" in window) void caches.delete("cirkle-images-v1");
         return;
       }
 
       if (session?.user) {
+        // Render the authenticated shell and cached profile immediately.
+        setUser(session.user);
+        const cachedProfile = readCachedProfile(session.user.id);
+        if (cachedProfile) setProfile(cachedProfile);
+        if (!initializedRef.current) {
+          setLoading(false);
+          initializedRef.current = true;
+        }
         // Use setTimeout to avoid Supabase deadlock
         setTimeout(async () => {
           await loadUserData(session.user);
-          if (!initializedRef.current) {
-            setLoading(false);
-            initializedRef.current = true;
-          }
         }, 0);
       } else if (event === "INITIAL_SESSION" && !session) {
         setLoading(false);
@@ -92,12 +112,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
         if (!session && !error) {
-          // Try refreshing - keeps user logged in across restarts
-          const { data: refreshData } = await supabase.auth.refreshSession();
-          if (!refreshData?.session) {
-            setLoading(false);
-            initializedRef.current = true;
-          }
+          setLoading(false);
+          initializedRef.current = true;
         }
       } catch {
         // Network failure on init - don't force logout, just stop loading
@@ -107,26 +123,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     };
     init();
 
-    // Periodic silent refresh every 10 minutes to keep session alive indefinitely
-    const refreshInterval = setInterval(async () => {
-      try {
-        const { data } = await supabase.auth.getSession();
-        if (data?.session) {
-          await supabase.auth.refreshSession();
-          refreshRetryRef.current = 0;
-        }
-      } catch {
-        refreshRetryRef.current += 1;
-        // Only log, never sign out - let autoRefreshToken handle recovery
-        if (refreshRetryRef.current <= 3) {
-          console.warn(`Silent refresh attempt ${refreshRetryRef.current} failed, will retry.`);
-        }
-      }
-    }, 10 * 60 * 1000); // 10 minutes
-
     return () => {
       subscription.unsubscribe();
-      clearInterval(refreshInterval);
     };
   }, [loadUserData]);
 
@@ -136,6 +134,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const { profile: p, isAdmin: admin } = await fetchProfileAndAdmin(currentUser.id);
     setProfile(p);
     setIsAdmin(admin);
+    if (p) localStorage.setItem(profileCacheKey(currentUser.id), JSON.stringify(p));
   }, [user]);
 
   return (

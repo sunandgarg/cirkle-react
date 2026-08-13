@@ -41,5 +41,8 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
     storage: typeof window !== 'undefined' ? localStorage : undefined,
     persistSession: true,
     autoRefreshToken: true,
+    detectSessionInUrl: true,
+    flowType: 'pkce',
+    storageKey: `cirkle-auth-${import.meta.env.VITE_SUPABASE_PROJECT_ID}`,
   }
 });

@@ -10,9 +10,47 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
+    if (Deno.env.get("SEED_DATA_ENABLED") !== "true") {
+      return new Response(JSON.stringify({ error: "Test-data seeding is disabled" }), {
+        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceKey);
+
+    const authHeader = req.headers.get("Authorization");
+    const accessToken = authHeader?.replace(/^Bearer\s+/i, "");
+    if (!accessToken) {
+      return new Response(JSON.stringify({ error: "Authentication required" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { data: authData, error: authError } = await supabase.auth.getUser(accessToken);
+    if (authError || !authData.user) {
+      return new Response(JSON.stringify({ error: "Invalid session" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { data: adminRole } = await supabase.from("user_roles").select("role")
+      .eq("user_id", authData.user.id).eq("role", "admin").maybeSingle();
+    if (!adminRole) {
+      return new Response(JSON.stringify({ error: "Admin access required" }), {
+        status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const seedVersion = "2026-08-14-v1";
+    const { data: existingSeed } = await supabase.from("app_settings").select("value")
+      .eq("key", "test_seed_version").maybeSingle();
+    if (existingSeed?.value === seedVersion) {
+      return new Response(JSON.stringify({ success: true, alreadySeeded: true, seedVersion }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     // Create 20 test users with profiles
     const testUsers = [
@@ -630,8 +668,15 @@ serve(async (req) => {
       });
     }
 
+    await supabase.from("app_settings").upsert({
+      key: "test_seed_version",
+      value: seedVersion,
+      updated_by: authData.user.id,
+    }, { onConflict: "key" });
+
     return new Response(JSON.stringify({
       success: true,
+      seedVersion,
       usersCreated: createdUserIds.length,
       forumPostsCreated: globalPostIds.length + campusMsgsExtra.length + bombayMsgs.length + anonMsgs.length + 2,
       message: `Seeded ${createdUserIds.length} users, 60+ forum messages with threads, polls, reactions, and more.`,

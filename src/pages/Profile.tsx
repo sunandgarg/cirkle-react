@@ -89,7 +89,10 @@ const Profile = () => {
       return data;
     },
     enabled: !!targetId,
-    staleTime: 0, gcTime: 0, refetchOnMount: "always",
+    placeholderData: isOwn ? myProfile : undefined,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+    refetchOnMount: false,
   });
 
   const { data: education, refetch: refetchEducation } = useQuery({
@@ -99,7 +102,7 @@ const Profile = () => {
       const { data } = await supabase.from("education").select("*").eq("user_id", targetId).order("created_at", { ascending: false });
       return data ?? [];
     },
-    enabled: !!targetId, staleTime: 5000, refetchOnMount: "always",
+    enabled: !!targetId, staleTime: 5 * 60 * 1000, refetchOnMount: false,
   });
 
   const { data: experience, refetch: refetchExperience } = useQuery({
@@ -109,7 +112,7 @@ const Profile = () => {
       const { data } = await supabase.from("professional_experience").select("*").eq("user_id", targetId).order("created_at", { ascending: false });
       return data ?? [];
     },
-    enabled: !!targetId, staleTime: 5000, refetchOnMount: "always",
+    enabled: !!targetId, staleTime: 5 * 60 * 1000, refetchOnMount: false,
   });
 
   const { data: connectionStatus } = useQuery({
@@ -350,7 +353,7 @@ const Profile = () => {
     <div className="bg-background min-h-screen pb-8">
       {/* Cover */}
       <div className="h-44 sm:h-52 relative overflow-hidden profile-cover">
-        {(displayProfile as any)?.cover_photo_url ? <img src={(displayProfile as any).cover_photo_url} alt="Cover" className="absolute inset-0 w-full h-full object-cover" />
+        {(displayProfile as any)?.cover_photo_url ? <img src={(displayProfile as any).cover_photo_url} alt="Cover" className="absolute inset-0 w-full h-full object-cover" loading="eager" decoding="async" />
           : <div className="absolute inset-0 bg-gradient-to-br from-primary via-primary/80 to-primary/60" />}
         <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 pt-4">
           <button onClick={() => navigate(-1)} className="w-9 h-9 rounded-full bg-card/60 backdrop-blur flex items-center justify-center"><ArrowLeft className="w-4 h-4 text-foreground" /></button>
@@ -372,7 +375,7 @@ const Profile = () => {
           <div className="flex items-end gap-4 -mt-14 mb-3">
             <div className="flex-shrink-0 relative">
               {(displayProfile as any)?.avatar_url ? (
-                <div className="w-24 h-24 rounded-full border-4 border-card overflow-hidden shadow-lg"><img src={(displayProfile as any).avatar_url} alt="Profile" className="w-full h-full object-cover" /></div>
+                <div className="w-24 h-24 rounded-full border-4 border-card overflow-hidden shadow-lg"><img src={(displayProfile as any).avatar_url} alt="Profile" className="w-full h-full object-cover" decoding="async" /></div>
               ) : (
                 <div className="w-24 h-24 rounded-full border-4 border-card bg-secondary flex items-center justify-center shadow-lg"><span className="text-3xl font-bold text-primary">{((displayProfile as any)?.name || "?")[0]}</span></div>
               )}

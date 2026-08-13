@@ -341,6 +341,7 @@ export type Database = {
         Row: {
           id: string
           joined_at: string
+          last_read_at: string
           room_id: string
           typing_at: string | null
           user_id: string
@@ -348,6 +349,7 @@ export type Database = {
         Insert: {
           id?: string
           joined_at?: string
+          last_read_at?: string
           room_id: string
           typing_at?: string | null
           user_id: string
@@ -355,6 +357,7 @@ export type Database = {
         Update: {
           id?: string
           joined_at?: string
+          last_read_at?: string
           room_id?: string
           typing_at?: string | null
           user_id?: string
@@ -374,6 +377,7 @@ export type Database = {
           avatar_url: string | null
           created_at: string
           created_by: string | null
+          direct_key: string | null
           id: string
           is_group: boolean
           name: string | null
@@ -382,6 +386,7 @@ export type Database = {
           avatar_url?: string | null
           created_at?: string
           created_by?: string | null
+          direct_key?: string | null
           id?: string
           is_group?: boolean
           name?: string | null
@@ -390,6 +395,7 @@ export type Database = {
           avatar_url?: string | null
           created_at?: string
           created_by?: string | null
+          direct_key?: string | null
           id?: string
           is_group?: boolean
           name?: string | null
@@ -709,9 +715,12 @@ export type Database = {
       }
       messages: {
         Row: {
+          client_id: string | null
           content: string
           created_at: string
           id: string
+          media_url: string | null
+          message_type: string
           read_at: string | null
           read_by: string[] | null
           reply_to_message_id: string | null
@@ -720,9 +729,12 @@ export type Database = {
           status: string
         }
         Insert: {
+          client_id?: string | null
           content: string
           created_at?: string
           id?: string
+          media_url?: string | null
+          message_type?: string
           read_at?: string | null
           read_by?: string[] | null
           reply_to_message_id?: string | null
@@ -731,9 +743,12 @@ export type Database = {
           status?: string
         }
         Update: {
+          client_id?: string | null
           content?: string
           created_at?: string
           id?: string
+          media_url?: string | null
+          message_type?: string
           read_at?: string | null
           read_by?: string[] | null
           reply_to_message_id?: string | null
@@ -1483,7 +1498,27 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_chat_group: {
+        Args: { p_member_ids: string[]; p_name: string }
+        Returns: string
+      }
       ensure_super_admin: { Args: { p_user_id: string }; Returns: undefined }
+      get_chat_inbox: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          avatar_url: string | null
+          created_at: string
+          created_by: string | null
+          display_avatar: string | null
+          display_name: string
+          id: string
+          is_group: boolean
+          last_message: Json | null
+          name: string | null
+          unread_count: number
+        }[]
+      }
+      get_or_create_direct_chat: { Args: { p_peer_id: string }; Returns: string }
       generate_profile_slug: {
         Args: { p_name: string; p_user_id: string }
         Returns: string
@@ -1500,6 +1535,11 @@ export type Database = {
         }
         Returns: boolean
       }
+      is_chat_member: {
+        Args: { p_room_id: string; p_user_id?: string }
+        Returns: boolean
+      }
+      mark_chat_read: { Args: { p_room_id: string }; Returns: undefined }
       revoke_admin_role: {
         Args: { p_target_user_id: string }
         Returns: undefined
