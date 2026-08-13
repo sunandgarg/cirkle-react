@@ -2,18 +2,15 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { toast } from "sonner";
 import { Smartphone, ShieldCheck, ArrowLeft } from "lucide-react";
 import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
+import { isMobileTestPhone, MOBILE_TEST_OTP } from "@/lib/mobileVerification";
 
-const TEST_OTP = "123456";
-
-const isValidPhone = (code: string, digits: string) =>
-  code === "+91" ? digits.length === 10 : digits.length >= 6 && digits.length <= 15;
+const isValidPhone = (digits: string) => digits.length === 10;
 
 /** Mobile verification step shown after social (Google) sign-in. */
 const PhoneVerification = () => {
@@ -25,15 +22,7 @@ const PhoneVerification = () => {
   const [otp, setOtp] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const { data: testMode } = useQuery({
-    queryKey: ["app-setting-test-mode"],
-    queryFn: async () => {
-      const { data } = await supabase.from("app_settings").select("value").eq("key", "test_mode").maybeSingle();
-      return data?.value === "true";
-    },
-    staleTime: 60000,
-  });
-  const isTestMode = testMode !== false;
+  const isTestMode = isMobileTestPhone(country.code, phone);
 
   useEffect(() => {
     if (loading) return;
@@ -43,28 +32,43 @@ const PhoneVerification = () => {
     }
   }, [user, profile?.is_verified, loading, navigate]);
 
-  const sendCode = () => {
-    if (!isValidPhone(country.code, phone)) {
-      toast.error(country.code === "+91" ? "Enter a valid 10-digit mobile number" : "Enter a valid mobile number");
+  const sendCode = async () => {
+    if (!isValidPhone(phone)) {
+      toast.error("Enter a valid 10-digit mobile number");
       return;
     }
     if (!isTestMode) {
       toast.error("SMS verification is not available right now. Please try again later.");
       return;
     }
-    setStep("otp");
-    toast.success("Verification code sent");
+    setSaving(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ phone: `${country.code}${phone}` });
+      if (error) throw error;
+      setStep("otp");
+      toast.success("Verification code sent");
+    } catch (error: any) {
+      toast.error(error.message || "Could not start mobile verification. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const verify = async () => {
     if (otp.length !== 6) { toast.error("Enter the full 6-digit code"); return; }
-    if (otp !== TEST_OTP) { toast.error("Invalid code. Use test code: 123456"); return; }
+    if (otp !== MOBILE_TEST_OTP) { toast.error(`Invalid code. Use test code: ${MOBILE_TEST_OTP}`); return; }
     setSaving(true);
     try {
-      const { error } = await supabase.auth.updateUser({
-        data: { phone, phone_country_code: country.code, phone_full: `${country.code}${phone}` },
+      const { error } = await supabase.auth.verifyOtp({
+        phone: `${country.code}${phone}`,
+        token: otp,
+        type: "phone_change",
       });
       if (error) throw error;
+      const { error: metadataError } = await supabase.auth.updateUser({
+        data: { phone, phone_country_code: country.code, phone_full: `${country.code}${phone}` },
+      });
+      if (metadataError) throw metadataError;
       toast.success("Mobile number verified!");
       navigate(profile?.is_verified ? "/cirkle-forum" : "/iit-verify", { replace: true });
     } catch (err: any) {
@@ -92,7 +96,7 @@ const PhoneVerification = () => {
           <>
             <h1 className="text-2xl font-bold text-foreground text-center">Verify your mobile</h1>
             <p className="text-sm text-muted-foreground mt-2 mb-6 text-center max-w-xs">
-              Signed in as {user?.email}. Add your mobile number to secure your Cirkle account.
+              Add your 10-digit mobile number to secure your Cirkle account.
             </p>
             <div className="w-full max-w-xs flex items-center gap-2">
               <CountryCodeSelect value={country} onChange={setCountry} />
@@ -101,13 +105,14 @@ const PhoneVerification = () => {
                 inputMode="numeric"
                 placeholder="Mobile number"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 15))}
+                onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
                 onKeyDown={(e) => e.key === "Enter" && sendCode()}
                 className="bg-secondary border-border h-12 rounded-xl flex-1"
+                maxLength={10}
               />
             </div>
-            <Button size="lg" className="w-full max-w-xs h-12 text-base font-semibold rounded-xl mt-6" onClick={sendCode} disabled={!isValidPhone(country.code, phone)}>
-              Send code
+            <Button size="lg" className="w-full max-w-xs h-12 text-base font-semibold rounded-xl mt-6" onClick={sendCode} disabled={saving || !isValidPhone(phone)}>
+              {saving ? "Sending..." : "Send code"}
             </Button>
           </>
         ) : (
@@ -119,7 +124,7 @@ const PhoneVerification = () => {
             {isTestMode && (
               <div className="mt-6 bg-primary/10 border border-primary/20 rounded-xl px-4 py-3 w-full max-w-xs text-center">
                 <p className="text-xs text-primary font-semibold">🧪 TEST MODE</p>
-                <p className="text-2xl font-mono font-bold text-foreground tracking-[0.5em] mt-1">{TEST_OTP}</p>
+                <p className="text-2xl font-mono font-bold text-foreground tracking-[0.5em] mt-1">{MOBILE_TEST_OTP}</p>
               </div>
             )}
             <div className="mt-8">

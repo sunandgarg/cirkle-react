@@ -21,6 +21,7 @@ import { passingYears } from "@/data/dropdownOptions";
 import { ALL_COURSES, getSpecialisations } from "@/data/courseSpecialisations";
 import { companies } from "@/data/companiesList";
 import { locations } from "@/data/locationsList";
+import { clearMobileTestSession } from "@/lib/mobileVerification";
 
 const PROFILE_TABS = ["About Me", "Education", "Professional Details", "Expertise", "Pricing Information", "Social Handles", "Activity"];
 
@@ -327,7 +328,7 @@ const Profile = () => {
     } catch (err: any) { toast.error("Upload error: " + err.message); }
   };
 
-  const handleLogout = async () => { await supabase.auth.signOut(); navigate("/"); };
+  const handleLogout = async () => { clearMobileTestSession(); await supabase.auth.signOut(); navigate("/"); };
 
   if (!user && isOwn) { navigate("/auth"); return null; }
 

@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { clearChatCache } from "@/lib/chatCache";
 import type { Tables } from "@/integrations/supabase/types";
 import type { User } from "@supabase/supabase-js";
+import { clearMobileTestSession, MOBILE_TEST_USER_ID, readMobileTestSession } from "@/lib/mobileVerification";
 
 type Profile = Tables<"profiles">;
 
@@ -40,6 +41,33 @@ const fetchProfileAndAdmin = async (userId: string) => {
 };
 
 const profileCacheKey = (userId: string) => `cirkle:profile:${userId}`;
+
+const createMobileTestIdentity = () => {
+  const session = readMobileTestSession();
+  if (!session) return null;
+  const now = session.createdAt;
+  const testUser = {
+    id: MOBILE_TEST_USER_ID,
+    aud: "authenticated",
+    role: "authenticated",
+    phone: `${session.countryCode}${session.phone}`,
+    app_metadata: { provider: "mobile-test", providers: ["mobile-test"] },
+    user_metadata: { phone: session.phone, phone_country_code: session.countryCode, phone_full: `${session.countryCode}${session.phone}`, name: "Cirkle Test User" },
+    identities: [],
+    created_at: now,
+    updated_at: now,
+  } as User;
+  const testProfile: Profile = {
+    avatar_url: null, bio: "Test mode profile", community_id: "test", cover_photo_url: null,
+    created_at: now, date_of_birth: null, experience: null, expertise: null, headline: "Testing Cirkle",
+    iit_email: null, iit_name: "IIT Test", is_mentor: false, is_verified: true, location: null,
+    mentor_category: null, mentor_price_audio: null, mentor_price_chat: null, mentor_price_video: null,
+    name: "Cirkle Test User", onboarding_completed: true, primary_education_id: null, role: "user",
+    skills: [], slug: "cirkle-test-user", slug_updated_at: null, social_links: null, student_status: "student",
+    user_id: MOBILE_TEST_USER_ID,
+  };
+  return { user: testUser, profile: testProfile };
+};
 
 const readCachedProfile = (userId: string): Profile | null => {
   try { return JSON.parse(localStorage.getItem(profileCacheKey(userId)) || "null") as Profile | null; }
@@ -79,6 +107,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === "SIGNED_OUT") {
+        clearMobileTestSession();
         setUser(null);
         setProfile(null);
         setIsAdmin(false);
@@ -110,6 +139,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Then initialize
     const init = async () => {
       try {
+        const mobileTestIdentity = createMobileTestIdentity();
+        if (mobileTestIdentity) {
+          setUser(mobileTestIdentity.user);
+          setProfile(mobileTestIdentity.profile);
+          setIsAdmin(false);
+          setLoading(false);
+          initializedRef.current = true;
+          return;
+        }
         const { data: { session }, error } = await supabase.auth.getSession();
         if (!session && !error) {
           setLoading(false);
@@ -131,6 +169,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const refetchProfile = useCallback(async () => {
     const currentUser = user;
     if (!currentUser) return;
+    if (currentUser.id === MOBILE_TEST_USER_ID) return;
     const { profile: p, isAdmin: admin } = await fetchProfileAndAdmin(currentUser.id);
     setProfile(p);
     setIsAdmin(admin);

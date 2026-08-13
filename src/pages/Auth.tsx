@@ -1,16 +1,16 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { lovable } from "@/integrations/lovable/index";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
+import { hasMobileTestMode, isMobileTestPhone, MOBILE_TEST_OTP } from "@/lib/mobileVerification";
 
 
-const isValidPhone = (code: string, digits: string) =>
-  code === "+91" ? digits.length === 10 : digits.length >= 6 && digits.length <= 15;
+const isValidPhone = (digits: string) => digits.length === 10;
 
 const Auth = () => {
   const [phone, setPhone] = useState("");
@@ -35,27 +35,34 @@ const Auth = () => {
   }, [user, profile?.is_verified, authLoading, navigate]);
 
   const handlePhoneChange = (value: string) => {
-    setPhone(value.replace(/\D/g, "").slice(0, 15));
+    setPhone(value.replace(/\D/g, "").slice(0, 10));
   };
 
-  const handleContinue = () => {
-    if (!isValidPhone(country.code, phone)) {
-      toast.error(country.code === "+91" ? "Please enter a valid 10-digit mobile number" : "Please enter a valid mobile number");
+  const handleContinue = async () => {
+    if (!isValidPhone(phone)) {
+      toast.error("Please enter a valid 10-digit mobile number");
       return;
     }
-    navigate("/otp-verify", { state: { phone, countryCode: country.code } });
-  };
+    if (!isMobileTestPhone(country.code, phone)) {
+      toast.error("SMS verification is not available right now. Please try again later.");
+      return;
+    }
 
-
-  const handleGoogleLogin = async () => {
-    const { error } = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin,
-    });
-    if (error) {
-      toast.error("Google sign-in failed");
-      console.error(error);
+    setLoading(true);
+    try {
+      if (isMobileTestPhone(country.code, phone)) {
+        navigate("/otp-verify", { state: { phone, countryCode: country.code } });
+        return;
+      }
+      const { error } = await supabase.auth.signInWithOtp({ phone: `${country.code}${phone}` });
+      if (error) throw error;
+      navigate("/otp-verify", { state: { phone, countryCode: country.code } });
+    } catch (error: any) {
+      toast.error(error.message || "Could not start mobile verification. Please try again.");
+      setLoading(false);
     }
   };
+
 
   return (
     <div className="h-[100dvh] flex flex-col overflow-hidden bg-background" style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
@@ -81,7 +88,7 @@ const Auth = () => {
       {/* Login form */}
       <div className="relative z-10 px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-4 -mt-16 flex-shrink-0">
         <h1 className="text-3xl font-bold text-foreground">Welcome</h1>
-        <p className="text-sm text-muted-foreground mt-1 mb-4">Sign up or login to your account</p>
+        <p className="text-sm text-muted-foreground mt-1 mb-4">Continue securely with your mobile number</p>
 
         <div className="flex items-center gap-2 mb-4">
           {/* Country code selector (supports custom "Other" codes) */}
@@ -89,50 +96,37 @@ const Auth = () => {
           <Input
             type="tel"
             inputMode="numeric"
-            placeholder={country.code === "+91" ? "Enter 10-digit number" : "Enter mobile number"}
+            placeholder="Enter 10-digit number"
             value={phone}
             onChange={(e) => handlePhoneChange(e.target.value)}
             className="bg-secondary border-border text-foreground placeholder:text-muted-foreground h-12 rounded-xl focus:border-primary flex-1"
             onKeyDown={(e) => e.key === "Enter" && handleContinue()}
-            maxLength={15}
+            maxLength={10}
           />
         </div>
 
         {/* Digit count indicator */}
-        <p className={`text-xs mb-2 ${isValidPhone(country.code, phone) ? "text-green-500" : "text-muted-foreground"}`}>
-          {country.code === "+91" ? `${phone.length}/10 digits` : `${phone.length} digits`}
+        <p className={`text-xs mb-2 ${isValidPhone(phone) ? "text-green-500" : "text-muted-foreground"}`}>
+          {phone.length}/10 digits
         </p>
+
+        {hasMobileTestMode() && (
+          <p className="text-xs mb-3 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-primary">
+            Test login: +91 9999999999 · OTP {MOBILE_TEST_OTP}
+          </p>
+        )}
 
 
         <Button
           size="lg"
           className="w-full h-12 text-base font-semibold rounded-xl"
           onClick={handleContinue}
-          disabled={loading || phone.length !== 10}
+          disabled={loading || !isValidPhone(phone)}
         >
-          Continue
+          {loading ? "Sending code..." : "Continue with mobile"}
         </Button>
 
-        <div className="flex items-center gap-4 my-4">
-          <div className="flex-1 h-px bg-border" />
-          <span className="text-sm text-muted-foreground">Or</span>
-          <div className="flex-1 h-px bg-border" />
-        </div>
-
-        <button
-          onClick={handleGoogleLogin}
-          className="w-full h-12 rounded-xl bg-secondary border border-border flex items-center justify-center gap-2 text-foreground hover:bg-accent transition-colors press-scale"
-        >
-          <svg className="w-5 h-5" viewBox="0 0 24 24">
-            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
-            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
-            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
-          </svg>
-          <span className="text-sm font-medium">Google</span>
-        </button>
-
-        <p className="text-center text-xs text-muted-foreground mt-4">
+        <p className="text-center text-xs text-muted-foreground mt-5">
           By continuing, you agree to our{" "}
           <button onClick={() => setShowTerms(true)} className="underline text-muted-foreground hover:text-foreground transition-colors">T&C</button> &{" "}
           <button onClick={() => setShowPrivacy(true)} className="underline text-muted-foreground hover:text-foreground transition-colors">Privacy policy</button>

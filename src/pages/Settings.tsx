@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Switch } from "@/components/ui/switch";
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { clearMobileTestSession } from "@/lib/mobileVerification";
 
 const getTheme = (): "light" | "dark" | "system" => {
   if (typeof window === "undefined") return "light";
@@ -40,6 +41,7 @@ const Settings = () => {
   }, [theme]);
 
   const handleLogout = async () => {
+    clearMobileTestSession();
     await supabase.auth.signOut();
     navigate("/");
   };

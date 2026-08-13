@@ -2,17 +2,19 @@ import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { toast } from "sonner";
-import { ArrowLeft, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Check, Clock3, ShieldCheck } from "lucide-react";
+import { isMobileTestPhone, MOBILE_TEST_OTP, startMobileTestSession } from "@/lib/mobileVerification";
 
 const SUPER_ADMIN_PHONE = "8700602524";
 
 const OtpVerification = () => {
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendIn, setResendIn] = useState(30);
   const [authComplete, setAuthComplete] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -35,18 +37,14 @@ const OtpVerification = () => {
     }
   }, [authComplete, user, profile, navigate]);
 
-  // Fetch test mode setting
-  const { data: testMode } = useQuery({
-    queryKey: ["app-setting-test-mode"],
-    queryFn: async () => {
-      const { data } = await supabase.from("app_settings").select("value").eq("key", "test_mode").maybeSingle();
-      return data?.value === "true";
-    },
-    staleTime: 60000,
-  });
+  const isTestMode = isMobileTestPhone(countryCode, phone);
+  const maskedPhone = phone.length >= 4 ? `••••••${phone.slice(-4)}` : phone;
 
-  const TEST_OTP = "123456";
-  const isTestMode = testMode !== false; // default true
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const timer = window.setInterval(() => setResendIn((seconds) => Math.max(0, seconds - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [resendIn]);
 
   if (!phone) {
     return (
@@ -67,43 +65,32 @@ const OtpVerification = () => {
       toast.error("SMS verification is not available right now. Please try again later.");
       return;
     }
-    if (otp !== TEST_OTP) { toast.error("Invalid OTP. Use test code: 123456"); return; }
+    if (otp !== MOBILE_TEST_OTP) { toast.error(`Invalid OTP. Use test code: ${MOBILE_TEST_OTP}`); return; }
 
     setLoading(true);
     try {
       const cleanPhone = phone.replace(/\D/g, "");
       const isSuperAdmin = cleanPhone === SUPER_ADMIN_PHONE;
-      const email = isSuperAdmin ? "admin@cirkle.world" : `${cleanPhone}@cirkle.world`;
-      const password = isSuperAdmin ? "admin123456" : `cirkle_${cleanPhone}_secure`;
-      const displayName = isSuperAdmin ? "SUNAND GARG" : `User ${cleanPhone.slice(-4)}`;
+      const fullPhone = `${countryCode}${cleanPhone}`;
 
-      // Try login first
-      let session = null;
-      const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({ email, password });
-
-      if (loginError) {
-        // Sign up
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-          email, password,
-          options: { emailRedirectTo: window.location.origin, data: { name: displayName, phone: cleanPhone } },
-        });
-        if (signUpError) throw signUpError;
-        
-        if (!signUpData.session) {
-          // Try login again after signup
-          const { data: retryData, error: retryError } = await supabase.auth.signInWithPassword({ email, password });
-          if (retryError) throw retryError;
-          session = retryData.session;
-        } else {
-          session = signUpData.session;
-        }
-      } else {
-        session = loginData.session;
+      if (isTestMode) {
+        startMobileTestSession(countryCode, cleanPhone);
+        toast.success("Test account verified");
+        window.location.assign("/cirkle-forum");
+        return;
       }
+
+      const { data, error } = await supabase.auth.verifyOtp({
+        phone: fullPhone,
+        token: otp,
+        type: "sms",
+      });
+      if (error) throw error;
+      const session = data.session;
 
       // Ensure the phone number is always present on the account metadata
       if (!(session?.user?.user_metadata as any)?.phone) {
-        await supabase.auth.updateUser({ data: { phone: cleanPhone, phone_country_code: countryCode, phone_full: `${countryCode}${cleanPhone}` } });
+        await supabase.auth.updateUser({ data: { phone: cleanPhone, phone_country_code: countryCode, phone_full: fullPhone } });
       }
 
       // If super admin, use ensure_super_admin RPC (non-blocking, runs with service role)
@@ -123,41 +110,75 @@ const OtpVerification = () => {
     }
   };
 
+  const handleResend = async () => {
+    if (resendIn > 0 || resending) return;
+    if (!isTestMode) {
+      toast.error("SMS verification is not available right now. Please try again later.");
+      return;
+    }
+    setResending(true);
+    try {
+      const { error } = await supabase.auth.signInWithOtp({ phone: `${countryCode}${phone}` });
+      if (error) throw error;
+      setOtp("");
+      setResendIn(30);
+      toast.success("A new code has been sent");
+    } catch (error: any) {
+      toast.error(error.message || "Could not resend the code. Please try again.");
+    } finally {
+      setResending(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <div className="px-6 pt-12 pb-4">
-        <button onClick={() => navigate("/auth")} className="text-muted-foreground hover:text-foreground transition-colors">
+    <div className="min-h-[100dvh] bg-background flex flex-col" style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div className="px-5 pt-5 pb-2">
+        <button aria-label="Change mobile number" onClick={() => navigate("/auth")} className="w-11 h-11 -ml-2 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
           <ArrowLeft className="w-6 h-6" />
         </button>
       </div>
-      <div className="flex-1 flex flex-col items-center justify-center px-6">
-        <div className="w-20 h-20 rounded-full bg-primary/20 flex items-center justify-center mb-6">
-          <ShieldCheck className="w-10 h-10 text-primary" />
+      <main className="flex-1 flex flex-col items-center px-5 pt-[7vh] pb-8">
+        <div className="relative w-20 h-20 rounded-3xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-6 shadow-sm">
+          <ShieldCheck className="w-9 h-9 text-primary" />
+          <span className="absolute -right-1 -bottom-1 w-7 h-7 rounded-full bg-primary text-primary-foreground border-4 border-background flex items-center justify-center">
+            <Check className="w-3.5 h-3.5" strokeWidth={3} />
+          </span>
         </div>
-        <h1 className="text-2xl font-bold text-foreground text-center">Verify OTP</h1>
-        <p className="text-sm text-muted-foreground mt-2 text-center">
-          Enter the 6-digit code sent to <span className="text-foreground font-medium">{countryCode} {phone}</span>
+        <h1 className="text-[28px] leading-tight font-bold tracking-tight text-foreground text-center">Enter your code</h1>
+        <p className="text-sm leading-6 text-muted-foreground mt-2 text-center max-w-sm">
+          We sent a 6-digit verification code to<br />
+          <span className="text-foreground font-semibold">{countryCode} {maskedPhone}</span>
+          <button onClick={() => navigate("/auth")} className="ml-2 text-primary font-semibold hover:underline">Change</button>
         </p>
         {isTestMode && (
-          <div className="mt-6 bg-primary/10 border border-primary/20 rounded-xl px-4 py-3 w-full max-w-xs text-center">
-            <p className="text-xs text-primary font-semibold">🧪 TEST MODE</p>
-            <p className="text-2xl font-mono font-bold text-foreground tracking-[0.5em] mt-1">{TEST_OTP}</p>
-          </div>
+          <button onClick={() => setOtp(MOBILE_TEST_OTP)} className="mt-6 w-full max-w-sm bg-primary/10 border border-primary/20 rounded-2xl px-4 py-3.5 text-center hover:bg-primary/15 active:scale-[0.99] transition-all">
+            <span className="block text-[11px] uppercase tracking-[0.14em] text-primary font-bold">Test mode · tap to use code</span>
+            <span className="block text-xl font-mono font-bold text-foreground tracking-[0.35em] mt-1 pl-[0.35em]">{MOBILE_TEST_OTP}</span>
+          </button>
         )}
-        <div className="mt-8">
-          <InputOTP maxLength={6} value={otp} onChange={setOtp}>
-            <InputOTPGroup>
+        <div className="mt-7 w-full flex justify-center">
+          <InputOTP autoFocus maxLength={6} value={otp} onChange={setOtp}>
+            <InputOTPGroup className="gap-1.5 sm:gap-3">
               {[0, 1, 2, 3, 4, 5].map((index) => (
-                <InputOTPSlot key={index} index={index} className="w-12 h-14 text-lg font-bold text-foreground bg-secondary border-border rounded-xl" />
+                <InputOTPSlot key={index} index={index} className="w-10 sm:w-12 h-14 text-xl font-bold text-foreground bg-secondary border-border rounded-xl first:rounded-xl last:rounded-xl" />
               ))}
             </InputOTPGroup>
           </InputOTP>
         </div>
-        <Button size="lg" className="w-full max-w-xs h-12 text-base font-semibold rounded-xl mt-8" onClick={handleVerify} disabled={loading || otp.length !== 6}>
-          {loading ? "Verifying..." : "Verify & Continue"}
+        <Button size="lg" className="w-full max-w-sm h-12 text-base font-semibold rounded-xl mt-7 shadow-sm" onClick={handleVerify} disabled={loading || otp.length !== 6}>
+          {loading ? "Checking code..." : "Verify and continue"}
         </Button>
-        <button className="text-sm text-primary mt-4 hover:underline">Resend OTP</button>
-      </div>
+        <div className="h-10 mt-4 flex items-center justify-center text-sm">
+          {resendIn > 0 ? (
+            <span className="text-muted-foreground flex items-center gap-1.5"><Clock3 className="w-4 h-4" /> Resend code in {resendIn}s</span>
+          ) : (
+            <button onClick={handleResend} disabled={resending} className="text-primary font-semibold hover:underline disabled:opacity-60">
+              {resending ? "Sending new code..." : "Didn't get it? Resend code"}
+            </button>
+          )}
+        </div>
+        <p className="mt-auto pt-8 text-xs text-muted-foreground text-center max-w-xs">Your code is private. Cirkle will never ask you to share it.</p>
+      </main>
     </div>
   );
 };
