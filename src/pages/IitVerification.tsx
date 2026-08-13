@@ -9,34 +9,10 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { toast } from "sonner";
 import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search } from "lucide-react";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
+import { useQuery } from "@tanstack/react-query";
+import { defaultIitLogo, IIT_LIST, iitLogoSettingKey, type IitInstitute } from "@/data/iitInstitutes";
 
-const IIT_LIST = [
-  { name: "IIT Bombay", studentDomain: "iitb.ac.in", alumniDomain: "alumni.iitb.ac.in" },
-  { name: "IIT Delhi", studentDomain: "iitd.ac.in", alumniDomain: "alumni.iitd.ac.in" },
-  { name: "IIT Madras", studentDomain: "iitm.ac.in", alumniDomain: "alumni.iitm.ac.in" },
-  { name: "IIT Kanpur", studentDomain: "iitk.ac.in", alumniDomain: "alumni.iitk.ac.in" },
-  { name: "IIT Kharagpur", studentDomain: "iitkgp.ac.in", alumniDomain: "alumni.iitkgp.ac.in" },
-  { name: "IIT Roorkee", studentDomain: "iitr.ac.in", alumniDomain: "alumni.iitr.ac.in" },
-  { name: "IIT Guwahati", studentDomain: "iitg.ac.in", alumniDomain: "alumni.iitg.ac.in" },
-  { name: "IIT Hyderabad", studentDomain: "iith.ac.in", alumniDomain: "alumni.iith.ac.in" },
-  { name: "IIT BHU", studentDomain: "iitbhu.ac.in", alumniDomain: "alumni.iitbhu.ac.in" },
-  { name: "IIT Indore", studentDomain: "iiti.ac.in", alumniDomain: "alumni.iiti.ac.in" },
-  { name: "IIT Ropar", studentDomain: "iitrpr.ac.in", alumniDomain: "alumni.iitrpr.ac.in" },
-  { name: "IIT Patna", studentDomain: "iitp.ac.in", alumniDomain: "alumni.iitp.ac.in" },
-  { name: "IIT Bhubaneswar", studentDomain: "iitbbs.ac.in", alumniDomain: "alumni.iitbbs.ac.in" },
-  { name: "IIT Gandhinagar", studentDomain: "iitgn.ac.in", alumniDomain: "alumni.iitgn.ac.in" },
-  { name: "IIT Jodhpur", studentDomain: "iitj.ac.in", alumniDomain: "alumni.iitj.ac.in" },
-  { name: "IIT Mandi", studentDomain: "iitmandi.ac.in", alumniDomain: "alumni.iitmandi.ac.in" },
-  { name: "IIT Tirupati", studentDomain: "iittp.ac.in", alumniDomain: "alumni.iittp.ac.in" },
-  { name: "IIT Palakkad", studentDomain: "iitpkd.ac.in", alumniDomain: "alumni.iitpkd.ac.in" },
-  { name: "IIT Dharwad", studentDomain: "iitdh.ac.in", alumniDomain: "alumni.iitdh.ac.in" },
-  { name: "IIT Bhilai", studentDomain: "iitbhilai.ac.in", alumniDomain: "alumni.iitbhilai.ac.in" },
-  { name: "IIT Goa", studentDomain: "iitgoa.ac.in", alumniDomain: "alumni.iitgoa.ac.in" },
-  { name: "IIT Jammu", studentDomain: "iitjammu.ac.in", alumniDomain: "alumni.iitjammu.ac.in" },
-  { name: "IIT Dhanbad (ISM)", studentDomain: "iitism.ac.in", alumniDomain: "alumni.iitism.ac.in" },
-];
-
-const IitLogo = ({ iit }: { iit: typeof IIT_LIST[number] }) => {
+const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
   const [failed, setFailed] = useState(false);
   const initials = iit.name
     .replace("IIT ", "")
@@ -48,18 +24,18 @@ const IitLogo = ({ iit }: { iit: typeof IIT_LIST[number] }) => {
     .toUpperCase();
 
   return (
-    <div className="w-14 h-14 rounded-2xl bg-white border border-border/70 shadow-sm flex items-center justify-center overflow-hidden shrink-0">
+    <div className="w-11 h-11 rounded-xl bg-white border border-border/70 shadow-sm flex items-center justify-center overflow-hidden shrink-0">
       {failed ? (
         <span className="text-sm font-black tracking-tight text-primary">{initials}</span>
       ) : (
         <img
-          src={`https://www.google.com/s2/favicons?domain=${iit.studentDomain}&sz=128`}
+          src={customUrl || defaultIitLogo(iit.studentDomain)}
           alt={`${iit.name} logo`}
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
           onError={() => setFailed(true)}
-          className="w-11 h-11 object-contain"
+          className="w-8 h-8 object-contain"
         />
       )}
     </div>
@@ -87,6 +63,16 @@ const IitVerification = () => {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [existingRecordMessage, setExistingRecordMessage] = useState("");
+
+  const { data: iitLogos = {} } = useQuery({
+    queryKey: ["iit-logos"],
+    queryFn: async () => {
+      const keys = IIT_LIST.map((iit) => iitLogoSettingKey(iit.studentDomain));
+      const { data } = await supabase.from("app_settings").select("key,value").in("key", keys);
+      return Object.fromEntries((data ?? []).map((item) => [item.key, item.value])) as Record<string, string>;
+    },
+    staleTime: 5 * 60 * 1000,
+  });
 
   const filteredIits = IIT_LIST.filter((iit) =>
     iit.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -332,12 +318,12 @@ const IitVerification = () => {
               <p className="text-sm font-semibold text-foreground">All IITs</p>
               <span className="text-xs text-muted-foreground">{filteredIits.length} institutes</span>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pb-4">
               {filteredIits.map((iit) => (
                 <button key={iit.studentDomain} onClick={() => handleSelectIit(iit)}
-                  className="group min-h-[132px] p-3 rounded-2xl bg-card border border-border hover:border-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary transition-all text-left press-scale flex flex-col items-center justify-center gap-3">
-                  <IitLogo iit={iit} />
-                  <span className="text-[13px] leading-4 text-center text-foreground font-semibold group-hover:text-primary transition-colors">{iit.name}</span>
+                  className="group min-h-[68px] px-4 py-2.5 rounded-2xl bg-card border border-border hover:border-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary transition-all text-left press-scale flex items-center gap-3">
+                  <IitLogo iit={iit} customUrl={iitLogos[iitLogoSettingKey(iit.studentDomain)]} />
+                  <span className="text-sm leading-5 text-foreground font-semibold group-hover:text-primary transition-colors">{iit.name}</span>
                 </button>
               ))}
               {filteredIits.length === 0 && (

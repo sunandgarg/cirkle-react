@@ -11,6 +11,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
+import { convertToWebP } from "@/lib/imageUtils";
+import { defaultIitLogo, IIT_LIST, iitLogoSettingKey } from "@/data/iitInstitutes";
 
 const SUB_FILTERS: Record<string, string[]> = {
   "Full-time": ["0-1 yr", "1-3 yr", "3-5 yr", "5-7 yr", "7+ yr"],
@@ -34,6 +36,7 @@ const Admin = () => {
   const [userSearch, setUserSearch] = useState("");
   const [showJobForm, setShowJobForm] = useState(false);
   const [editingJob, setEditingJob] = useState<any>(null);
+  const [uploadingIitLogo, setUploadingIitLogo] = useState<string | null>(null);
   const [jobForm, setJobForm] = useState({ title: "", company: "", location: "", description: "", job_type: "Full-time", experience_level: "", category: "", easy_apply: true, apply_url: "" });
 
   const { data: navConfig } = useQuery({
@@ -203,6 +206,38 @@ const Admin = () => {
     queryClient.invalidateQueries({ queryKey: ["nav-config"] });
     queryClient.invalidateQueries({ queryKey: ["nav-config-admin"] });
     toast.success("Label updated!");
+  };
+
+  const handleIitLogoUpload = async (domain: string, file: File) => {
+    if (!user || !file.type.startsWith("image/")) {
+      toast.error("Choose a valid image file");
+      return;
+    }
+    setUploadingIitLogo(domain);
+    try {
+      const optimized = await convertToWebP(file, 0.82, 256);
+      const path = `${domain.replace(/[^a-z0-9]/gi, "-")}.webp`;
+      const { error: uploadError } = await supabase.storage
+        .from("institute-logos")
+        .upload(path, optimized, { upsert: true, contentType: "image/webp", cacheControl: "31536000" });
+      if (uploadError) throw uploadError;
+      const { data: publicUrl } = supabase.storage.from("institute-logos").getPublicUrl(path);
+      const key = iitLogoSettingKey(domain);
+      const { error: settingError } = await supabase.from("app_settings").upsert({
+        key,
+        value: `${publicUrl.publicUrl}?v=${Date.now()}`,
+        updated_at: new Date().toISOString(),
+        updated_by: user.id,
+      }, { onConflict: "key" });
+      if (settingError) throw settingError;
+      await queryClient.invalidateQueries({ queryKey: ["admin-app-settings"] });
+      await queryClient.invalidateQueries({ queryKey: ["iit-logos"] });
+      toast.success("Institute logo updated");
+    } catch (error: any) {
+      toast.error(error.message || "Could not upload institute logo");
+    } finally {
+      setUploadingIitLogo(null);
+    }
   };
 
   const deletePost = async (postId: string) => {
@@ -514,6 +549,45 @@ const Admin = () => {
 
           {/* Settings Tab */}
           <TabsContent value="settings" className="space-y-4">
+            <div className="bg-card border border-border rounded-xl p-4 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><Image className="w-5 h-5 text-primary" /></div>
+                <div>
+                  <p className="text-sm font-semibold text-foreground">IIT institute logos</p>
+                  <p className="text-xs text-muted-foreground">Upload or replace the logo shown beside each IIT during verification.</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {IIT_LIST.map((iit) => {
+                  const logoUrl = appSettings?.[iitLogoSettingKey(iit.studentDomain)] || defaultIitLogo(iit.studentDomain);
+                  const uploading = uploadingIitLogo === iit.studentDomain;
+                  return (
+                    <div key={iit.studentDomain} className="flex items-center gap-3 rounded-xl bg-secondary/50 p-2.5 border border-border/60">
+                      <div className="w-10 h-10 rounded-lg bg-white border border-border flex items-center justify-center overflow-hidden shrink-0">
+                        <img src={logoUrl} alt={`${iit.name} logo`} className="w-8 h-8 object-contain" />
+                      </div>
+                      <span className="text-xs font-semibold text-foreground flex-1 min-w-0 truncate">{iit.name}</span>
+                      <label className={`h-8 px-2.5 rounded-lg border border-border bg-background text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer hover:border-primary ${uploading ? "opacity-60 pointer-events-none" : ""}`}>
+                        <Upload className="w-3.5 h-3.5" /> {uploading ? "Uploading" : "Upload"}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                          className="sr-only"
+                          disabled={uploading}
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (file) void handleIitLogoUpload(iit.studentDomain, file);
+                            event.target.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-muted-foreground">Images are converted to WebP and resized before upload to reduce storage and egress.</p>
+            </div>
+
             {/* Show Home & Network Toggle */}
             <div className="bg-card border border-border rounded-xl p-4">
               <div className="flex items-center justify-between">
