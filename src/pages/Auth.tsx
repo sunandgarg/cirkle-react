@@ -112,7 +112,7 @@ const Auth = () => {
 
         {hasMobileTestMode() && (
           <p className="text-xs mb-3 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-primary">
-            Test login: +91 9999999999 · OTP {MOBILE_TEST_OTP}
+            Temporary test mode: any 10-digit number · OTP {MOBILE_TEST_OTP}
           </p>
         )}
 

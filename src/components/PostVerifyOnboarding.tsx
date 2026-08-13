@@ -9,6 +9,7 @@ import SearchableSelect from "@/components/SearchableSelect";
 import { locations } from "@/data/locationsList";
 import { companies } from "@/data/companiesList";
 import { COURSE_SPECIALISATIONS, ALL_COURSES, getSpecialisations } from "@/data/courseSpecialisations";
+import { readMobileTestSession, updateMobileTestSession } from "@/lib/mobileVerification";
 
 const YEARS = Array.from({ length: 56 }, (_, i) => String(2035 - i));
 
@@ -84,6 +85,13 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete }: PostVerifyOnboardingPr
     if (!user) return;
     setLoading(true);
     try {
+      if (readMobileTestSession()) {
+        updateMobileTestSession({ name: name.trim(), iitName: iit, isVerified: true, onboardingCompleted: true });
+        await refetchProfile();
+        toast.success("Test profile complete! Welcome to Cirkle 🎉");
+        onComplete();
+        return;
+      }
       // 1. Education first - so we have an ID for primary_education_id
       let primaryEduId: string | null = null;
       const { data: existingEdu } = await supabase

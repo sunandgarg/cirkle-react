@@ -11,6 +11,7 @@ import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle,
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, IIT_LIST, iitLogoSettingKey, type IitInstitute } from "@/data/iitInstitutes";
+import { isEmailTestMode, MOBILE_TEST_OTP, readMobileTestSession, updateMobileTestSession } from "@/lib/mobileVerification";
 
 const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
   const [failed, setFailed] = useState(false);
@@ -63,6 +64,7 @@ const IitVerification = () => {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [existingRecordMessage, setExistingRecordMessage] = useState("");
+  const emailTestMode = isEmailTestMode();
 
   const { data: iitLogos = {} } = useQuery({
     queryKey: ["iit-logos"],
@@ -94,13 +96,19 @@ const IitVerification = () => {
   };
 
   const handleSendCode = async () => {
-    if (!email.trim()) { toast.error("Please enter your email"); return; }
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail || !/^\S+@\S+\.\S+$/.test(normalizedEmail)) { toast.error("Please enter a valid email address"); return; }
     const domain = email.split("@")[1]?.toLowerCase();
     const expectedDomain = getExpectedDomain();
     const isValidDomain = domain === expectedDomain || domain === selectedIit?.studentDomain;
     const isAcademicEmail = domain?.endsWith(".ac.in");
-    if (!isValidDomain && !isAcademicEmail) {
+    if (!emailTestMode && !isValidDomain && !isAcademicEmail) {
       toast.error(`Please use a valid email from ${selectedIit?.name} (${expectedDomain})`);
+      return;
+    }
+    if (emailTestMode) {
+      setStep("verify_otp");
+      toast.success(`Test code ready: ${MOBILE_TEST_OTP}`);
       return;
     }
     setLoading(true);
@@ -165,12 +173,12 @@ const IitVerification = () => {
         .select("value")
         .eq("key", "verification_test_mode")
         .maybeSingle();
-      const isTestMode = testModeSetting?.value === "true";
+      const isTestMode = emailTestMode || testModeSetting?.value === "true";
 
       let isValidCode = false;
       const normalizedEmail = email.trim().toLowerCase();
 
-      if (isTestMode && otp === "123456") {
+      if (isTestMode && otp === MOBILE_TEST_OTP) {
         isValidCode = true;
       } else {
         const { data: codeData } = await supabase
@@ -196,7 +204,17 @@ const IitVerification = () => {
         return;
       }
 
-      if (user) {
+      const mobileTestSession = readMobileTestSession();
+      if (mobileTestSession) {
+        updateMobileTestSession({
+          iitName: selectedIit?.name,
+          iitEmail: normalizedEmail,
+          studentStatus,
+          isVerified: true,
+          onboardingCompleted: false,
+        });
+        await refetchProfile();
+      } else if (user) {
         // Get user's phone for locking
         const userPhone = (user as any).phone || (user as any).user_metadata?.phone || "";
 
@@ -270,7 +288,7 @@ const IitVerification = () => {
   const stepIndex = ["select_iit", "select_status", "verify_email", "verify_otp"].indexOf(step);
 
   return (
-    <div className="min-h-screen bg-background flex flex-col overflow-hidden">
+    <div className="h-[100dvh] min-h-0 bg-background flex flex-col overflow-hidden" style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
       <div className="px-4 pt-6 pb-4 flex items-center gap-3">
         <button
           onClick={() => {
@@ -290,7 +308,7 @@ const IitVerification = () => {
         </div>
       </div>
 
-      <div className="flex-1 px-4 pb-8 overflow-y-auto">
+      <div className="flex-1 min-h-0 px-4 pb-8 overflow-y-auto overscroll-y-contain touch-pan-y" style={{ WebkitOverflowScrolling: "touch" }}>
         {step === "select_iit" && (
           <div className="animate-fade-in max-w-2xl mx-auto">
             <div className="flex items-center gap-3 mb-2">
@@ -371,13 +389,13 @@ const IitVerification = () => {
               <h1 className="text-xl font-bold text-foreground">Verify your email</h1>
             </div>
             <p className="text-sm text-muted-foreground mb-6">
-              Enter your <span className="text-foreground font-medium">@{getExpectedDomain()}</span> email
+              {emailTestMode ? "Temporary test mode accepts any valid email address." : <>Enter your <span className="text-foreground font-medium">@{getExpectedDomain()}</span> email</>}
             </p>
             <Input type="email" placeholder={`yourname@${getExpectedDomain()}`} value={email} onChange={(e) => setEmail(e.target.value)} className="bg-secondary border-border h-12 rounded-xl mb-4" onKeyDown={(e) => e.key === "Enter" && handleSendCode()} />
             <Button size="lg" className="w-full h-12 text-base font-semibold rounded-xl" onClick={handleSendCode} disabled={loading}>
               {loading ? "Sending..." : "Send Verification Code"}
             </Button>
-            <p className="text-xs text-muted-foreground mt-4 text-center">We'll send a 6-digit code to verify your email</p>
+            <p className="text-xs text-muted-foreground mt-4 text-center">{emailTestMode ? `Use test code ${MOBILE_TEST_OTP}` : "We'll send a 6-digit code to verify your email"}</p>
           </div>
         )}
 
@@ -408,6 +426,9 @@ const IitVerification = () => {
                 </InputOTPGroup>
               </InputOTP>
             </div>
+            {emailTestMode && (
+              <button onClick={() => setOtp(MOBILE_TEST_OTP)} className="text-xs text-primary font-semibold mb-4 block mx-auto hover:underline">Tap to use test code {MOBILE_TEST_OTP}</button>
+            )}
             <Button size="lg" className="w-full h-12 text-base font-semibold rounded-xl" onClick={handleVerifyOtp} disabled={loading}>
               {loading ? "Verifying..." : "Verify & Continue"}
             </Button>

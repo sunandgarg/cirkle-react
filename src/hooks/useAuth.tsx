@@ -60,10 +60,10 @@ const createMobileTestIdentity = () => {
   const testProfile: Profile = {
     avatar_url: null, bio: "Test mode profile", community_id: "test", cover_photo_url: null,
     created_at: now, date_of_birth: null, experience: null, expertise: null, headline: "Testing Cirkle",
-    iit_email: null, iit_name: null, is_mentor: false, is_verified: false, location: null,
+    iit_email: session.iitEmail || null, iit_name: session.iitName || null, is_mentor: false, is_verified: !!session.isVerified, location: null,
     mentor_category: null, mentor_price_audio: null, mentor_price_chat: null, mentor_price_video: null,
-    name: "Cirkle Test User", onboarding_completed: false, primary_education_id: null, role: "user",
-    skills: [], slug: "cirkle-test-user", slug_updated_at: null, social_links: null, student_status: null,
+    name: session.name || "Cirkle Test User", onboarding_completed: !!session.onboardingCompleted, primary_education_id: null, role: "user",
+    skills: [], slug: "cirkle-test-user", slug_updated_at: null, social_links: null, student_status: session.studentStatus || null,
     user_id: MOBILE_TEST_USER_ID,
   };
   return { user: testUser, profile: testProfile };
@@ -169,7 +169,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const refetchProfile = useCallback(async () => {
     const currentUser = user;
     if (!currentUser) return;
-    if (currentUser.id === MOBILE_TEST_USER_ID) return;
+    if (currentUser.id === MOBILE_TEST_USER_ID) {
+      const identity = createMobileTestIdentity();
+      if (identity) {
+        setUser(identity.user);
+        setProfile(identity.profile);
+      }
+      return;
+    }
     const { profile: p, isAdmin: admin } = await fetchProfileAndAdmin(currentUser.id);
     setProfile(p);
     setIsAdmin(admin);
