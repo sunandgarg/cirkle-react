@@ -60,10 +60,10 @@ const createMobileTestIdentity = () => {
   const testProfile: Profile = {
     avatar_url: null, bio: "Test mode profile", community_id: "test", cover_photo_url: null,
     created_at: now, date_of_birth: null, experience: null, expertise: null, headline: "Testing Cirkle",
-    iit_email: null, iit_name: "IIT Test", is_mentor: false, is_verified: true, location: null,
+    iit_email: null, iit_name: null, is_mentor: false, is_verified: false, location: null,
     mentor_category: null, mentor_price_audio: null, mentor_price_chat: null, mentor_price_video: null,
-    name: "Cirkle Test User", onboarding_completed: true, primary_education_id: null, role: "user",
-    skills: [], slug: "cirkle-test-user", slug_updated_at: null, social_links: null, student_status: "student",
+    name: "Cirkle Test User", onboarding_completed: false, primary_education_id: null, role: "user",
+    skills: [], slug: "cirkle-test-user", slug_updated_at: null, social_links: null, student_status: null,
     user_id: MOBILE_TEST_USER_ID,
   };
   return { user: testUser, profile: testProfile };

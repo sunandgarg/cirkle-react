@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle } from "lucide-react";
+import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search } from "lucide-react";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 
 const IIT_LIST = [
@@ -35,6 +35,36 @@ const IIT_LIST = [
   { name: "IIT Jammu", studentDomain: "iitjammu.ac.in", alumniDomain: "alumni.iitjammu.ac.in" },
   { name: "IIT Dhanbad (ISM)", studentDomain: "iitism.ac.in", alumniDomain: "alumni.iitism.ac.in" },
 ];
+
+const IitLogo = ({ iit }: { iit: typeof IIT_LIST[number] }) => {
+  const [failed, setFailed] = useState(false);
+  const initials = iit.name
+    .replace("IIT ", "")
+    .replace(" (ISM)", "")
+    .split(" ")
+    .map((word) => word[0])
+    .join("")
+    .slice(0, 3)
+    .toUpperCase();
+
+  return (
+    <div className="w-14 h-14 rounded-2xl bg-white border border-border/70 shadow-sm flex items-center justify-center overflow-hidden shrink-0">
+      {failed ? (
+        <span className="text-sm font-black tracking-tight text-primary">{initials}</span>
+      ) : (
+        <img
+          src={`https://www.google.com/s2/favicons?domain=${iit.studentDomain}&sz=128`}
+          alt={`${iit.name} logo`}
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+          className="w-11 h-11 object-contain"
+        />
+      )}
+    </div>
+  );
+};
 
 /** Derive IIT name from email domain */
 function deriveIitFromEmail(email: string): string | undefined {
@@ -276,24 +306,46 @@ const IitVerification = () => {
 
       <div className="flex-1 px-4 pb-8 overflow-y-auto">
         {step === "select_iit" && (
-          <div className="animate-fade-in max-w-lg mx-auto">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+          <div className="animate-fade-in max-w-2xl mx-auto">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center">
                 <GraduationCap className="w-6 h-6 text-primary" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-foreground">Select your Institute</h1>
-                <p className="text-sm text-muted-foreground">Choose your IIT</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">Step 1 of 4</p>
+                <h1 className="text-2xl font-bold tracking-tight text-foreground">Which IIT are you from?</h1>
               </div>
             </div>
-            <Input placeholder="Search IIT..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="mb-4 bg-secondary border-border rounded-xl h-11" />
-            <div className="grid grid-cols-2 gap-2 max-h-[50vh] overflow-y-auto scrollbar-hide">
+            <p className="text-sm text-muted-foreground mb-5 ml-[60px]">Select your institute to personalize your Cirkle community.</p>
+            <div className="relative mb-5">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+              <Input
+                autoFocus
+                aria-label="Search all IITs"
+                placeholder="Search all 23 IITs"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="bg-secondary border-border rounded-xl h-12 pl-10"
+              />
+            </div>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-semibold text-foreground">All IITs</p>
+              <span className="text-xs text-muted-foreground">{filteredIits.length} institutes</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pb-4">
               {filteredIits.map((iit) => (
                 <button key={iit.studentDomain} onClick={() => handleSelectIit(iit)}
-                  className="text-left p-3 rounded-xl bg-card border border-border hover:border-primary hover:bg-primary/5 transition-all text-sm text-foreground font-medium press-scale">
-                  {iit.name}
+                  className="group min-h-[132px] p-3 rounded-2xl bg-card border border-border hover:border-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary transition-all text-left press-scale flex flex-col items-center justify-center gap-3">
+                  <IitLogo iit={iit} />
+                  <span className="text-[13px] leading-4 text-center text-foreground font-semibold group-hover:text-primary transition-colors">{iit.name}</span>
                 </button>
               ))}
+              {filteredIits.length === 0 && (
+                <div className="col-span-full py-12 text-center">
+                  <p className="font-semibold text-foreground">No IIT found</p>
+                  <p className="text-sm text-muted-foreground mt-1">Try a city or institute name.</p>
+                </div>
+              )}
             </div>
           </div>
         )}

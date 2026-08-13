@@ -76,7 +76,7 @@ const OtpVerification = () => {
       if (isTestMode) {
         startMobileTestSession(countryCode, cleanPhone);
         toast.success("Test account verified");
-        window.location.assign("/cirkle-forum");
+        window.location.assign("/iit-verify");
         return;
       }
 
