@@ -304,7 +304,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = 200;
-const FORUM_BUILD = "2026.08.14.8";
+const FORUM_BUILD = "2026.08.14.9";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -1650,7 +1650,7 @@ const Forum = () => {
 
         {/* ── Ultra-smooth Composer (FIX 2) ── */}
         {canPost && !editingPost && (
-          <div className={`relative z-20 backdrop-blur-xl bg-card/95 border-t border-border/60 px-2.5 sm:px-3 py-2 flex-shrink-0 safe-bottom transition-[transform,opacity] duration-200 ease-out ${showInput ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 absolute bottom-0 left-0 right-0 pointer-events-none'}`}>
+          <div className={`z-20 backdrop-blur-xl bg-card/95 border-t border-border/60 px-2.5 sm:px-3 py-2 flex-shrink-0 safe-bottom transition-[transform,opacity] duration-200 ease-out ${showInput ? 'relative translate-y-0 opacity-100' : 'absolute translate-y-full opacity-0 bottom-0 left-0 right-0 pointer-events-none'}`}>
             {/* Reply preview */}
             {replyTo && (
               <div className="flex items-center bg-accent/80 rounded-t-lg mb-1 overflow-hidden animate-fade-in">
