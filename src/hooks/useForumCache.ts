@@ -99,6 +99,7 @@ export const setCachedPosts = (scopeType: string, scopeKey: string, posts: any[]
 const UNREAD_KEY = "forum_unread_dots";
 const DRAFT_PREFIX = "forum_draft_";
 const SCROLL_PREFIX = "forum_scroll_";
+const TEST_POSTS_PREFIX = "forum_test_posts_";
 
 const roomStateKey = (prefix: string, scopeType: string, scopeKey: string) =>
   `${prefix}${scopeType}_${scopeKey}`;
@@ -124,6 +125,26 @@ export const getForumScroll = (scopeType: string, scopeKey: string) => {
 export const setForumScroll = (scopeType: string, scopeKey: string, offset: number) => {
   try { localStorage.setItem(roomStateKey(SCROLL_PREFIX, scopeType, scopeKey), String(Math.max(0, Math.round(offset)))); }
   catch {}
+};
+
+const testPostsKey = (phone: string, scopeType: string, scopeKey: string) =>
+  `${TEST_POSTS_PREFIX}${phone.replace(/\D/g, "")}_${scopeType}_${scopeKey}`;
+
+export const getForumTestPosts = (phone: string, scopeType: string, scopeKey: string): any[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(testPostsKey(phone, scopeType, scopeKey)) || "[]");
+    return Array.isArray(parsed) ? parsed.slice(-100) : [];
+  } catch { return []; }
+};
+
+export const appendForumTestPost = (phone: string, scopeType: string, scopeKey: string, post: any) => {
+  try {
+    const posts = [...getForumTestPosts(phone, scopeType, scopeKey), post].slice(-100);
+    localStorage.setItem(testPostsKey(phone, scopeType, scopeKey), JSON.stringify(posts));
+    return posts;
+  } catch {
+    return [post];
+  }
 };
 
 export const getUnreadChannels = (): Record<string, boolean> => {

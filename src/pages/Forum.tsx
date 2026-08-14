@@ -30,6 +30,7 @@ import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import {
   getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead,
   getForumDraft, setForumDraft, getForumScroll, setForumScroll,
+  getForumTestPosts, appendForumTestPost,
 } from "@/hooks/useForumCache";
 import { useScrollBehavior } from "@/hooks/useScrollBehavior";
 import {
@@ -45,7 +46,7 @@ interface SavedView {
 }
 
 const EMOJIS = ["❤️", "🔥", "👍", "😂", "💯", "😮", "😢", "🎉"];
-const isDemoId = (id: string) => typeof id === "string" && id.startsWith("demo-");
+const isDemoId = (id: string) => typeof id === "string" && (id.startsWith("demo-") || id.startsWith("test-"));
 const QUICK_REACTIONS = ["❤️", "🔥", "👍", "😂", "💯"];
 
 /* ─── Color helpers ─── */
@@ -347,6 +348,7 @@ const Forum = () => {
   const [showFormatBar, setShowFormatBar] = useState(false);
   const [newMsgCount, setNewMsgCount] = useState(0);
   const [unreadDots, setUnreadDots] = useState<Record<string, boolean>>(() => getUnreadChannels());
+  const [testRoomPosts, setTestRoomPosts] = useState<any[]>([]);
 
   // Pagination state
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -458,6 +460,11 @@ const Forum = () => {
     () => buildForumScopes(profile, primaryEducation, canonicalIdentity),
     [profile, primaryEducation, canonicalIdentity],
   );
+
+  useEffect(() => {
+    const session = readMobileTestSession();
+    setTestRoomPosts(session ? getForumTestPosts(session.phone, activeScope.type, activeScope.key) : []);
+  }, [activeScope.type, activeScope.key]);
 
   const { data: savedViews = [] } = useQuery({
     queryKey: ["saved-views", user?.id],
@@ -690,9 +697,9 @@ const Forum = () => {
   // Merge older pages on top
   const posts = useMemo(() => {
     if (!postsData) return undefined;
-    if (postsData.isDemo) return postsData.demos;
-    return [...olderPages, ...(postsData.posts || [])];
-  }, [postsData, olderPages]);
+    const base = postsData.isDemo ? postsData.demos : [...olderPages, ...(postsData.posts || [])];
+    return readMobileTestSession() ? [...base, ...testRoomPosts] : base;
+  }, [postsData, olderPages, testRoomPosts]);
   const isEmptyChannel = !!postsData && !postsData.isDemo && (postsData.posts?.length || 0) === 0 && olderPages.length === 0;
 
 
@@ -726,6 +733,28 @@ const Forum = () => {
         }
       }
       if (!content.trim() && !imageFile && !showPollCreator && !attachedFile) throw new Error("Please type a message");
+
+      const testSession = readMobileTestSession();
+      if (testSession) {
+        const localPost = {
+          id: `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          community_id: "test", scope_type: activeScope.type, scope_key: activeScope.key,
+          channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
+          content: content.trim() || (imageFile ? "📷 Test image" : attachedFile ? `📎 ${attachedFile.name}` : `📊 ${pollQuestion}`),
+          is_anonymous: isAnonymous, author_id: user.id, created_at: new Date().toISOString(),
+          image_url: imagePreview, file_url: null, file_name: attachedFile?.name || null,
+          file_size: attachedFile?.size || null, file_type: attachedFile?.type || null,
+          reply_to_id: replyTo?.id || null, deleted_at: null, is_deleted_for_everyone: false,
+          seen_by: [], edited_at: null, pinned_at: null,
+          profile: { name: testSession.name || profile?.name || "Test User", avatar_url: null, slug: null },
+          poll: showPollCreator && pollQuestion.trim() ? {
+            id: `test-poll-${Date.now()}`, question: pollQuestion.trim(),
+            options: pollOptions.filter((option) => option.trim()), votes: [],
+          } : null,
+          replyCount: 0, reactions: {}, myReactions: [],
+        };
+        return { localPost, testPhone: testSession.phone };
+      }
 
       let imageUrl: string | null = null;
       if (imageFile) {
@@ -764,8 +793,9 @@ const Forum = () => {
 
       const { data: newPost, error } = await supabase.from("posts").insert(postData).select("id").single();
       if (error) {
-        if (error.message.includes("row-level security")) throw new Error("You don't have permission to post.");
-        throw new Error("Failed to send message.");
+        const insertError = new Error(error.message || "Failed to send message.") as Error & { code?: string };
+        insertError.code = error.code;
+        throw insertError;
       }
 
       if (showPollCreator && pollQuestion.trim() && newPost) {
@@ -774,8 +804,14 @@ const Forum = () => {
           await supabase.from("polls").insert({ post_id: newPost.id, question: pollQuestion.trim(), options: validOptions });
         }
       }
+      return { localPost: null, testPhone: null };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result?.localPost && result.testPhone) {
+        setTestRoomPosts(appendForumTestPost(
+          result.testPhone, activeScope.type, activeScope.key, result.localPost,
+        ));
+      }
       setContent(""); setIsAnonymous(false); setImageFile(null); setImagePreview(null);
       setForumDraft(activeScope.type, activeScope.key, "");
       setShowPollCreator(false); setPollQuestion(""); setPollOptions(["", ""]); setReplyTo(null);
@@ -785,7 +821,14 @@ const Forum = () => {
       queryClient.invalidateQueries({ queryKey: ["forum-posts"] });
       setTimeout(() => scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" }), 300);
     },
-    onError: (err: any) => toast.error(err.message || "Something went wrong"),
+    onError: (err: any) => {
+      if (err?.code === "42501" || /row-level security|permission denied/i.test(err?.message || "")) {
+        toast.error("Your verified community access is still syncing. Refresh once, then try again.");
+        void queryClient.invalidateQueries({ queryKey: ["canonical-academic-identity", user?.id] });
+        return;
+      }
+      toast.error("Message could not be sent. Check your connection and try again.");
+    },
   });
 
   const editPost = useMutation({
@@ -2399,18 +2442,25 @@ const ActionButton = ({ icon: Icon, label, onClick, destructive, muted, active }
 const PollDisplay = ({ poll }: { poll: any }) => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const isTestPoll = typeof poll.id === "string" && poll.id.startsWith("test-poll-");
+  const [testVote, setTestVote] = useState<number | null>(null);
   const rawOptions = poll.options;
   const options: string[] = Array.isArray(rawOptions) ? rawOptions : [];
   const { data: votes } = useQuery({
     queryKey: ["poll-votes", poll.id],
     queryFn: async () => { const { data } = await supabase.from("poll_votes").select("*").eq("poll_id", poll.id); return data ?? []; },
     staleTime: 30000,
+    enabled: !isTestPoll,
   });
-  const myVote = votes?.find((v: any) => v.user_id === user?.id);
-  const totalVotes = votes?.length || 0;
-  const voteCounts = options.map((_, i) => votes?.filter((v: any) => v.option_index === i).length || 0);
+  const myVote = isTestPoll && testVote !== null ? { option_index: testVote } : votes?.find((v: any) => v.user_id === user?.id);
+  const totalVotes = isTestPoll ? (testVote === null ? 0 : 1) : (votes?.length || 0);
+  const voteCounts = options.map((_, i) => isTestPoll ? (testVote === i ? 1 : 0) : (votes?.filter((v: any) => v.option_index === i).length || 0));
   const vote = async (idx: number) => {
     if (!user) return;
+    if (isTestPoll) {
+      setTestVote((current) => current === idx ? null : idx);
+      return;
+    }
     if (myVote) {
       if (myVote.option_index === idx) await supabase.from("poll_votes").delete().eq("id", myVote.id);
       else await supabase.from("poll_votes").update({ option_index: idx }).eq("id", myVote.id);
