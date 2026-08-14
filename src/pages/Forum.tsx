@@ -304,6 +304,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = 200;
+const FORUM_BUILD = "2026.08.14.6";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -678,6 +679,15 @@ const Forum = () => {
   const { data: postsData, isLoading } = useQuery({
     queryKey: ["forum-posts", activeScope.type, activeScope.key],
     queryFn: async () => {
+      // Test accounts are a fully local sandbox. Do not wait for Supabase or let
+      // an unavailable/partially-migrated backend hide the room from testers.
+      if (readMobileTestSession()) {
+        return {
+          posts: [],
+          isDemo: true,
+          demos: generateScopeDemos(activeScope.type, activeScope.key, activeScopeDef),
+        };
+      }
       const q = buildScopeQuery(activeScope.type, activeScope.key, PAGE_SIZE);
       const { data: rawPosts, error } = await q;
       if (error) throw error;
@@ -1348,6 +1358,9 @@ const Forum = () => {
             onTogglePin={(id, pinned) => togglePinView.mutate({ viewId: id, pinned })}
           />
         </div>
+        <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
+          <p className="text-[10px] font-semibold text-muted-foreground/70">Cirkle Forum · build {FORUM_BUILD}</p>
+        </div>
       </aside>
 
       {/* Mobile sidebar sheet */}
@@ -1366,6 +1379,9 @@ const Forum = () => {
               onDeleteView={(id) => deleteView.mutate(id)}
               onTogglePin={(id, pinned) => togglePinView.mutate({ viewId: id, pinned })}
             />
+          </div>
+          <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
+            <p className="text-[10px] font-semibold text-muted-foreground/70">Cirkle Forum · build {FORUM_BUILD}</p>
           </div>
         </SheetContent>
       </Sheet>
