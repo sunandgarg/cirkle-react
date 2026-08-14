@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearMobileTestDocumentSubmission,
   clearMobileTestSession,
+  hasMobileTestAcademicProfile,
   readMobileTestSession,
   saveMobileTestCourseRequest,
   saveMobileTestDocumentSubmission,
@@ -49,6 +50,13 @@ describe("mobile test document verification lifecycle", () => {
       specialisation: "General",
       passingYear: "2026",
     });
+    expect(hasMobileTestAcademicProfile(readMobileTestSession())).toBe(true);
+  });
+
+  it("marks legacy test sessions without academic details as incomplete", () => {
+    startMobileTestSession("+91", "9999999999");
+    updateMobileTestSession({ onboardingCompleted: true, iitName: "IIT Delhi" });
+    expect(hasMobileTestAcademicProfile(readMobileTestSession())).toBe(false);
   });
 
   it("does not restore a request after it is withdrawn", () => {

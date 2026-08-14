@@ -92,6 +92,9 @@ export type MobileTestSession = {
   courseApprovalStatus?: "pending" | "approved" | "rejected" | "withdrawn";
 };
 
+export const hasMobileTestAcademicProfile = (session: MobileTestSession | null) =>
+  Boolean(session?.degree?.trim() && session.specialisation?.trim() && session.passingYear?.trim());
+
 export const readMobileTestSession = (): MobileTestSession | null => {
   if (!mobileTestModeEnabled) return null;
   try {

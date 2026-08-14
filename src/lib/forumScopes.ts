@@ -27,6 +27,13 @@ export type ForumEducation = {
   passing_year?: string | null;
 } | null | undefined;
 
+export const hasCompleteForumEducation = (education: ForumEducation) =>
+  Boolean(
+    education?.degree?.trim() &&
+    education?.branch_area?.trim() &&
+    education?.passing_year?.trim(),
+  );
+
 // Stable, query-safe identifiers let every matching user resolve to the same room
 // without creating a duplicate database row on each login.
 export const forumScopeSegment = (value: string) =>

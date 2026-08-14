@@ -26,10 +26,11 @@ import VoiceRecorder, { VoicePlayback } from "@/components/forum/VoiceRecorder";
 import ImageLightbox from "@/components/forum/ImageLightbox";
 import FileAttachment from "@/components/forum/FileAttachment";
 import ThreadPanel from "@/components/forum/ThreadPanel";
+import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead, setChannelUnread } from "@/hooks/useForumCache";
 import { useScrollBehavior } from "@/hooks/useScrollBehavior";
-import { buildForumScopes, type ForumScope as ScopeDef } from "@/lib/forumScopes";
-import { readMobileTestSession } from "@/lib/mobileVerification";
+import { buildForumScopes, hasCompleteForumEducation, type ForumScope as ScopeDef } from "@/lib/forumScopes";
+import { hasMobileTestAcademicProfile, readMobileTestSession } from "@/lib/mobileVerification";
 
 /* ─── Types ─── */
 interface SavedView {
@@ -413,28 +414,32 @@ const Forum = () => {
   const isVerified = profile?.is_verified;
 
   /* ─── Education data ─── */
-  const { data: primaryEducation } = useQuery({
+  const { data: primaryEducation, isSuccess: educationLoaded } = useQuery({
     queryKey: ["primary-education", user?.id],
     queryFn: async () => {
       if (!user?.id) return null;
       const testSession = readMobileTestSession();
-      if (testSession?.degree && testSession.specialisation && testSession.passingYear) {
-        return {
+      if (testSession) {
+        return hasMobileTestAcademicProfile(testSession) ? {
           institution: testSession.iitName || profile?.iit_name || "",
-          degree: testSession.degree,
-          branch_area: testSession.specialisation,
-          passing_year: testSession.passingYear,
-        };
+          degree: testSession.degree!,
+          branch_area: testSession.specialisation!,
+          passing_year: testSession.passingYear!,
+        } : null;
       }
       if ((profile as any)?.primary_education_id) {
-        const { data } = await supabase.from("education").select("*").eq("id", (profile as any).primary_education_id).maybeSingle();
-        return data;
+        const { data, error } = await supabase.from("education").select("*").eq("id", (profile as any).primary_education_id).maybeSingle();
+        if (error) throw error;
+        if (hasCompleteForumEducation(data)) return data;
       }
-      const { data } = await supabase.from("education").select("*").eq("user_id", user.id).order("created_at", { ascending: true }).limit(1).maybeSingle();
-      return data;
+      const { data, error } = await supabase.from("education").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20);
+      if (error) throw error;
+      return data?.find(hasCompleteForumEducation) || null;
     },
     enabled: !!user?.id,
-    staleTime: Infinity,
+    staleTime: 5 * 60 * 1000,
+    refetchOnMount: "always",
+    refetchOnReconnect: true,
   });
 
   const scopes = useMemo(() => buildForumScopes(profile, primaryEducation), [profile, primaryEducation]);
@@ -1139,6 +1144,18 @@ const Forum = () => {
   const hasContent = content.trim() || imageFile || attachedFile || showPollCreator;
 
   /* ════════════════════ RENDER ════════════════════ */
+  if (isVerified && educationLoaded && !hasCompleteForumEducation(primaryEducation)) {
+    return (
+      <PostVerifyOnboarding
+        derivedIit={profile?.iit_name || undefined}
+        academicRecovery
+        onComplete={async () => {
+          await queryClient.invalidateQueries({ queryKey: ["primary-education", user?.id] });
+        }}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col bg-background overflow-hidden w-full" style={{ height: '100dvh' } as any}>
       <div className="flex flex-1 min-h-0 overflow-hidden">

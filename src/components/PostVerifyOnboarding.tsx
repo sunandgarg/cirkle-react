@@ -20,11 +20,12 @@ const STEP_ORDER: Step[] = ["name", "degree", "specialisation", "year", "optiona
 interface PostVerifyOnboardingProps {
   derivedIit?: string;
   onComplete: () => void;
+  academicRecovery?: boolean;
 }
 
-const PostVerifyOnboarding = ({ derivedIit, onComplete }: PostVerifyOnboardingProps) => {
+const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false }: PostVerifyOnboardingProps) => {
   const { user, profile, refetchProfile } = useAuth();
-  const [step, setStep] = useState<Step>("name");
+  const [step, setStep] = useState<Step>(() => academicRecovery ? "degree" : "name");
   const [loading, setLoading] = useState(false);
 
   const [name, setName] = useState(profile?.name || "");
@@ -63,8 +64,9 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete }: PostVerifyOnboardingPr
       .then(({ data }) => { if (data?.value) setTermsText(data.value); });
   }, []);
 
-  const stepIdx = STEP_ORDER.indexOf(step as any);
-  const totalSteps = STEP_ORDER.length;
+  const activeStepOrder = academicRecovery ? (["degree", "specialisation", "year"] as Step[]) : STEP_ORDER;
+  const stepIdx = activeStepOrder.indexOf(step);
+  const totalSteps = activeStepOrder.length;
 
   const specialisations = useMemo(() => getSpecialisations(degree), [degree]);
 
@@ -114,8 +116,8 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete }: PostVerifyOnboardingPr
       void handleSubmitCustomCourse();
       return;
     }
-    if (stepIdx < STEP_ORDER.length - 1) {
-      setStep(STEP_ORDER[stepIdx + 1]);
+    if (stepIdx < activeStepOrder.length - 1) {
+      setStep(activeStepOrder[stepIdx + 1]);
     } else {
       handleComplete();
     }
@@ -206,7 +208,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete }: PostVerifyOnboardingPr
   };
 
   const handleBack = () => {
-    if (stepIdx > 0) setStep(STEP_ORDER[stepIdx - 1]);
+    if (stepIdx > 0) setStep(activeStepOrder[stepIdx - 1]);
   };
 
   const handleComplete = async () => {
@@ -236,6 +238,8 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete }: PostVerifyOnboardingPr
         .select("id")
         .eq("user_id", user.id)
         .eq("institution", iit)
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
       if (existingEdu) {
@@ -361,7 +365,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete }: PostVerifyOnboardingPr
           </button>
         )}
         <div className="flex gap-1.5 flex-1">
-          {STEP_ORDER.map((_, i) => (
+          {activeStepOrder.map((_, i) => (
             <div key={i} className={`h-1 flex-1 rounded-full transition-all duration-300 ${stepIdx >= i ? "bg-primary" : "bg-border"}`} />
           ))}
         </div>
@@ -392,11 +396,16 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete }: PostVerifyOnboardingPr
 
           {step === "degree" && (
             <div className="animate-fade-in">
+              {academicRecovery && (
+                <div className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary mb-4">
+                  <Sparkles className="w-3.5 h-3.5" /> 3 quick details to build your groups
+                </div>
+              )}
               <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
                 <GraduationCap className="w-6 h-6 text-primary" />
               </div>
               <h2 className="text-xl font-bold text-foreground mb-1">Select your program</h2>
-              <p className="text-sm text-muted-foreground mb-6">Choose your primary course of study.</p>
+              <p className="text-sm text-muted-foreground mb-6">{academicRecovery ? "We’ll use this only to place you in the right course, batch, and cohort conversations." : "Choose your primary course of study."}</p>
               <div className="grid grid-cols-3 gap-2">
                 {ALL_COURSES.map(d => (
                   <button key={d} onClick={() => setDegree(d)}
@@ -515,7 +524,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete }: PostVerifyOnboardingPr
               onClick={handleNext}
               disabled={!canProceed() || loading}
             >
-              {loading ? "Saving..." : step === "optional" ? "Complete Profile" : step === "degree" && degree === "Other" ? "Submit for approval" : "Continue"}
+              {loading ? "Saving..." : academicRecovery && step === "year" ? "Create My Groups" : step === "optional" ? "Complete Profile" : step === "degree" && degree === "Other" ? "Submit for approval" : "Continue"}
               {!loading && <ArrowRight className="w-4 h-4" />}
             </Button>
           </div>

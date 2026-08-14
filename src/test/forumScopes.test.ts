@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildForumScopes, forumScopeSegment } from "@/lib/forumScopes";
+import { buildForumScopes, forumScopeSegment, hasCompleteForumEducation } from "@/lib/forumScopes";
 
 describe("automatic forum groups", () => {
   it("creates the complete IIT Delhi MBA General 2026 group set", () => {
@@ -33,5 +33,7 @@ describe("automatic forum groups", () => {
 
   it("does not expose incomplete profile-specific rooms", () => {
     expect(buildForumScopes({ iit_name: "IIT Delhi" }, null).map((scope) => scope.id)).toEqual(["campus", "global"]);
+    expect(hasCompleteForumEducation({ degree: "MBA", branch_area: null, passing_year: "2026" })).toBe(false);
+    expect(hasCompleteForumEducation({ degree: "MBA", branch_area: "General", passing_year: "2026" })).toBe(true);
   });
 });
