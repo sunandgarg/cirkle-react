@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search } from "lucide-react";
+import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search, FileUp, Clock3, LockKeyhole } from "lucide-react";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, IIT_LIST, iitLogoSettingKey, type IitInstitute } from "@/data/iitInstitutes";
@@ -51,12 +51,12 @@ function deriveIitFromEmail(email: string): string | undefined {
   return match?.name;
 }
 
-type Step = "select_iit" | "select_status" | "verify_email" | "verify_otp" | "onboarding";
+type Step = "select_iit" | "select_status" | "verify_email" | "verify_otp" | "upload_documents" | "documents_pending" | "onboarding";
 
 const IitVerification = () => {
   const navigate = useNavigate();
-  const { user, refetchProfile } = useAuth();
-  const [step, setStep] = useState<Step>("select_iit");
+  const { user, profile, refetchProfile } = useAuth();
+  const [step, setStep] = useState<Step>(() => readMobileTestSession()?.documentVerificationStatus === "pending" ? "documents_pending" : "select_iit");
   const [selectedIit, setSelectedIit] = useState<typeof IIT_LIST[0] | null>(null);
   const [studentStatus, setStudentStatus] = useState<string>("");
   const [email, setEmail] = useState("");
@@ -64,6 +64,8 @@ const IitVerification = () => {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [existingRecordMessage, setExistingRecordMessage] = useState("");
+  const [documentType, setDocumentType] = useState("student_id");
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
   const emailTestMode = isEmailTestMode();
 
   const { data: iitLogos = {} } = useQuery({
@@ -75,6 +77,34 @@ const IitVerification = () => {
     },
     staleTime: 5 * 60 * 1000,
   });
+
+  const { data: latestDocumentSubmission } = useQuery({
+    queryKey: ["my-document-verification", user?.id],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from("document_verifications")
+        .select("status,iit_name,student_status,review_notes")
+        .eq("user_id", user!.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data as { status: "pending" | "approved" | "rejected"; iit_name: string; student_status: string; review_notes?: string } | null;
+    },
+    enabled: !!user && !readMobileTestSession(),
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+  });
+
+  useEffect(() => {
+    if (latestDocumentSubmission?.status === "pending") {
+      setStep("documents_pending");
+      return;
+    }
+    if (profile?.is_verified && !profile.onboarding_completed) {
+      setStep("onboarding");
+    }
+  }, [latestDocumentSubmission?.status, profile?.is_verified, profile?.onboarding_completed]);
 
   const filteredIits = IIT_LIST.filter((iit) =>
     iit.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -95,6 +125,53 @@ const IitVerification = () => {
     return studentStatus === "alumni" ? selectedIit.alumniDomain : selectedIit.studentDomain;
   };
 
+  const completeEmailVerification = async (normalizedEmail: string) => {
+    const mobileTestSession = readMobileTestSession();
+    if (mobileTestSession) {
+      updateMobileTestSession({
+        iitName: selectedIit?.name,
+        iitEmail: normalizedEmail,
+        studentStatus,
+        isVerified: true,
+        onboardingCompleted: false,
+        documentVerificationStatus: undefined,
+      });
+      await refetchProfile();
+    } else if (user) {
+      const userPhone = (user as any).phone || (user as any).user_metadata?.phone || "";
+      const { data: existingVerif } = await supabase.from("verifications").select("id").eq("user_id", user.id).maybeSingle();
+      const verificationPayload = {
+        iit_email: normalizedEmail,
+        iit_email_normalized: normalizedEmail,
+        iit_domain: normalizedEmail.split("@")[1],
+        email_verified_at: new Date().toISOString(),
+        verified_status: "VERIFIED",
+        locked_to_phone: userPhone,
+        updated_at: new Date().toISOString(),
+      };
+      const verificationResult = existingVerif
+        ? await supabase.from("verifications").update(verificationPayload).eq("id", existingVerif.id)
+        : await supabase.from("verifications").insert({ ...verificationPayload, user_id: user.id });
+      if (verificationResult.error) throw verificationResult.error;
+
+      const { error: profileError } = await supabase.from("profiles").upsert({
+        user_id: user.id,
+        name: (user.user_metadata?.name as string) || user.email || "Cirkle Member",
+        iit_name: selectedIit?.name,
+        student_status: studentStatus,
+        iit_email: normalizedEmail,
+        is_verified: true,
+        onboarding_completed: false,
+      } as any, { onConflict: "user_id" });
+      if (profileError) throw profileError;
+      await refetchProfile();
+    } else {
+      throw new Error("Your session expired. Please sign in again.");
+    }
+    toast.success("Email verified. Let’s complete your profile 🎉");
+    setStep("onboarding");
+  };
+
   const handleSendCode = async () => {
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail || !/^\S+@\S+\.\S+$/.test(normalizedEmail)) { toast.error("Please enter a valid email address"); return; }
@@ -106,13 +183,12 @@ const IitVerification = () => {
       toast.error(`Please use a valid email from ${selectedIit?.name} (${expectedDomain})`);
       return;
     }
-    if (emailTestMode) {
-      setStep("verify_otp");
-      toast.success(`Test code ready: ${MOBILE_TEST_OTP}`);
-      return;
-    }
     setLoading(true);
     try {
+      if (emailTestMode) {
+        await completeEmailVerification(normalizedEmail);
+        return;
+      }
       const res = await supabase.functions.invoke("send-verification-email", {
         body: { email: email.trim().toLowerCase(), iit_name: selectedIit?.name, user_id: user?.id },
       });
@@ -204,68 +280,68 @@ const IitVerification = () => {
         return;
       }
 
+      await completeEmailVerification(normalizedEmail);
+    } catch (err: any) {
+      toast.error(err.message || "Verification failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDocumentUpload = async () => {
+    if (!selectedIit || !studentStatus || !documentFile) {
+      toast.error("Choose a document to continue");
+      return;
+    }
+    const allowedTypes = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
+    if (!allowedTypes.has(documentFile.type)) {
+      toast.error("Upload a PDF, JPG, PNG, or WebP file");
+      return;
+    }
+    if (documentFile.size > 10 * 1024 * 1024) {
+      toast.error("Document must be smaller than 10 MB");
+      return;
+    }
+    setLoading(true);
+    try {
       const mobileTestSession = readMobileTestSession();
       if (mobileTestSession) {
         updateMobileTestSession({
-          iitName: selectedIit?.name,
-          iitEmail: normalizedEmail,
+          iitName: selectedIit.name,
           studentStatus,
-          isVerified: true,
-          onboardingCompleted: false,
+          documentVerificationStatus: "pending",
         });
-        await refetchProfile();
-      } else if (user) {
-        // Get user's phone for locking
-        const userPhone = (user as any).phone || (user as any).user_metadata?.phone || "";
-
-        // Upsert verification record
-        const { data: existingVerif } = await supabase
-          .from("verifications")
-          .select("id")
-          .eq("user_id", user.id)
-          .maybeSingle();
-
-        if (existingVerif) {
-          await supabase.from("verifications").update({
-            iit_email: normalizedEmail,
-            iit_email_normalized: normalizedEmail,
-            iit_domain: normalizedEmail.split("@")[1],
-            email_verified_at: new Date().toISOString(),
-            verified_status: "VERIFIED",
-            locked_to_phone: userPhone,
-            updated_at: new Date().toISOString(),
-          }).eq("id", existingVerif.id);
-        } else {
-          await supabase.from("verifications").insert({
-            user_id: user.id,
-            iit_email: normalizedEmail,
-            iit_email_normalized: normalizedEmail,
-            iit_domain: normalizedEmail.split("@")[1],
-            email_verified_at: new Date().toISOString(),
-            verified_status: "VERIFIED",
-            locked_to_phone: userPhone,
-          });
-        }
-
-        // Save verified status immediately; onboarding details are collected next.
-        const { error: profileError } = await supabase.from("profiles").upsert({
-          user_id: user.id,
-          name: (user.user_metadata?.name as string) || user.email || "Cirkle Member",
-          iit_name: selectedIit?.name,
-          student_status: studentStatus,
-          iit_email: normalizedEmail,
-          is_verified: true,
-          onboarding_completed: false,
-        } as any, { onConflict: "user_id" });
-        if (profileError) throw profileError;
-
-        await refetchProfile();
+        setStep("documents_pending");
+        toast.success("Test submission recorded locally");
+        return;
       }
-
-      toast.success("Verified! Now let's complete your profile 🎉");
-      setStep("onboarding");
-    } catch (err: any) {
-      toast.error(err.message || "Verification failed");
+      if (!user) throw new Error("Your session expired. Please sign in again.");
+      const extension = documentFile.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
+      const path = `${user.id}/${crypto.randomUUID()}.${extension}`;
+      const { error: uploadError } = await supabase.storage.from("verification-documents").upload(path, documentFile, {
+        cacheControl: "3600",
+        contentType: documentFile.type,
+        upsert: false,
+      });
+      if (uploadError) throw uploadError;
+      const { error: insertError } = await (supabase as any).from("document_verifications").insert({
+        user_id: user.id,
+        iit_name: selectedIit.name,
+        student_status: studentStatus,
+        document_type: documentType,
+        document_path: path,
+        original_filename: documentFile.name,
+        mime_type: documentFile.type,
+        file_size: documentFile.size,
+      });
+      if (insertError) {
+        await supabase.storage.from("verification-documents").remove([path]);
+        throw insertError;
+      }
+      setStep("documents_pending");
+      toast.success("Document submitted securely");
+    } catch (error: any) {
+      toast.error(error.message || "Could not submit your document");
     } finally {
       setLoading(false);
     }
@@ -275,7 +351,7 @@ const IitVerification = () => {
   if (step === "onboarding") {
     return (
       <PostVerifyOnboarding
-        derivedIit={selectedIit?.name || deriveIitFromEmail(email)}
+        derivedIit={selectedIit?.name || profile?.iit_name || latestDocumentSubmission?.iit_name || deriveIitFromEmail(email)}
         onComplete={async () => {
           // Ensure profile is fresh before navigating
           await refetchProfile();
@@ -285,14 +361,15 @@ const IitVerification = () => {
     );
   }
 
-  const stepIndex = ["select_iit", "select_status", "verify_email", "verify_otp"].indexOf(step);
+  const stepIndex = step === "select_iit" ? 0 : step === "select_status" ? 1 : 2;
 
   return (
     <div className="h-[100dvh] min-h-0 bg-background flex flex-col overflow-hidden" style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
       <div className="px-4 pt-6 pb-4 flex items-center gap-3">
         <button
           onClick={() => {
-            if (step === "verify_otp") setStep("verify_email");
+            if (step === "documents_pending") navigate("/auth", { replace: true });
+            else if (step === "upload_documents" || step === "verify_otp") setStep("verify_email");
             else if (step === "verify_email") setStep("select_status");
             else if (step === "select_status") setStep("select_iit");
             else navigate(-1);
@@ -393,9 +470,72 @@ const IitVerification = () => {
             </p>
             <Input type="email" placeholder={`yourname@${getExpectedDomain()}`} value={email} onChange={(e) => setEmail(e.target.value)} className="bg-secondary border-border h-12 rounded-xl mb-4" onKeyDown={(e) => e.key === "Enter" && handleSendCode()} />
             <Button size="lg" className="w-full h-12 text-base font-semibold rounded-xl" onClick={handleSendCode} disabled={loading}>
-              {loading ? "Sending..." : "Send Verification Code"}
+              {loading ? "Verifying..." : emailTestMode ? "Verify & Continue" : "Send Verification Code"}
             </Button>
-            <p className="text-xs text-muted-foreground mt-4 text-center">{emailTestMode ? `Use test code ${MOBILE_TEST_OTP}` : "We'll send a 6-digit code to verify your email"}</p>
+            <p className="text-xs text-muted-foreground mt-4 text-center">{emailTestMode ? "Email test mode skips the code step." : "We'll send a 6-digit code to verify your email"}</p>
+            <div className="flex items-center gap-3 my-6" aria-hidden="true">
+              <div className="h-px bg-border flex-1" />
+              <span className="text-xs font-medium text-muted-foreground">or</span>
+              <div className="h-px bg-border flex-1" />
+            </div>
+            <Button variant="outline" size="lg" className="w-full h-12 text-sm font-semibold rounded-xl" onClick={() => setStep("upload_documents")}>
+              <FileUp className="w-4 h-4 mr-2" /> Verify with documents
+            </Button>
+            <p className="text-xs text-muted-foreground mt-3 text-center">Use a student ID, admission letter, or degree certificate.</p>
+          </div>
+        )}
+
+        {step === "upload_documents" && (
+          <div className="animate-fade-in max-w-lg mx-auto">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">{selectedIit?.name}</span>
+              <span className="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded-full capitalize">{studentStatus?.replace("_", " ")}</span>
+            </div>
+            <div className="flex items-center gap-3 mt-6 mb-2">
+              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center"><FileUp className="w-6 h-6 text-primary" /></div>
+              <div>
+                <h1 className="text-xl font-bold text-foreground">Verify with a document</h1>
+                <p className="text-sm text-muted-foreground mt-0.5">A clear document helps us review faster.</p>
+              </div>
+            </div>
+            <div className="space-y-4 mt-7">
+              <div>
+                <label htmlFor="document-type" className="text-sm font-semibold text-foreground">Document type</label>
+                <select id="document-type" value={documentType} onChange={(event) => setDocumentType(event.target.value)} className="mt-2 w-full h-12 rounded-xl bg-secondary border border-border px-3 text-sm text-foreground">
+                  <option value="student_id">Student ID card</option>
+                  <option value="admission_letter">Admission letter</option>
+                  <option value="degree_certificate">Degree certificate</option>
+                  <option value="other">Other institute document</option>
+                </select>
+              </div>
+              <label className="min-h-40 rounded-2xl border-2 border-dashed border-border hover:border-primary bg-card flex flex-col items-center justify-center text-center px-6 cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-primary">
+                <FileUp className="w-7 h-7 text-primary mb-3" />
+                <span className="text-sm font-semibold text-foreground">{documentFile ? documentFile.name : "Choose your document"}</span>
+                <span className="text-xs text-muted-foreground mt-1">PDF, JPG, PNG, or WebP · maximum 10 MB</span>
+                <input type="file" className="sr-only" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => setDocumentFile(event.target.files?.[0] || null)} />
+              </label>
+              <div className="rounded-xl bg-primary/5 border border-primary/15 p-3 flex gap-3">
+                <LockKeyhole className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+                <p className="text-xs text-muted-foreground">Your document stays private and is available only to authorized admins during verification.</p>
+              </div>
+              <Button size="lg" className="w-full h-12 text-base font-semibold rounded-xl" onClick={handleDocumentUpload} disabled={loading || !documentFile}>
+                {loading ? "Uploading securely..." : "Submit for verification"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === "documents_pending" && (
+          <div className="animate-fade-in max-w-lg mx-auto min-h-[65vh] flex flex-col items-center justify-center text-center">
+            <div className="w-20 h-20 rounded-3xl bg-primary/10 flex items-center justify-center mb-6"><Clock3 className="w-9 h-9 text-primary" /></div>
+            <span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Submitted securely</span>
+            <h1 className="text-2xl font-bold text-foreground mt-3">We’ll get back to you after verification</h1>
+            <p className="text-sm text-muted-foreground mt-3 max-w-sm">Our team will review your institute document. You’ll get access as soon as it is approved.</p>
+            <div className="mt-7 w-full rounded-2xl bg-card border border-border p-4 text-left">
+              <div className="flex items-center justify-between gap-3"><span className="text-sm font-semibold text-foreground">Review status</span><span className="text-xs font-semibold bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))] px-2.5 py-1 rounded-full">Pending</span></div>
+              <p className="text-xs text-muted-foreground mt-2">No action is needed right now. Your document remains private.</p>
+            </div>
+            <Button variant="outline" className="w-full h-11 rounded-xl mt-4" onClick={() => navigate("/auth", { replace: true })}>Return to login</Button>
           </div>
         )}
 

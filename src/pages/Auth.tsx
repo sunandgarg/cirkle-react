@@ -26,7 +26,7 @@ const Auth = () => {
     if (!authLoading && user) {
       if (!(user.user_metadata as any)?.phone) {
         navigate("/phone-verify", { replace: true });
-      } else if (!profile?.is_verified) {
+      } else if (!profile?.is_verified || !profile?.onboarding_completed) {
         navigate("/iit-verify", { replace: true });
       } else {
         navigate("/cirkle-forum", { replace: true });
@@ -112,7 +112,7 @@ const Auth = () => {
 
         {hasMobileTestMode() && (
           <p className="text-xs mb-3 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-primary">
-            Temporary test mode: any 10-digit number · OTP {MOBILE_TEST_OTP}
+            Test login: +91 99999 99999 · OTP {MOBILE_TEST_OTP}
           </p>
         )}
 

@@ -41,6 +41,7 @@ export type MobileTestSession = {
   isVerified?: boolean;
   onboardingCompleted?: boolean;
   name?: string;
+  documentVerificationStatus?: "pending" | "rejected";
 };
 
 export const readMobileTestSession = (): MobileTestSession | null => {
@@ -60,6 +61,9 @@ export const updateMobileTestSession = (updates: Partial<MobileTestSession>) => 
   return true;
 };
 
-export const isEmailTestMode = () => import.meta.env.VITE_EMAIL_TEST_ALLOW_ALL === "true";
+// Email bypass is deliberately limited to the configured local mobile test session.
+// A normal authenticated user must always complete real email verification.
+export const isEmailTestMode = () =>
+  import.meta.env.VITE_EMAIL_TEST_ALLOW_ALL === "true" && readMobileTestSession() !== null;
 
 export const clearMobileTestSession = () => localStorage.removeItem(MOBILE_TEST_SESSION_KEY);

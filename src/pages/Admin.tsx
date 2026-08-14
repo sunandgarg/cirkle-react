@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, Smartphone, Key, ToggleLeft, Briefcase, Plus, X, Pencil, Zap, ExternalLink } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, Smartphone, Key, ToggleLeft, Briefcase, Plus, X, Pencil, Zap, ExternalLink, ClipboardCheck, Eye, XCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -37,6 +37,8 @@ const Admin = () => {
   const [showJobForm, setShowJobForm] = useState(false);
   const [editingJob, setEditingJob] = useState<any>(null);
   const [uploadingIitLogo, setUploadingIitLogo] = useState<string | null>(null);
+  const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const [reviewingDocument, setReviewingDocument] = useState<string | null>(null);
   const [jobForm, setJobForm] = useState({ title: "", company: "", location: "", description: "", job_type: "Full-time", experience_level: "", category: "", easy_apply: true, apply_url: "" });
 
   const { data: navConfig } = useQuery({
@@ -98,6 +100,25 @@ const Admin = () => {
     enabled: !!isAdmin,
   });
 
+  const { data: documentSubmissions = [] } = useQuery({
+    queryKey: ["admin-document-verifications"],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from("document_verifications")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      const submissions = (data ?? []) as any[];
+      const ids = [...new Set(submissions.map((item) => item.user_id))];
+      if (!ids.length) return submissions;
+      const { data: profiles } = await supabase.from("profiles").select("user_id,name,avatar_url").in("user_id", ids);
+      const profileMap = new Map((profiles ?? []).map((item: any) => [item.user_id, item]));
+      return submissions.map((item) => ({ ...item, profile: profileMap.get(item.user_id) }));
+    },
+    enabled: !!isAdmin,
+  });
+
   const { data: adminUsers } = useQuery({
     queryKey: ["admin-roles-list"],
     queryFn: async () => {
@@ -128,6 +149,42 @@ const Admin = () => {
     queryClient.invalidateQueries({ queryKey: ["admin-roles-list"] });
     queryClient.invalidateQueries({ queryKey: ["admin-users"] });
     toast.success("Removed admin role");
+  };
+
+  const viewVerificationDocument = async (submission: any) => {
+    const { data, error } = await supabase.storage.from("verification-documents").createSignedUrl(submission.document_path, 300);
+    if (error || !data?.signedUrl) {
+      toast.error(error?.message || "Could not open the document");
+      return;
+    }
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const reviewDocument = async (submission: any, status: "approved" | "rejected") => {
+    const notes = (reviewNotes[submission.id] || "").trim();
+    if (status === "rejected" && !notes) {
+      toast.error("Add a clear rejection reason first");
+      return;
+    }
+    setReviewingDocument(submission.id);
+    try {
+      const { error } = await (supabase as any).rpc("review_document_verification", {
+        p_submission_id: submission.id,
+        p_status: status,
+        p_notes: notes || null,
+      });
+      if (error) throw error;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-document-verifications"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-users"] }),
+      ]);
+      setReviewNotes((current) => ({ ...current, [submission.id]: "" }));
+      toast.success(status === "approved" ? "Document approved and user verified" : "Submission rejected");
+    } catch (error: any) {
+      toast.error(error.message || "Could not review this submission");
+    } finally {
+      setReviewingDocument(null);
+    }
   };
 
   const dismissReports = async (postId: string) => {
@@ -403,11 +460,12 @@ const Admin = () => {
         </div>
 
         <Tabs defaultValue="users">
-          <TabsList className="w-full bg-secondary rounded-xl h-11 mb-4 flex-wrap">
+          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-3 sm:grid-cols-6 gap-1 p-1">
             <TabsTrigger value="users" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Users className="w-3.5 h-3.5 mr-1" /> Users</TabsTrigger>
             <TabsTrigger value="jobs" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Briefcase className="w-3.5 h-3.5 mr-1" /> Jobs</TabsTrigger>
             <TabsTrigger value="posts" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><FileText className="w-3.5 h-3.5 mr-1" /> Posts</TabsTrigger>
             <TabsTrigger value="reports" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Ban className="w-3.5 h-3.5 mr-1" /> Reports</TabsTrigger>
+            <TabsTrigger value="documents" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><ClipboardCheck className="w-3.5 h-3.5 mr-1" /> Documents</TabsTrigger>
             <TabsTrigger value="settings" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Settings2 className="w-3.5 h-3.5 mr-1" /> Settings</TabsTrigger>
           </TabsList>
 
@@ -545,6 +603,57 @@ const Admin = () => {
                 </div>
               );
             })}
+          </TabsContent>
+
+          <TabsContent value="documents" className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-bold text-foreground">Document verification</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">Review private institute documents and approve access.</p>
+              </div>
+              <span className="text-xs font-semibold bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))] px-2.5 py-1 rounded-full">
+                {documentSubmissions.filter((item: any) => item.status === "pending").length} pending
+              </span>
+            </div>
+            {documentSubmissions.length === 0 && (
+              <div className="text-center py-12 bg-card border border-border rounded-xl">
+                <ClipboardCheck className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
+                <p className="text-sm font-semibold text-foreground">No document submissions</p>
+                <p className="text-xs text-muted-foreground mt-1">New submissions will appear here.</p>
+              </div>
+            )}
+            <div className="grid gap-3 lg:grid-cols-2">
+              {documentSubmissions.map((submission: any) => {
+                const isPending = submission.status === "pending";
+                const isReviewing = reviewingDocument === submission.id;
+                return (
+                  <div key={submission.id} className="bg-card border border-border rounded-xl p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-foreground truncate">{submission.profile?.name || "Unnamed member"}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{submission.iit_name} · {submission.student_status?.replace("_", " ")}</p>
+                      </div>
+                      <span className={`text-[10px] font-bold px-2 py-1 rounded-full capitalize ${submission.status === "approved" ? "bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]" : submission.status === "rejected" ? "bg-destructive/10 text-destructive" : "bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))]"}`}>{submission.status}</span>
+                    </div>
+                    <div className="rounded-xl bg-secondary/60 p-3 flex items-center gap-3">
+                      <FileText className="w-5 h-5 text-primary shrink-0" />
+                      <div className="flex-1 min-w-0"><p className="text-xs font-semibold text-foreground truncate">{submission.original_filename}</p><p className="text-[10px] text-muted-foreground capitalize">{submission.document_type?.replaceAll("_", " ")} · {(submission.file_size / 1024 / 1024).toFixed(2)} MB</p></div>
+                      <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => viewVerificationDocument(submission)}><Eye className="w-3.5 h-3.5 mr-1" /> View</Button>
+                    </div>
+                    {isPending ? (
+                      <>
+                        <Textarea value={reviewNotes[submission.id] || ""} onChange={(event) => setReviewNotes((current) => ({ ...current, [submission.id]: event.target.value }))} placeholder="Review note (required when rejecting)" rows={2} className="bg-secondary border-0 text-xs" maxLength={500} />
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button size="sm" className="h-9 text-xs" onClick={() => reviewDocument(submission, "approved")} disabled={isReviewing}><CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Approve</Button>
+                          <Button size="sm" variant="destructive" className="h-9 text-xs" onClick={() => reviewDocument(submission, "rejected")} disabled={isReviewing}><XCircle className="w-3.5 h-3.5 mr-1" /> Reject</Button>
+                        </div>
+                      </>
+                    ) : submission.review_notes ? <p className="text-xs text-muted-foreground"><span className="font-semibold text-foreground">Review note:</span> {submission.review_notes}</p> : null}
+                    <p className="text-[10px] text-muted-foreground">Submitted {new Date(submission.created_at).toLocaleString()}</p>
+                  </div>
+                );
+              })}
+            </div>
           </TabsContent>
 
           {/* Settings Tab */}
