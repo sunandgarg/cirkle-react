@@ -46,7 +46,9 @@ interface SavedView {
 }
 
 const EMOJIS = ["❤️", "🔥", "👍", "😂", "💯", "😮", "😢", "🎉"];
-const isDemoId = (id: string) => typeof id === "string" && (id.startsWith("demo-") || id.startsWith("test-"));
+const isDemoId = (id: string) => typeof id === "string" && (
+  id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
+);
 const QUICK_REACTIONS = ["❤️", "🔥", "👍", "😂", "💯"];
 
 /* ─── Color helpers ─── */
@@ -349,6 +351,7 @@ const Forum = () => {
   const [newMsgCount, setNewMsgCount] = useState(0);
   const [unreadDots, setUnreadDots] = useState<Record<string, boolean>>(() => getUnreadChannels());
   const [testRoomPosts, setTestRoomPosts] = useState<any[]>([]);
+  const [outboxPosts, setOutboxPosts] = useState<any[]>([]);
 
   // Pagination state
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -698,8 +701,12 @@ const Forum = () => {
   const posts = useMemo(() => {
     if (!postsData) return undefined;
     const base = postsData.isDemo ? postsData.demos : [...olderPages, ...(postsData.posts || [])];
-    return readMobileTestSession() ? [...base, ...testRoomPosts] : base;
-  }, [postsData, olderPages, testRoomPosts]);
+    const persisted = readMobileTestSession() ? [...base, ...testRoomPosts] : base;
+    const roomOutbox = outboxPosts.filter((post) =>
+      post.scope_type === activeScope.type && post.scope_key === activeScope.key
+    );
+    return [...persisted, ...roomOutbox];
+  }, [postsData, olderPages, testRoomPosts, outboxPosts, activeScope.type, activeScope.key]);
   const isEmptyChannel = !!postsData && !postsData.isDemo && (posts?.length || 0) === 0;
 
 
@@ -815,7 +822,28 @@ const Forum = () => {
       };
       return { localPost: null, serverPost: optimisticPost, scopeType: activeScope.type, scopeKey: activeScope.key };
     },
-    onSuccess: (result) => {
+    onMutate: () => {
+      if (!user) return { pendingId: null };
+      const pendingId = `outbox-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      setOutboxPosts((current) => [...current, {
+        id: pendingId,
+        community_id: "outbox", scope_type: activeScope.type, scope_key: activeScope.key,
+        channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
+        content: content.trim() || (imageFile ? "📷 Sending image…" : attachedFile ? `📎 ${attachedFile.name}` : `📊 ${pollQuestion}`),
+        is_anonymous: isAnonymous, author_id: user.id, created_at: new Date().toISOString(),
+        image_url: imagePreview, file_url: null, file_name: attachedFile?.name || null,
+        reply_to_id: replyTo?.id || null, deleted_at: null, is_deleted_for_everyone: false,
+        seen_by: [], edited_at: null, pinned_at: null,
+        profile: isAnonymous ? null : profile,
+        poll: null, replyCount: 0, reactions: {}, myReactions: [], is_pending: true,
+      }]);
+      requestAnimationFrame(() => scrollContainerRef.current?.scrollTo({
+        top: scrollContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      }));
+      return { pendingId };
+    },
+    onSuccess: (result, _variables, context) => {
       if (result?.localPost) {
         setTestRoomPosts(appendForumTestPost(
           result.scopeType, result.scopeKey, result.localPost,
@@ -830,16 +858,26 @@ const Forum = () => {
           },
         );
       }
+      if (context?.pendingId) {
+        setOutboxPosts((current) => current.filter((post) => post.id !== context.pendingId));
+      }
       setContent(""); setIsAnonymous(false); setImageFile(null); setImagePreview(null);
       setForumDraft(activeScope.type, activeScope.key, "");
       setShowPollCreator(false); setPollQuestion(""); setPollOptions(["", ""]); setReplyTo(null);
       setAttachedFile(null); setShowAttachMenu(false); setShowFormatBar(false);
       setLastPostTime(Date.now());
       if (slowModeEnabled && !isAdmin) setSlowModeCooldown(slowModeSeconds);
-      queryClient.invalidateQueries({ queryKey: ["forum-posts"] });
+      if (result?.serverPost) {
+        setTimeout(() => void queryClient.invalidateQueries({
+          queryKey: ["forum-posts", result.scopeType, result.scopeKey],
+        }), 1500);
+      }
       setTimeout(() => scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" }), 300);
     },
-    onError: (err: any) => {
+    onError: (err: any, _variables, context) => {
+      if (context?.pendingId) {
+        setOutboxPosts((current) => current.filter((post) => post.id !== context.pendingId));
+      }
       if (err?.code === "42501" || /row-level security|permission denied/i.test(err?.message || "")) {
         toast.error("Your verified community access is still syncing. Refresh once, then try again.");
         void queryClient.invalidateQueries({ queryKey: ["canonical-academic-identity", user?.id] });
