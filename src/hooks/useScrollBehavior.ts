@@ -21,7 +21,7 @@ export const useScrollBehavior = (scrollRef: React.RefObject<HTMLDivElement | nu
   const lastDirectionTime = useRef(0);
   const consecutiveCount = useRef(0);
 
-  const THRESHOLD = 80;
+  const THRESHOLD = 44;
   const DOUBLE_SCROLL_WINDOW = 600;
   const BOTTOM_PROXIMITY = 50;
 
@@ -60,7 +60,7 @@ export const useScrollBehavior = (scrollRef: React.RefObject<HTMLDivElement | nu
         lastDirection.current = "down";
 
         if (accumulatedDown.current > THRESHOLD) {
-          setState(prev => ({ ...prev, showHeader: false, showInput: true, showNavBar: true }));
+          setState({ showHeader: true, showInput: true, showNavBar: true });
         }
       } else if (delta < 0) {
         // Scrolling UP (towards older)
@@ -74,7 +74,7 @@ export const useScrollBehavior = (scrollRef: React.RefObject<HTMLDivElement | nu
         lastDirection.current = "up";
 
         if (accumulatedUp.current > THRESHOLD) {
-          setState(prev => ({ ...prev, showInput: false, showNavBar: false, showHeader: true }));
+          setState({ showInput: false, showNavBar: false, showHeader: true });
         }
       }
 

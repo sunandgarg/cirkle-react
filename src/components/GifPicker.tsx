@@ -22,7 +22,7 @@ const GifPicker = ({ onSelect, onClose }: GifPickerProps) => {
   const [results, setResults] = useState<GifResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
-  const [activeTab, setActiveTab] = useState<"gifs" | "stickers">("gifs");
+  const [activeTab, setActiveTab] = useState<"gifs" | "stickers">("stickers");
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const searchGifs = useCallback(async (q: string, type: string) => {
@@ -57,16 +57,16 @@ const GifPicker = ({ onSelect, onClose }: GifPickerProps) => {
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <div className="flex items-center gap-0">
           <button
-            onClick={() => { setActiveTab("gifs"); setQuery(""); }}
-            className={`px-3 py-1 text-xs font-semibold rounded-full transition-colors ${activeTab === "gifs" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
-          >
-            GIFs
-          </button>
-          <button
             onClick={() => { setActiveTab("stickers"); setQuery(""); }}
             className={`px-3 py-1 text-xs font-semibold rounded-full transition-colors ${activeTab === "stickers" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
           >
             Stickers
+          </button>
+          <button
+            onClick={() => { setActiveTab("gifs"); setQuery(""); }}
+            className={`px-3 py-1 text-xs font-semibold rounded-full transition-colors ${activeTab === "gifs" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            GIFs
           </button>
         </div>
         <button onClick={onClose} className="text-muted-foreground hover:text-foreground">

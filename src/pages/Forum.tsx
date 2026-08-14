@@ -8,10 +8,10 @@ import {
   Send, Smile, Search, ImageIcon, X, BarChart3, Plus, Trash2, Reply,
   ChevronDown, Menu, Hash, Bookmark, BookmarkPlus, Pin,
   MoreHorizontal, Check, Users, Megaphone, Copy, Forward,
-  CheckCheck, Clock, Pencil, AtSign, ArrowDown, Film,
+  CheckCheck, Clock, Pencil, AtSign, ArrowDown,
   Mic, Paperclip, MessageSquare, Bold, Italic, Code, Timer, Settings2, Eye,
   Filter, Calendar, User, Link2, Image as ImageLucide, ChevronRight, Camera,
-  Volume2, EyeOff, Flag
+  Volume2, EyeOff, Flag, Sticker, Keyboard
 } from "lucide-react";
 import BottomNav from "@/components/BottomNav";
 import { supabase } from "@/integrations/supabase/client";
@@ -304,7 +304,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = 200;
-const FORUM_BUILD = "2026.08.14.7";
+const FORUM_BUILD = "2026.08.14.8";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -1083,9 +1083,23 @@ const Forum = () => {
   }, [posts, activeScope.type, activeScope.key]);
   useEffect(() => { hasScrolledRef.current = false; }, [activeScope.type, activeScope.key]);
 
+  const dismissKeyboard = useCallback(() => {
+    const active = document.activeElement as HTMLElement | null;
+    if (active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT")) active.blur();
+  }, []);
+
+  const dismissComposerOverlays = useCallback(() => {
+    dismissKeyboard();
+    setShowAttachMenu(false);
+    setShowGifPicker(false);
+    setShowFormatBar(false);
+    setShowMentionSuggestions(false);
+  }, [dismissKeyboard]);
+
   const handleScroll = useCallback(async () => {
     const el = scrollContainerRef.current;
     if (!el) return;
+    dismissComposerOverlays();
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     setShowScrollDown(distFromBottom > 100);
     if (distFromBottom < 50) setNewMsgCount(0);
@@ -1119,7 +1133,7 @@ const Forum = () => {
         setLoadingOlder(false);
       }
     }
-  }, [loadingOlder, hasMoreOlder, posts, activeScope.type, activeScope.key, enrichPosts]);
+  }, [loadingOlder, hasMoreOlder, posts, activeScope.type, activeScope.key, enrichPosts, dismissComposerOverlays]);
 
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -1389,7 +1403,7 @@ const Forum = () => {
       {/* ═══ MAIN CHAT AREA ═══ */}
       <div className="flex-1 flex flex-col min-w-0 relative overflow-x-hidden">
         {/* ── Header (48px) with scroll hide ── */}
-        <div className={`h-14 flex items-center gap-2.5 px-3 border-b border-border/70 bg-card/95 backdrop-blur-xl flex-shrink-0 z-10 shadow-sm transition-transform duration-[250ms] ease-in-out ${showHeader ? 'translate-y-0' : '-translate-y-full'}`}>
+        <div className={`h-14 flex items-center gap-2.5 px-3 border-b border-border/70 bg-card/95 backdrop-blur-xl flex-shrink-0 z-10 shadow-sm transition-transform duration-200 ease-in-out ${showHeader ? 'translate-y-0' : '-translate-y-full'}`}>
           <button onClick={() => setSidebarOpen(true)} className="lg:hidden w-9 h-9 flex items-center justify-center rounded-lg hover:bg-accent active:scale-95 transition-all" aria-label="Open menu">
             <img src="/cirkle-logo.png" alt="Cirkle" className="w-7 h-7 rounded-md" />
           </button>
@@ -1533,7 +1547,12 @@ const Forum = () => {
         )}
 
         {/* ── Messages area ── */}
-        <div ref={scrollContainerRef} onScroll={handleScroll} onClick={restoreAll} className="forum-chat-wallpaper flex-1 overflow-y-auto overflow-x-hidden min-h-0 overscroll-y-contain">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          onPointerDown={dismissComposerOverlays}
+          className="forum-chat-wallpaper flex-1 overflow-y-auto overflow-x-hidden min-h-0 overscroll-y-contain"
+        >
           <div className="px-0 w-full">
             {/* Pagination: Beginning marker or spinner */}
             {!hasMoreOlder && posts && posts.length > 0 && (
@@ -1631,7 +1650,7 @@ const Forum = () => {
 
         {/* ── Ultra-smooth Composer (FIX 2) ── */}
         {canPost && !editingPost && (
-          <div className={`relative z-20 backdrop-blur-xl bg-card/95 border-t border-border/60 px-2.5 sm:px-3 py-2 flex-shrink-0 safe-bottom transition-transform duration-[250ms] ease-in-out ${showInput ? 'translate-y-0' : 'translate-y-full absolute bottom-0 left-0 right-0'}`}>
+          <div className={`relative z-20 backdrop-blur-xl bg-card/95 border-t border-border/60 px-2.5 sm:px-3 py-2 flex-shrink-0 safe-bottom transition-[transform,opacity] duration-200 ease-out ${showInput ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 absolute bottom-0 left-0 right-0 pointer-events-none'}`}>
             {/* Reply preview */}
             {replyTo && (
               <div className="flex items-center bg-accent/80 rounded-t-lg mb-1 overflow-hidden animate-fade-in">
@@ -1716,30 +1735,30 @@ const Forum = () => {
 
             {/* WhatsApp-inspired attachment tray */}
             {showAttachMenu && (
-              <div className="absolute bottom-full left-2 right-2 lg:left-3 lg:right-auto lg:w-[430px] mb-2 bg-card/98 backdrop-blur-xl border border-border/70 rounded-3xl shadow-2xl p-4 grid grid-cols-3 sm:grid-cols-5 gap-3 animate-bounce-in">
+              <div className="absolute z-30 bottom-full left-1 right-1 lg:left-3 lg:right-auto lg:w-[430px] mb-2 bg-gradient-to-b from-card via-card to-secondary backdrop-blur-xl border border-border rounded-3xl shadow-2xl p-3.5 grid grid-cols-5 gap-1.5 animate-bounce-in overflow-hidden">
                 <label className="flex flex-col items-center gap-2 rounded-2xl p-1.5 hover:bg-accent cursor-pointer transition-colors">
-                  <div className="w-12 h-12 rounded-full bg-[hsl(213,90%,55%)]/14 flex items-center justify-center"><ImageLucide className="w-5 h-5 text-[hsl(213,90%,55%)]" /></div>
+                  <div className="w-11 h-11 rounded-full bg-[hsl(213,90%,55%)]/14 flex items-center justify-center"><ImageLucide className="w-5 h-5 text-[hsl(213,90%,55%)]" /></div>
                   <span className="text-[11px] font-medium text-foreground">Photos</span>
                   <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
                 </label>
                 <label className="flex flex-col items-center gap-2 rounded-2xl p-1.5 hover:bg-accent cursor-pointer transition-colors">
-                  <div className="w-12 h-12 rounded-full bg-[hsl(142,65%,42%)]/14 flex items-center justify-center"><Camera className="w-5 h-5 text-[hsl(142,65%,42%)]" /></div>
+                  <div className="w-11 h-11 rounded-full bg-[hsl(142,65%,42%)]/14 flex items-center justify-center"><Camera className="w-5 h-5 text-[hsl(142,65%,42%)]" /></div>
                   <span className="text-[11px] font-medium text-foreground">Camera</span>
                   <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleImageSelect} />
                 </label>
                 <label className="flex flex-col items-center gap-2 rounded-2xl p-1.5 hover:bg-accent cursor-pointer transition-colors">
-                  <div className="w-12 h-12 rounded-full bg-[hsl(234,89%,64%)]/14 flex items-center justify-center"><Paperclip className="w-5 h-5 text-[hsl(234,89%,64%)]" /></div>
+                  <div className="w-11 h-11 rounded-full bg-[hsl(234,89%,64%)]/14 flex items-center justify-center"><Paperclip className="w-5 h-5 text-[hsl(234,89%,64%)]" /></div>
                   <span className="text-[11px] font-medium text-foreground">Document</span>
                   <input ref={docInputRef} type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip" className="hidden" onChange={handleFileSelect} />
                 </label>
                 <button onClick={() => { setShowPollCreator(true); setShowAttachMenu(false); }}
                   className="flex flex-col items-center gap-2 rounded-2xl p-1.5 hover:bg-accent transition-colors">
-                  <div className="w-12 h-12 rounded-full bg-[hsl(38,96%,55%)]/14 flex items-center justify-center"><BarChart3 className="w-5 h-5 text-[hsl(38,96%,48%)]" /></div>
+                  <div className="w-11 h-11 rounded-full bg-[hsl(38,96%,55%)]/14 flex items-center justify-center"><BarChart3 className="w-5 h-5 text-[hsl(38,96%,48%)]" /></div>
                   <span className="text-[11px] font-medium text-foreground">Poll</span>
                 </button>
                 <button onClick={() => { setShowAttachMenu(false); navigate("/calendar"); }}
                   className="flex flex-col items-center gap-2 rounded-2xl p-1.5 hover:bg-accent transition-colors">
-                  <div className="w-12 h-12 rounded-full bg-[hsl(340,78%,52%)]/14 flex items-center justify-center"><Calendar className="w-5 h-5 text-[hsl(340,78%,52%)]" /></div>
+                  <div className="w-11 h-11 rounded-full bg-[hsl(340,78%,52%)]/14 flex items-center justify-center"><Calendar className="w-5 h-5 text-[hsl(340,78%,52%)]" /></div>
                   <span className="text-[11px] font-medium text-foreground">Event</span>
                 </button>
               </div>
@@ -1748,7 +1767,7 @@ const Forum = () => {
             {/* Input row - buttery smooth */}
             {!isRecordingVoice && (
               <div className="flex items-end gap-1.5">
-                <button onClick={() => { setShowAttachMenu(!showAttachMenu); setShowFormatBar(false); }}
+                <button onClick={() => { setShowAttachMenu(!showAttachMenu); setShowGifPicker(false); setShowFormatBar(false); dismissKeyboard(); }}
                   className={`w-10 h-10 flex items-center justify-center rounded-full flex-shrink-0 transition-all ${showAttachMenu ? "text-primary bg-primary/10 rotate-45" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}>
                   <Plus className="w-5 h-5" />
                 </button>
@@ -1766,9 +1785,21 @@ const Forum = () => {
                     className="w-full min-h-[42px] max-h-[104px] bg-accent border-0 rounded-[22px] text-[16px] resize-none py-2.5 px-4 pr-24 focus:outline-none focus:ring-0 placeholder:text-muted-foreground/60"
                   />
                   <div className="absolute right-1 bottom-1 flex items-center gap-0">
-                    <button onClick={() => setShowGifPicker(!showGifPicker)}
+                    <button
+                      onClick={() => {
+                        if (showGifPicker) {
+                          setShowGifPicker(false);
+                          requestAnimationFrame(() => textareaRef.current?.focus());
+                        } else {
+                          setShowGifPicker(true);
+                          setShowAttachMenu(false);
+                          setShowFormatBar(false);
+                          dismissKeyboard();
+                        }
+                      }}
+                      aria-label={showGifPicker ? "Show keyboard" : "Open stickers"}
                       className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${showGifPicker ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}>
-                      <Film className="w-4 h-4" />
+                      {showGifPicker ? <Keyboard className="w-[18px] h-[18px]" /> : <Sticker className="w-[18px] h-[18px]" />}
                     </button>
                     <button onClick={() => setShowFormatBar(!showFormatBar)}
                       className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${showFormatBar ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}>
@@ -1923,7 +1954,7 @@ const Forum = () => {
       {showAttachMenu && <div className="fixed inset-0 z-10" onClick={() => setShowAttachMenu(false)} />}
       </div>
       {/* Forum's own bottom nav with scroll hide */}
-      <div className={`lg:hidden flex-shrink-0 transition-transform duration-[250ms] ease-in-out ${showNavBar ? 'translate-y-0' : 'translate-y-full'}`}>
+      <div className={`lg:hidden flex-shrink-0 overflow-hidden transition-[max-height,opacity] duration-200 ease-out ${showNavBar ? 'max-h-20 opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
         <BottomNav />
       </div>
     </div>
