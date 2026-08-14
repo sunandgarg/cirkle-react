@@ -27,9 +27,15 @@ import ImageLightbox from "@/components/forum/ImageLightbox";
 import FileAttachment from "@/components/forum/FileAttachment";
 import ThreadPanel from "@/components/forum/ThreadPanel";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
-import { getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead, setChannelUnread } from "@/hooks/useForumCache";
+import {
+  getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead,
+  getForumDraft, setForumDraft, getForumScroll, setForumScroll,
+} from "@/hooks/useForumCache";
 import { useScrollBehavior } from "@/hooks/useScrollBehavior";
-import { buildForumScopes, hasCompleteForumEducation, type ForumScope as ScopeDef } from "@/lib/forumScopes";
+import {
+  buildForumScopes, hasCompleteForumEducation,
+  type CanonicalAcademicIdentity, type ForumScope as ScopeDef,
+} from "@/lib/forumScopes";
 import { hasMobileTestAcademicProfile, readMobileTestSession } from "@/lib/mobileVerification";
 
 /* ─── Types ─── */
@@ -78,24 +84,14 @@ const buildScopeQuery = (scopeType: string, scopeKey: string, limit = 50, before
   let q = supabase.from("posts").select("*")
     .is("reply_to_id", null)
     .is("deleted_at", null)
+    .eq("scope_type", scopeType)
+    .eq("scope_key", scopeKey)
     .order("created_at", { ascending: false }).limit(limit) as any;
   
   if (beforeDate) {
     q = q.lt("created_at", beforeDate);
   }
 
-  switch (scopeType) {
-    case "GLOBAL": q = q.or("channel.in.(global,all-iit-global),and(scope_type.eq.GLOBAL,scope_key.eq.IIT_ALL)"); break;
-    case "CAMPUS": q = q.or(`campus_filter.eq.${scopeKey.replace(/_/g, " ")},and(scope_type.eq.CAMPUS,scope_key.eq.${scopeKey}),channel.eq.my-campus`); break;
-    case "COURSE_GLOBAL": q = q.or(`and(scope_type.eq.COURSE_GLOBAL,scope_key.eq.${scopeKey}),channel.eq.course-global`); break;
-    case "COURSE_CAMPUS": q = q.or(`and(scope_type.eq.COURSE_CAMPUS,scope_key.eq.${scopeKey}),channel.eq.course-campus`); break;
-    case "BATCH_GLOBAL": q = q.or(`and(scope_type.eq.BATCH_GLOBAL,scope_key.eq.${scopeKey}),channel.eq.batch-global`); break;
-    case "BATCH_CAMPUS": q = q.or(`and(scope_type.eq.BATCH_CAMPUS,scope_key.eq.${scopeKey}),channel.eq.batch-campus`); break;
-    case "COHORT": q = q.or(`and(scope_type.eq.COHORT,scope_key.eq.${scopeKey}),channel.eq.my-cohort`); break;
-    case "COHORT_GLOBAL": q = q.or(`and(scope_type.eq.COHORT_GLOBAL,scope_key.eq.${scopeKey}),channel.eq.cohort-global`); break;
-
-    default: q = q.or("channel.in.(global,all-iit-global),and(scope_type.eq.GLOBAL,scope_key.eq.IIT_ALL)");
-  }
   return q;
 };
 
@@ -358,6 +354,7 @@ const Forum = () => {
   const [olderPages, setOlderPages] = useState<any[]>([]);
 
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const presenceChannelRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -442,7 +439,25 @@ const Forum = () => {
     refetchOnReconnect: true,
   });
 
-  const scopes = useMemo(() => buildForumScopes(profile, primaryEducation), [profile, primaryEducation]);
+  const { data: canonicalIdentity, isSuccess: identityLoaded } = useQuery({
+    queryKey: ["canonical-academic-identity", user?.id],
+    queryFn: async () => {
+      if (!user?.id || readMobileTestSession()) return null;
+      const { data, error } = await (supabase as any).rpc("get_my_academic_identity");
+      // Gracefully support a frontend-first deploy while the migration rolls out.
+      if (error) return null;
+      const row = Array.isArray(data) ? data[0] : data;
+      return (row || null) as CanonicalAcademicIdentity | null;
+    },
+    enabled: !!user?.id,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+
+  const scopes = useMemo(
+    () => buildForumScopes(profile, primaryEducation, canonicalIdentity),
+    [profile, primaryEducation, canonicalIdentity],
+  );
 
   const { data: savedViews = [] } = useQuery({
     queryKey: ["saved-views", user?.id],
@@ -526,6 +541,14 @@ const Forum = () => {
   // Smart scroll hide/show
   const { showInput, showNavBar, showHeader, restoreAll } = useScrollBehavior(scrollContainerRef);
 
+  useEffect(() => {
+    setContent(getForumDraft(activeScope.type, activeScope.key));
+    return () => {
+      const offset = scrollContainerRef.current?.scrollTop || 0;
+      setForumScroll(activeScope.type, activeScope.key, offset);
+    };
+  }, [activeScope.type, activeScope.key]);
+
   // Mark channel as read when opened - also reset pagination
   useEffect(() => {
     setChannelRead(activeScope.type, activeScope.key);
@@ -533,7 +556,55 @@ const Forum = () => {
     setNewMsgCount(0);
     setHasMoreOlder(true);
     setOlderPages([]);
-  }, [activeScope.type, activeScope.key]);
+    if (user?.id && !readMobileTestSession()) {
+      void (supabase as any).rpc("mark_forum_scope_read", {
+        p_scope_type: activeScope.type,
+        p_scope_key: activeScope.key,
+      }).then(() => queryClient.invalidateQueries({ queryKey: ["forum-unread", user.id] }));
+    }
+  }, [activeScope.type, activeScope.key, queryClient, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || readMobileTestSession()) return;
+    let cancelled = false;
+    void (supabase as any).rpc("get_forum_room_state", {
+      p_scope_type: activeScope.type,
+      p_scope_key: activeScope.key,
+    }).then(({ data, error }: any) => {
+      if (cancelled || error) return;
+      const room = Array.isArray(data) ? data[0] : data;
+      if (!room) return;
+      if (!getForumDraft(activeScope.type, activeScope.key) && room.draft) {
+        setForumDraft(activeScope.type, activeScope.key, room.draft);
+        setContent((current) => current || room.draft);
+      }
+      if (!getForumScroll(activeScope.type, activeScope.key) && room.scroll_offset) {
+        setForumScroll(activeScope.type, activeScope.key, room.scroll_offset);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [activeScope.type, activeScope.key, user?.id]);
+
+  const { data: serverUnread } = useQuery({
+    queryKey: ["forum-unread", user?.id],
+    queryFn: async () => {
+      if (!user?.id || readMobileTestSession()) return [];
+      const { data, error } = await (supabase as any).rpc("get_my_forum_unread");
+      if (error) return [];
+      return (data || []) as Array<{ scope_type: string; scope_key: string; has_unread: boolean }>;
+    },
+    enabled: !!user?.id,
+    staleTime: 20_000,
+    refetchInterval: 30_000,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (!serverUnread?.length) return;
+    setUnreadDots(Object.fromEntries(
+      serverUnread.filter((room) => room.has_unread).map((room) => [`${room.scope_type}_${room.scope_key}`, true]),
+    ));
+  }, [serverUnread]);
 
   /* ─── Helper: enrich raw posts with profiles, polls, replies, reactions ─── */
   const enrichPosts = useCallback(async (postsData: any[]) => {
@@ -641,21 +712,6 @@ const Forum = () => {
     prevPostCountRef.current = currentCount;
   }, [posts]);
 
-  // Mark messages as seen (skip demo posts)
-  useEffect(() => {
-    if (!user?.id || !posts?.length) return;
-    const unseenPosts = posts.filter((p: any) =>
-      !isDemoId(p.id) && p.author_id !== user.id && !(p.seen_by || []).includes(user.id)
-    );
-    if (unseenPosts.length === 0) return;
-    unseenPosts.slice(0, 20).forEach(async (post: any) => {
-      const currentSeenBy = (post?.seen_by || []) as string[];
-      if (!currentSeenBy.includes(user.id)) {
-        await supabase.rpc("mark_forum_post_seen", { p_post_id: post.id });
-      }
-    });
-  }, [posts, user?.id]);
-
   /* ─── Mutations ─── */
   const createPost = useMutation({
     mutationFn: async () => {
@@ -721,6 +777,7 @@ const Forum = () => {
     },
     onSuccess: () => {
       setContent(""); setIsAnonymous(false); setImageFile(null); setImagePreview(null);
+      setForumDraft(activeScope.type, activeScope.key, "");
       setShowPollCreator(false); setPollQuestion(""); setPollOptions(["", ""]); setReplyTo(null);
       setAttachedFile(null); setShowAttachMenu(false); setShowFormatBar(false);
       setLastPostTime(Date.now());
@@ -846,28 +903,23 @@ const Forum = () => {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["forum-posts"] }); toast.success("Pin updated"); },
   });
 
-  /* ─── Realtime: scope-aware INSERTs only invalidate active scope ─── */
+  /* ─── Realtime: subscribe only to the open room ─── */
   useEffect(() => {
+    const filter = `scope_key=eq.${activeScope.key}`;
     const channel = supabase.channel(`forum-rt-${activeScope.type}-${activeScope.key}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, (payload: any) => {
-        const row = payload.new || {};
-        // Only refresh if the new post belongs to the active scope
-        if (row.scope_type === activeScope.type && row.scope_key === activeScope.key) {
-          queryClient.invalidateQueries({ queryKey: ["forum-posts", activeScope.type, activeScope.key] });
-        } else {
-          // Mark other channel as unread (handled elsewhere); skip refetch
-        }
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts' }, (payload: any) => {
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts', filter }, (payload: any) => {
         const row = payload.new || {};
         if (row.scope_type === activeScope.type && row.scope_key === activeScope.key) {
           queryClient.invalidateQueries({ queryKey: ["forum-posts", activeScope.type, activeScope.key] });
         }
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts' }, () => {
-        queryClient.invalidateQueries({ queryKey: ["forum-posts", activeScope.type, activeScope.key] });
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts', filter }, (payload: any) => {
+        const row = payload.new || {};
+        if (row.scope_type === activeScope.type && row.scope_key === activeScope.key) {
+          queryClient.invalidateQueries({ queryKey: ["forum-posts", activeScope.type, activeScope.key] });
+        }
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, () => {
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts', filter }, () => {
         queryClient.invalidateQueries({ queryKey: ["forum-posts", activeScope.type, activeScope.key] });
       })
       .subscribe();
@@ -881,6 +933,7 @@ const Forum = () => {
     const presenceChannel = supabase.channel(`typing-${activeScope.type}-${activeScope.key}`, {
       config: { presence: { key: user.id } },
     });
+    presenceChannelRef.current = presenceChannel;
     presenceChannel
       .on('presence', { event: 'sync' }, () => {
         const state = presenceChannel.presenceState();
@@ -894,27 +947,31 @@ const Forum = () => {
         setTypingUsers(typing);
       })
       .subscribe();
-    return () => { supabase.removeChannel(presenceChannel); };
+    return () => {
+      if (presenceChannelRef.current === presenceChannel) presenceChannelRef.current = null;
+      supabase.removeChannel(presenceChannel);
+    };
   }, [user?.id, activeScope.type, activeScope.key]);
 
   const broadcastTyping = useCallback(() => {
     if (!user?.id || !profile?.name) return;
-    const channelName = `typing-${activeScope.type}-${activeScope.key}`;
-    const ch = supabase.channel(channelName);
-    ch.track({ typing: true, name: profile.name });
+    const ch = presenceChannelRef.current;
+    if (!ch) return;
+    void ch.track({ typing: true, name: profile.name });
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     typingTimeoutRef.current = setTimeout(() => {
-      ch.track({ typing: false, name: profile.name });
+      void ch.track({ typing: false, name: profile.name });
     }, 3000);
-  }, [user?.id, profile?.name, activeScope]);
+  }, [user?.id, profile?.name]);
 
   // Auto-scroll on initial load
   useEffect(() => {
     if (posts && posts.length > 0 && !hasScrolledRef.current && scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      const savedOffset = getForumScroll(activeScope.type, activeScope.key);
+      scrollContainerRef.current.scrollTop = savedOffset || scrollContainerRef.current.scrollHeight;
       hasScrolledRef.current = true;
     }
-  }, [posts]);
+  }, [posts, activeScope.type, activeScope.key]);
   useEffect(() => { hasScrolledRef.current = false; }, [activeScope.type, activeScope.key]);
 
   const handleScroll = useCallback(async () => {
@@ -966,6 +1023,7 @@ const Forum = () => {
   // Auto-grow textarea
   const handleContentChange = (value: string) => {
     setContent(value);
+    setForumDraft(activeScope.type, activeScope.key, value);
     broadcastTyping();
 
     // Auto-resize textarea
@@ -1087,7 +1145,24 @@ const Forum = () => {
     scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" });
     setNewMsgCount(0);
   };
-  const selectScope = (type: string, key: string) => { setActiveScope({ type, key }); setSidebarOpen(false); setActiveTab("feed"); setThreadPost(null); };
+  const selectScope = (type: string, key: string) => {
+    const scrollOffset = scrollContainerRef.current?.scrollTop || 0;
+    setForumDraft(activeScope.type, activeScope.key, content);
+    setForumScroll(activeScope.type, activeScope.key, scrollOffset);
+    if (user?.id && !readMobileTestSession()) {
+      void (supabase as any).rpc("save_forum_room_state", {
+        p_scope_type: activeScope.type,
+        p_scope_key: activeScope.key,
+        p_draft: content,
+        p_scroll_offset: Math.max(0, Math.round(scrollOffset)),
+      });
+    }
+    setContent(getForumDraft(type, key));
+    setActiveScope({ type, key });
+    setSidebarOpen(false);
+    setActiveTab("feed");
+    setThreadPost(null);
+  };
 
   const filteredPosts = useMemo(() => {
     let filtered = posts || [];
@@ -1142,13 +1217,14 @@ const Forum = () => {
   const hasContent = content.trim() || imageFile || attachedFile || showPollCreator;
 
   /* ════════════════════ RENDER ════════════════════ */
-  if (isVerified && educationLoaded && !hasCompleteForumEducation(primaryEducation)) {
+  if (isVerified && educationLoaded && identityLoaded && !canonicalIdentity && !hasCompleteForumEducation(primaryEducation)) {
     return (
       <PostVerifyOnboarding
         derivedIit={profile?.iit_name || undefined}
         academicRecovery
         onComplete={async () => {
           await queryClient.invalidateQueries({ queryKey: ["primary-education", user?.id] });
+          await queryClient.invalidateQueries({ queryKey: ["canonical-academic-identity", user?.id] });
         }}
       />
     );

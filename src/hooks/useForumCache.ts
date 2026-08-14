@@ -97,6 +97,34 @@ export const setCachedPosts = (scopeType: string, scopeKey: string, posts: any[]
 
 // ─── Unread dots persistence ───
 const UNREAD_KEY = "forum_unread_dots";
+const DRAFT_PREFIX = "forum_draft_";
+const SCROLL_PREFIX = "forum_scroll_";
+
+const roomStateKey = (prefix: string, scopeType: string, scopeKey: string) =>
+  `${prefix}${scopeType}_${scopeKey}`;
+
+export const getForumDraft = (scopeType: string, scopeKey: string) => {
+  try { return localStorage.getItem(roomStateKey(DRAFT_PREFIX, scopeType, scopeKey)) || ""; }
+  catch { return ""; }
+};
+
+export const setForumDraft = (scopeType: string, scopeKey: string, draft: string) => {
+  try {
+    const key = roomStateKey(DRAFT_PREFIX, scopeType, scopeKey);
+    if (draft) localStorage.setItem(key, draft.slice(0, 4000));
+    else localStorage.removeItem(key);
+  } catch {}
+};
+
+export const getForumScroll = (scopeType: string, scopeKey: string) => {
+  try { return Math.max(0, Number(localStorage.getItem(roomStateKey(SCROLL_PREFIX, scopeType, scopeKey))) || 0); }
+  catch { return 0; }
+};
+
+export const setForumScroll = (scopeType: string, scopeKey: string, offset: number) => {
+  try { localStorage.setItem(roomStateKey(SCROLL_PREFIX, scopeType, scopeKey), String(Math.max(0, Math.round(offset)))); }
+  catch {}
+};
 
 export const getUnreadChannels = (): Record<string, boolean> => {
   try {

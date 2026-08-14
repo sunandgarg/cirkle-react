@@ -19,6 +19,18 @@ export interface ForumScope {
   toggleOptions?: ForumScopeOption[];
 }
 
+export interface CanonicalAcademicIdentity {
+  network_id: string;
+  institute_id: string;
+  institute_name: string;
+  degree_id: string;
+  degree_name: string;
+  specialisation_id: string;
+  specialisation_name: string;
+  graduation_year: number;
+  member_status: string;
+}
+
 type ForumProfile = { iit_name?: string | null } | null | undefined;
 export type ForumEducation = {
   institution?: string | null;
@@ -40,27 +52,32 @@ export const forumScopeSegment = (value: string) =>
   value.trim().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toUpperCase()
     .replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
-export const buildForumScopes = (profile: ForumProfile, education: ForumEducation): ForumScope[] => {
-  const iit = profile?.iit_name?.trim() || education?.institution?.trim() || "";
-  const degree = education?.degree?.trim() || "";
-  const branch = education?.branch_area?.trim() || "";
-  const batch = education?.passing_year?.trim() || "";
-  const iitCode = forumScopeSegment(iit);
+export const buildForumScopes = (
+  profile: ForumProfile,
+  education: ForumEducation,
+  identity?: CanonicalAcademicIdentity | null,
+): ForumScope[] => {
+  const iit = identity?.institute_name || profile?.iit_name?.trim() || education?.institution?.trim() || "";
+  const degree = identity?.degree_name || education?.degree?.trim() || "";
+  const branch = identity?.specialisation_name || education?.branch_area?.trim() || "";
+  const batch = String(identity?.graduation_year || education?.passing_year?.trim() || "");
+  const networkCode = identity?.network_id || "IIT";
+  const iitCode = identity?.institute_id || forumScopeSegment(iit);
   const scopes: ForumScope[] = [];
 
   if (iit) {
-    scopes.push({ id: "campus", type: "CAMPUS", key: iitCode, label: "My Campus", subtitle: `${iit} · All batches`, emoji: "🏛️", section: "recommended" });
+    scopes.push({ id: "campus", type: "CAMPUS", key: iitCode, label: "My Campus", subtitle: `${iit} · Students & Alumni`, emoji: "🏛️", section: "recommended" });
   }
 
   if (degree && branch) {
-    const courseCode = `${forumScopeSegment(degree)}_${forumScopeSegment(branch)}`;
+    const courseCode = `${identity?.degree_id || forumScopeSegment(degree)}_${identity?.specialisation_id || forumScopeSegment(branch)}`;
     scopes.push({
       id: "course", type: iit ? "COURSE_CAMPUS" : "COURSE_GLOBAL", key: iit ? `${iitCode}|${courseCode}` : courseCode,
       label: "My Course", subtitle: `${degree} · ${branch}`, emoji: "📖", section: "recommended",
       hasToggle: !!iit,
       toggleOptions: iit ? [
-        { id: "course-campus", type: "COURSE_CAMPUS", key: `${iitCode}|${courseCode}`, label: "Campus" },
-        { id: "course-global", type: "COURSE_GLOBAL", key: courseCode, label: "Global" },
+        { id: "course-campus", type: "COURSE_CAMPUS", key: `${iitCode}|${courseCode}`, label: "Campus", subtitle: `${iit} · ${degree} · ${branch}` },
+        { id: "course-global", type: "COURSE_GLOBAL", key: courseCode, label: "All IITs", scopeLabel: `${degree} · ${branch}`, subtitle: "All IITs · Students & Alumni" },
       ] : undefined,
     });
   }
@@ -72,14 +89,14 @@ export const buildForumScopes = (profile: ForumProfile, education: ForumEducatio
       label: "My Batch", subtitle: `Batch ${batch}`, emoji: "🎓", section: "recommended",
       hasToggle: !!iit,
       toggleOptions: iit ? [
-        { id: "batch-campus", type: "BATCH_CAMPUS", key: `${iitCode}|${batchCode}`, label: "Campus" },
-        { id: "batch-global", type: "BATCH_GLOBAL", key: batchCode, label: "Global" },
+        { id: "batch-campus", type: "BATCH_CAMPUS", key: `${iitCode}|${batchCode}`, label: "Campus", subtitle: `${iit} · Class of ${batch}` },
+        { id: "batch-global", type: "BATCH_GLOBAL", key: batchCode, label: "All IITs", scopeLabel: `Class of ${batch}`, subtitle: "All IITs · Students & Alumni" },
       ] : undefined,
     });
   }
 
   if (degree && branch && batch) {
-    const cohortGlobalKey = `${forumScopeSegment(degree)}|${forumScopeSegment(branch)}|${forumScopeSegment(batch)}`;
+    const cohortGlobalKey = `${identity?.degree_id || forumScopeSegment(degree)}|${identity?.specialisation_id || forumScopeSegment(branch)}|${forumScopeSegment(batch)}`;
     if (iit) {
       const cohortKey = `${iitCode}|${cohortGlobalKey}`;
       scopes.push({
@@ -88,7 +105,7 @@ export const buildForumScopes = (profile: ForumProfile, education: ForumEducatio
         hasToggle: true,
         toggleOptions: [
           { id: "cohort-campus", type: "COHORT", key: cohortKey, label: "Campus", scopeLabel: "My Cohort", subtitle: `${iit} · ${degree} · ${branch} · ${batch}` },
-          { id: "cohort-global", type: "COHORT_GLOBAL", key: cohortGlobalKey, label: "All IITs", scopeLabel: `All IITs · ${degree} · ${branch} · ${batch}`, subtitle: `Every IIT · ${degree} · ${branch} · ${batch}` },
+          { id: "cohort-global", type: "COHORT_GLOBAL", key: cohortGlobalKey, label: "All IITs", scopeLabel: `${degree} · ${branch} · ${batch}`, subtitle: "All IITs · Students & Alumni" },
         ],
       });
     } else {
@@ -96,6 +113,6 @@ export const buildForumScopes = (profile: ForumProfile, education: ForumEducatio
     }
   }
 
-  scopes.push({ id: "global", type: "GLOBAL", key: "IIT_ALL", label: "Multiverse", subtitle: "All 23 IITs · Everyone", emoji: "🌐", section: "all" });
+  scopes.push({ id: "global", type: "GLOBAL", key: `${networkCode}_ALL`, label: "Multiverse", subtitle: "All IITs · Students & Alumni", emoji: "🌐", section: "all" });
   return scopes;
 };
