@@ -97,8 +97,13 @@ export const COURSE_SPECIALISATIONS: Record<string, string[]> = {
   ],
 };
 
-export const ALL_COURSES = Object.keys(COURSE_SPECIALISATIONS);
+export const ALL_COURSES = [
+  "BTech", "MTech", "PhD", "MSc", "MBA", "Dual Degree", "BS", "MS", "MA", "BDes",
+  "MDes", "BArch", "MArch", "MS by Research", "MPP", "Executive MBA", "Integrated Degree",
+  "MCP", "MHRM", "LLB", "LLM", "MMST", "MEngg", "MDP", "BSc-BEd", "B.Cyber",
+  "MDes by Research", "MA by Research", "Other",
+] as const;
 
 export const getSpecialisations = (course: string): string[] => {
-  return COURSE_SPECIALISATIONS[course] || [];
+  return COURSE_SPECIALISATIONS[course] || (course && course !== "Other" ? ["General"] : []);
 };

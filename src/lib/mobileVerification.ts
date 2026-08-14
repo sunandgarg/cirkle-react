@@ -3,6 +3,7 @@ export const MOBILE_TEST_USER_ID = "00000000-0000-4000-8000-000000000001";
 
 const MOBILE_TEST_SESSION_KEY = "cirkle:mobile-test-session";
 const MOBILE_TEST_DOCUMENT_KEY = "cirkle:mobile-test-document";
+const MOBILE_TEST_COURSE_KEY = "cirkle:mobile-test-course";
 
 const mobileTestModeEnabled = import.meta.env.VITE_MOBILE_TEST_MODE === "true";
 const mobileTestAllowAll = import.meta.env.VITE_MOBILE_TEST_ALLOW_ALL === "true";
@@ -30,9 +31,24 @@ type MobileTestDocumentState = {
   updatedAt: string;
 };
 
+type MobileTestCourseState = {
+  phone: string;
+  courseName: string;
+  status: "pending" | "approved" | "rejected" | "withdrawn";
+  updatedAt: string;
+};
+
 const readMobileTestDocumentState = (): MobileTestDocumentState | null => {
   try {
     return JSON.parse(localStorage.getItem(MOBILE_TEST_DOCUMENT_KEY) || "null") as MobileTestDocumentState | null;
+  } catch {
+    return null;
+  }
+};
+
+const readMobileTestCourseState = (): MobileTestCourseState | null => {
+  try {
+    return JSON.parse(localStorage.getItem(MOBILE_TEST_COURSE_KEY) || "null") as MobileTestCourseState | null;
   } catch {
     return null;
   }
@@ -43,6 +59,8 @@ export const startMobileTestSession = (countryCode: string, phone: string) => {
   const normalizedPhone = normalizePhone(countryCode, phone);
   const documentState = readMobileTestDocumentState();
   const pendingDocument = documentState?.phone === normalizedPhone && documentState.status === "pending" ? documentState : null;
+  const courseState = readMobileTestCourseState();
+  const pendingCourse = courseState?.phone === normalizedPhone && courseState.status === "pending" ? courseState : null;
   localStorage.setItem(MOBILE_TEST_SESSION_KEY, JSON.stringify({
     phone: phone.replace(/\D/g, ""),
     countryCode,
@@ -50,6 +68,8 @@ export const startMobileTestSession = (countryCode: string, phone: string) => {
     iitName: pendingDocument?.iitName,
     studentStatus: pendingDocument?.studentStatus,
     documentVerificationStatus: pendingDocument?.status,
+    customCourseName: pendingCourse?.courseName,
+    courseApprovalStatus: pendingCourse?.status,
   }));
   return true;
 };
@@ -65,6 +85,8 @@ export type MobileTestSession = {
   onboardingCompleted?: boolean;
   name?: string;
   documentVerificationStatus?: "pending" | "withdrawn" | "rejected";
+  customCourseName?: string;
+  courseApprovalStatus?: "pending" | "approved" | "rejected" | "withdrawn";
 };
 
 export const readMobileTestSession = (): MobileTestSession | null => {
@@ -109,6 +131,31 @@ export const withdrawMobileTestDocumentSubmission = () => {
 };
 
 export const clearMobileTestDocumentSubmission = () => localStorage.removeItem(MOBILE_TEST_DOCUMENT_KEY);
+
+export const saveMobileTestCourseRequest = (courseName: string) => {
+  const session = readMobileTestSession();
+  if (!session) return false;
+  const state: MobileTestCourseState = {
+    phone: normalizePhone(session.countryCode, session.phone),
+    courseName,
+    status: "pending",
+    updatedAt: new Date().toISOString(),
+  };
+  localStorage.setItem(MOBILE_TEST_COURSE_KEY, JSON.stringify(state));
+  return updateMobileTestSession({ customCourseName: courseName, courseApprovalStatus: "pending" });
+};
+
+export const withdrawMobileTestCourseRequest = () => {
+  const session = readMobileTestSession();
+  if (!session) return false;
+  const current = readMobileTestCourseState();
+  if (current?.phone === normalizePhone(session.countryCode, session.phone)) {
+    localStorage.setItem(MOBILE_TEST_COURSE_KEY, JSON.stringify({ ...current, status: "withdrawn", updatedAt: new Date().toISOString() }));
+  }
+  return updateMobileTestSession({ customCourseName: undefined, courseApprovalStatus: "withdrawn" });
+};
+
+export const clearMobileTestCourseRequest = () => localStorage.removeItem(MOBILE_TEST_COURSE_KEY);
 
 // Email bypass is deliberately limited to the configured local mobile test session.
 // A normal authenticated user must always complete real email verification.

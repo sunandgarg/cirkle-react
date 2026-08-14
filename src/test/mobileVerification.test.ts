@@ -3,9 +3,11 @@ import {
   clearMobileTestDocumentSubmission,
   clearMobileTestSession,
   readMobileTestSession,
+  saveMobileTestCourseRequest,
   saveMobileTestDocumentSubmission,
   startMobileTestSession,
   withdrawMobileTestDocumentSubmission,
+  withdrawMobileTestCourseRequest,
 } from "@/lib/mobileVerification";
 
 describe("mobile test document verification lifecycle", () => {
@@ -42,5 +44,21 @@ describe("mobile test document verification lifecycle", () => {
 
     expect(readMobileTestSession()?.documentVerificationStatus).toBeUndefined();
     clearMobileTestDocumentSubmission();
+  });
+
+  it("holds a custom course request across test logins until it is changed", () => {
+    startMobileTestSession("+91", "9999999999");
+    expect(saveMobileTestCourseRequest("Master of Urban Systems")).toBe(true);
+    clearMobileTestSession();
+    startMobileTestSession("+91", "9999999999");
+    expect(readMobileTestSession()).toMatchObject({
+      customCourseName: "Master of Urban Systems",
+      courseApprovalStatus: "pending",
+    });
+
+    expect(withdrawMobileTestCourseRequest()).toBe(true);
+    clearMobileTestSession();
+    startMobileTestSession("+91", "9999999999");
+    expect(readMobileTestSession()?.courseApprovalStatus).toBeUndefined();
   });
 });

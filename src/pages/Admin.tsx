@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, Smartphone, Key, ToggleLeft, Briefcase, Plus, X, Pencil, Zap, ExternalLink, ClipboardCheck, Eye, XCircle } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, Smartphone, Key, ToggleLeft, Briefcase, Plus, X, Pencil, Zap, ExternalLink, ClipboardCheck, Eye, XCircle, GraduationCap } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -39,6 +39,7 @@ const Admin = () => {
   const [uploadingIitLogo, setUploadingIitLogo] = useState<string | null>(null);
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [reviewingDocument, setReviewingDocument] = useState<string | null>(null);
+  const [reviewingCourse, setReviewingCourse] = useState<string | null>(null);
   const [jobForm, setJobForm] = useState({ title: "", company: "", location: "", description: "", job_type: "Full-time", experience_level: "", category: "", easy_apply: true, apply_url: "" });
 
   const { data: navConfig } = useQuery({
@@ -119,6 +120,26 @@ const Admin = () => {
     enabled: !!isAdmin,
   });
 
+  const { data: courseRequests = [] } = useQuery({
+    queryKey: ["admin-course-verifications"],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from("course_verification_requests")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      const requests = (data ?? []) as any[];
+      const ids = [...new Set(requests.map((item) => item.user_id))];
+      if (!ids.length) return requests;
+      const { data: profiles } = await supabase.from("profiles").select("user_id,name,avatar_url").in("user_id", ids);
+      const profileMap = new Map((profiles ?? []).map((item: any) => [item.user_id, item]));
+      return requests.map((item) => ({ ...item, profile: profileMap.get(item.user_id) }));
+    },
+    enabled: !!isAdmin,
+    staleTime: 30_000,
+  });
+
   const { data: adminUsers } = useQuery({
     queryKey: ["admin-roles-list"],
     queryFn: async () => {
@@ -184,6 +205,30 @@ const Admin = () => {
       toast.error(error.message || "Could not review this submission");
     } finally {
       setReviewingDocument(null);
+    }
+  };
+
+  const reviewCourse = async (request: any, status: "approved" | "rejected") => {
+    const notes = (reviewNotes[request.id] || "").trim();
+    if (status === "rejected" && !notes) {
+      toast.error("Add a clear rejection reason first");
+      return;
+    }
+    setReviewingCourse(request.id);
+    try {
+      const { error } = await (supabase as any).rpc("review_course_verification", {
+        p_request_id: request.id,
+        p_status: status,
+        p_notes: notes || null,
+      });
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ["admin-course-verifications"] });
+      setReviewNotes((current) => ({ ...current, [request.id]: "" }));
+      toast.success(status === "approved" ? "Course approved" : "Course request rejected");
+    } catch (error: any) {
+      toast.error(error.message || "Could not review this course");
+    } finally {
+      setReviewingCourse(null);
     }
   };
 
@@ -460,12 +505,13 @@ const Admin = () => {
         </div>
 
         <Tabs defaultValue="users">
-          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-3 sm:grid-cols-6 gap-1 p-1">
+          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-3 sm:grid-cols-7 gap-1 p-1">
             <TabsTrigger value="users" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Users className="w-3.5 h-3.5 mr-1" /> Users</TabsTrigger>
             <TabsTrigger value="jobs" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Briefcase className="w-3.5 h-3.5 mr-1" /> Jobs</TabsTrigger>
             <TabsTrigger value="posts" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><FileText className="w-3.5 h-3.5 mr-1" /> Posts</TabsTrigger>
             <TabsTrigger value="reports" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Ban className="w-3.5 h-3.5 mr-1" /> Reports</TabsTrigger>
             <TabsTrigger value="documents" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><ClipboardCheck className="w-3.5 h-3.5 mr-1" /> Documents</TabsTrigger>
+            <TabsTrigger value="courses" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><GraduationCap className="w-3.5 h-3.5 mr-1" /> Courses</TabsTrigger>
             <TabsTrigger value="settings" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Settings2 className="w-3.5 h-3.5 mr-1" /> Settings</TabsTrigger>
           </TabsList>
 
@@ -652,6 +698,67 @@ const Admin = () => {
                       <p className="text-xs font-medium text-primary">Withdrawn by the member to try another verification method.</p>
                     ) : submission.review_notes ? <p className="text-xs text-muted-foreground"><span className="font-semibold text-foreground">Review note:</span> {submission.review_notes}</p> : null}
                     <p className="text-[10px] text-muted-foreground">Submitted {new Date(submission.created_at).toLocaleString()}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="courses" className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-bold text-foreground">Custom course approvals</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">Review course names submitted through “Other”.</p>
+              </div>
+              <span className="text-xs font-semibold bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))] px-2.5 py-1 rounded-full">
+                {courseRequests.filter((item: any) => item.status === "pending").length} pending
+              </span>
+            </div>
+            {courseRequests.length === 0 && (
+              <div className="text-center py-12 bg-card border border-border rounded-xl">
+                <GraduationCap className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
+                <p className="text-sm font-semibold text-foreground">No custom course requests</p>
+                <p className="text-xs text-muted-foreground mt-1">New requests will appear here.</p>
+              </div>
+            )}
+            <div className="grid gap-3 lg:grid-cols-2">
+              {courseRequests.map((request: any) => {
+                const isPending = request.status === "pending";
+                const isReviewing = reviewingCourse === request.id;
+                const statusClass = request.status === "approved"
+                  ? "bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]"
+                  : request.status === "rejected"
+                    ? "bg-destructive/10 text-destructive"
+                    : request.status === "withdrawn"
+                      ? "bg-primary/10 text-primary"
+                      : "bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))]";
+                return (
+                  <div key={request.id} className="bg-card border border-border rounded-xl p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-foreground truncate">{request.applicant_name || request.profile?.name || "Unnamed member"}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{request.iit_name}</p>
+                      </div>
+                      <span className={`text-[10px] font-bold px-2 py-1 rounded-full capitalize ${statusClass}`}>{request.status}</span>
+                    </div>
+                    <div className="rounded-xl bg-secondary/60 p-3 flex items-center gap-3">
+                      <GraduationCap className="w-5 h-5 text-primary shrink-0" />
+                      <div className="min-w-0"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Requested course</p><p className="text-sm font-bold text-foreground break-words">{request.course_name}</p></div>
+                    </div>
+                    {isPending ? (
+                      <>
+                        <Textarea value={reviewNotes[request.id] || ""} onChange={(event) => setReviewNotes((current) => ({ ...current, [request.id]: event.target.value }))} placeholder="Review note (required when rejecting)" rows={2} className="bg-secondary border-0 text-xs" maxLength={500} />
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button size="sm" className="h-9 text-xs" onClick={() => reviewCourse(request, "approved")} disabled={isReviewing}><CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Approve</Button>
+                          <Button size="sm" variant="destructive" className="h-9 text-xs" onClick={() => reviewCourse(request, "rejected")} disabled={isReviewing}><XCircle className="w-3.5 h-3.5 mr-1" /> Reject</Button>
+                        </div>
+                      </>
+                    ) : request.status === "withdrawn" ? (
+                      <p className="text-xs font-medium text-primary">Withdrawn by the member after choosing another course.</p>
+                    ) : request.review_notes ? (
+                      <p className="text-xs text-muted-foreground"><span className="font-semibold text-foreground">Review note:</span> {request.review_notes}</p>
+                    ) : null}
+                    <p className="text-[10px] text-muted-foreground">Submitted {new Date(request.created_at).toLocaleString()}</p>
                   </div>
                 );
               })}
