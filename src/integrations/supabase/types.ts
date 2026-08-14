@@ -1540,6 +1540,10 @@ export type Database = {
         Returns: boolean
       }
       mark_chat_read: { Args: { p_room_id: string }; Returns: undefined }
+      mark_forum_post_seen: {
+        Args: { p_post_id: string }
+        Returns: undefined
+      }
       revoke_admin_role: {
         Args: { p_target_user_id: string }
         Returns: undefined

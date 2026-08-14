@@ -651,9 +651,7 @@ const Forum = () => {
     unseenPosts.slice(0, 20).forEach(async (post: any) => {
       const currentSeenBy = (post?.seen_by || []) as string[];
       if (!currentSeenBy.includes(user.id)) {
-        await supabase.from("posts").update({
-          seen_by: [...currentSeenBy, user.id]
-        } as any).eq("id", post.id);
+        await supabase.rpc("mark_forum_post_seen", { p_post_id: post.id });
       }
     });
   }, [posts, user?.id]);

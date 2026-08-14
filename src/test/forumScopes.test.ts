@@ -31,6 +31,28 @@ describe("automatic forum groups", () => {
     expect(forumScopeSegment("IIT Dhanbad (ISM)")).toBe("IIT_DHANBAD_ISM");
   });
 
+  it("separates campus, course, batch, and cohort membership correctly", () => {
+    const scopesFor = (iit: string, degree: string, branch: string, year: string) =>
+      buildForumScopes(
+        { iit_name: iit },
+        { institution: iit, degree, branch_area: branch, passing_year: year },
+      );
+    const optionKey = (scopes: ReturnType<typeof scopesFor>, scopeId: string, option: string) =>
+      scopes.find((scope) => scope.id === scopeId)?.toggleOptions?.find((item) => item.label === option)?.key;
+
+    const delhiBtech = scopesFor("IIT Delhi", "BTech", "General", "2026");
+    const delhiMba = scopesFor("IIT Delhi", "MBA", "General", "2026");
+    const bombayBtech = scopesFor("IIT Bombay", "BTech", "General", "2026");
+
+    expect(delhiBtech.find((scope) => scope.id === "campus")?.key).toBe(delhiMba.find((scope) => scope.id === "campus")?.key);
+    expect(optionKey(delhiBtech, "course", "Campus")).not.toBe(optionKey(delhiMba, "course", "Campus"));
+    expect(optionKey(delhiBtech, "batch", "Campus")).toBe(optionKey(delhiMba, "batch", "Campus"));
+    expect(optionKey(delhiBtech, "course", "Global")).toBe(optionKey(bombayBtech, "course", "Global"));
+    expect(optionKey(delhiBtech, "batch", "Global")).toBe(optionKey(bombayBtech, "batch", "Global"));
+    expect(optionKey(delhiBtech, "cohort", "All IITs")).toBe(optionKey(bombayBtech, "cohort", "All IITs"));
+    expect(optionKey(delhiBtech, "cohort", "Campus")).not.toBe(optionKey(bombayBtech, "cohort", "Campus"));
+  });
+
   it("does not expose incomplete profile-specific rooms", () => {
     expect(buildForumScopes({ iit_name: "IIT Delhi" }, null).map((scope) => scope.id)).toEqual(["campus", "global"]);
     expect(hasCompleteForumEducation({ degree: "MBA", branch_area: null, passing_year: "2026" })).toBe(false);
