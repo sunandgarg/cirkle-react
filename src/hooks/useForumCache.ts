@@ -127,20 +127,20 @@ export const setForumScroll = (scopeType: string, scopeKey: string, offset: numb
   catch {}
 };
 
-const testPostsKey = (phone: string, scopeType: string, scopeKey: string) =>
-  `${TEST_POSTS_PREFIX}${phone.replace(/\D/g, "")}_${scopeType}_${scopeKey}`;
+const testPostsKey = (scopeType: string, scopeKey: string) =>
+  `${TEST_POSTS_PREFIX}${scopeType}_${scopeKey}`;
 
-export const getForumTestPosts = (phone: string, scopeType: string, scopeKey: string): any[] => {
+export const getForumTestPosts = (scopeType: string, scopeKey: string): any[] => {
   try {
-    const parsed = JSON.parse(localStorage.getItem(testPostsKey(phone, scopeType, scopeKey)) || "[]");
+    const parsed = JSON.parse(localStorage.getItem(testPostsKey(scopeType, scopeKey)) || "[]");
     return Array.isArray(parsed) ? parsed.slice(-100) : [];
   } catch { return []; }
 };
 
-export const appendForumTestPost = (phone: string, scopeType: string, scopeKey: string, post: any) => {
+export const appendForumTestPost = (scopeType: string, scopeKey: string, post: any) => {
   try {
-    const posts = [...getForumTestPosts(phone, scopeType, scopeKey), post].slice(-100);
-    localStorage.setItem(testPostsKey(phone, scopeType, scopeKey), JSON.stringify(posts));
+    const posts = [...getForumTestPosts(scopeType, scopeKey), post].slice(-100);
+    localStorage.setItem(testPostsKey(scopeType, scopeKey), JSON.stringify(posts));
     return posts;
   } catch {
     return [post];

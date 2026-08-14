@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearMobileTestDocumentSubmission,
   clearMobileTestSession,
+  getMobileTestUserId,
   hasMobileTestAcademicProfile,
   readMobileTestSession,
   saveMobileTestCourseRequest,
@@ -10,6 +11,7 @@ import {
   updateMobileTestSession,
   withdrawMobileTestDocumentSubmission,
   withdrawMobileTestCourseRequest,
+  isMobileTestUserId,
 } from "@/lib/mobileVerification";
 
 describe("mobile test document verification lifecycle", () => {
@@ -34,6 +36,15 @@ describe("mobile test document verification lifecycle", () => {
   it("accepts the second configured test number", () => {
     expect(startMobileTestSession("+91", "8888888888")).toBe(true);
     expect(readMobileTestSession()).toMatchObject({ phone: "8888888888", countryCode: "+91" });
+  });
+
+  it("gives each test participant a stable distinct identity", () => {
+    const first = getMobileTestUserId("9999999999");
+    const second = getMobileTestUserId("8888888888");
+    expect(first).not.toBe(second);
+    expect(getMobileTestUserId("9999999999")).toBe(first);
+    expect(isMobileTestUserId(first)).toBe(true);
+    expect(isMobileTestUserId(second)).toBe(true);
   });
 
   it("keeps onboarding fields used to build automatic forum groups", () => {

@@ -3,7 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { clearChatCache } from "@/lib/chatCache";
 import type { Tables } from "@/integrations/supabase/types";
 import type { User } from "@supabase/supabase-js";
-import { clearMobileTestSession, MOBILE_TEST_USER_ID, readMobileTestSession } from "@/lib/mobileVerification";
+import { clearMobileTestSession, getMobileTestUserId, isMobileTestUserId, readMobileTestSession } from "@/lib/mobileVerification";
 
 type Profile = Tables<"profiles">;
 
@@ -46,8 +46,9 @@ const createMobileTestIdentity = () => {
   const session = readMobileTestSession();
   if (!session) return null;
   const now = session.createdAt;
+  const testUserId = getMobileTestUserId(session.phone);
   const testUser = {
-    id: MOBILE_TEST_USER_ID,
+    id: testUserId,
     aud: "authenticated",
     role: "authenticated",
     phone: `${session.countryCode}${session.phone}`,
@@ -64,7 +65,7 @@ const createMobileTestIdentity = () => {
     mentor_category: null, mentor_price_audio: null, mentor_price_chat: null, mentor_price_video: null,
     name: session.name || "Cirkle Test User", onboarding_completed: !!session.onboardingCompleted, primary_education_id: null, role: "user",
     skills: [], slug: "cirkle-test-user", slug_updated_at: null, social_links: null, student_status: session.studentStatus || null,
-    user_id: MOBILE_TEST_USER_ID,
+    user_id: testUserId,
   };
   return { user: testUser, profile: testProfile };
 };
@@ -169,7 +170,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const refetchProfile = useCallback(async () => {
     const currentUser = user;
     if (!currentUser) return;
-    if (currentUser.id === MOBILE_TEST_USER_ID) {
+    if (isMobileTestUserId(currentUser.id)) {
       const identity = createMobileTestIdentity();
       if (identity) {
         setUser(identity.user);

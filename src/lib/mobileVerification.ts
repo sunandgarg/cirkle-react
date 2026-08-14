@@ -1,6 +1,12 @@
 export const MOBILE_TEST_OTP = import.meta.env.VITE_MOBILE_TEST_OTP || "123456";
 export const MOBILE_TEST_USER_ID = "00000000-0000-4000-8000-000000000001";
 
+export const getMobileTestUserId = (phone: string) =>
+  `00000000-0000-4000-8000-${phone.replace(/\D/g, "").padStart(12, "0").slice(-12)}`;
+
+export const isMobileTestUserId = (userId?: string | null) =>
+  userId === MOBILE_TEST_USER_ID || /^00000000-0000-4000-8000-00\d{10}$/.test(userId || "");
+
 const MOBILE_TEST_SESSION_KEY = "cirkle:mobile-test-session";
 const MOBILE_TEST_DOCUMENT_KEY = "cirkle:mobile-test-document";
 const MOBILE_TEST_COURSE_KEY = "cirkle:mobile-test-course";

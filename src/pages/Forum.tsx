@@ -463,7 +463,7 @@ const Forum = () => {
 
   useEffect(() => {
     const session = readMobileTestSession();
-    setTestRoomPosts(session ? getForumTestPosts(session.phone, activeScope.type, activeScope.key) : []);
+    setTestRoomPosts(session ? getForumTestPosts(activeScope.type, activeScope.key) : []);
   }, [activeScope.type, activeScope.key]);
 
   const { data: savedViews = [] } = useQuery({
@@ -700,7 +700,7 @@ const Forum = () => {
     const base = postsData.isDemo ? postsData.demos : [...olderPages, ...(postsData.posts || [])];
     return readMobileTestSession() ? [...base, ...testRoomPosts] : base;
   }, [postsData, olderPages, testRoomPosts]);
-  const isEmptyChannel = !!postsData && !postsData.isDemo && (postsData.posts?.length || 0) === 0 && olderPages.length === 0;
+  const isEmptyChannel = !!postsData && !postsData.isDemo && (posts?.length || 0) === 0;
 
 
   // Track new message arrivals for pill
@@ -753,7 +753,7 @@ const Forum = () => {
           } : null,
           replyCount: 0, reactions: {}, myReactions: [],
         };
-        return { localPost, testPhone: testSession.phone };
+        return { localPost, serverPost: null, scopeType: activeScope.type, scopeKey: activeScope.key };
       }
 
       let imageUrl: string | null = null;
@@ -791,7 +791,7 @@ const Forum = () => {
         file_url: fileUrl, file_name: fileName, file_size: fileSize, file_type: fileType,
       };
 
-      const { data: newPost, error } = await supabase.from("posts").insert(postData).select("id").single();
+      const { data: newPost, error } = await supabase.from("posts").insert(postData).select("*").single();
       if (error) {
         const insertError = new Error(error.message || "Failed to send message.") as Error & { code?: string };
         insertError.code = error.code;
@@ -804,13 +804,31 @@ const Forum = () => {
           await supabase.from("polls").insert({ post_id: newPost.id, question: pollQuestion.trim(), options: validOptions });
         }
       }
-      return { localPost: null, testPhone: null };
+      const optimisticPost = {
+        ...newPost,
+        profile: isAnonymous ? null : profile,
+        poll: showPollCreator && pollQuestion.trim() ? {
+          id: `pending-poll-${newPost.id}`, question: pollQuestion.trim(),
+          options: pollOptions.filter((option) => option.trim()),
+        } : null,
+        replyCount: 0, reactions: {}, myReactions: [],
+      };
+      return { localPost: null, serverPost: optimisticPost, scopeType: activeScope.type, scopeKey: activeScope.key };
     },
     onSuccess: (result) => {
-      if (result?.localPost && result.testPhone) {
+      if (result?.localPost) {
         setTestRoomPosts(appendForumTestPost(
-          result.testPhone, activeScope.type, activeScope.key, result.localPost,
+          result.scopeType, result.scopeKey, result.localPost,
         ));
+      } else if (result?.serverPost) {
+        queryClient.setQueryData(
+          ["forum-posts", result.scopeType, result.scopeKey],
+          (current: any) => {
+            const existing = current?.posts || [];
+            if (existing.some((post: any) => post.id === result.serverPost.id)) return current;
+            return { posts: [...existing, result.serverPost], isDemo: false, demos: [] };
+          },
+        );
       }
       setContent(""); setIsAnonymous(false); setImageFile(null); setImagePreview(null);
       setForumDraft(activeScope.type, activeScope.key, "");
