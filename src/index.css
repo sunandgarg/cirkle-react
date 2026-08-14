@@ -170,6 +170,21 @@
     display: none;
   }
 
+  /* Lightweight CSS-only chat texture: no image request, no added egress. */
+  .forum-chat-wallpaper {
+    background-color: hsl(42 32% 94%);
+    background-image:
+      radial-gradient(circle at 18px 18px, hsl(152 22% 55% / 0.055) 1.2px, transparent 1.4px),
+      radial-gradient(circle at 7px 31px, hsl(214 18% 48% / 0.04) 1px, transparent 1.2px);
+    background-size: 44px 44px, 38px 38px;
+  }
+  .dark .forum-chat-wallpaper {
+    background-color: hsl(188 15% 10%);
+    background-image:
+      radial-gradient(circle at 18px 18px, hsl(152 32% 55% / 0.05) 1.2px, transparent 1.4px),
+      radial-gradient(circle at 7px 31px, hsl(210 18% 80% / 0.035) 1px, transparent 1.2px);
+  }
+
   .story-ring {
     background: conic-gradient(
       hsl(var(--story-ring)),

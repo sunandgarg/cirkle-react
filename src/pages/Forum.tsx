@@ -10,7 +10,7 @@ import {
   MoreHorizontal, Check, Users, Megaphone, Copy, Forward,
   CheckCheck, Clock, Pencil, AtSign, ArrowDown, Film,
   Mic, Paperclip, MessageSquare, Bold, Italic, Code, Timer, Settings2, Eye,
-  Filter, Calendar, User, Link2, Image as ImageLucide, ChevronRight,
+  Filter, Calendar, User, Link2, Image as ImageLucide, ChevronRight, Camera,
   Volume2, EyeOff, Flag
 } from "lucide-react";
 import BottomNav from "@/components/BottomNav";
@@ -304,7 +304,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = 200;
-const FORUM_BUILD = "2026.08.14.6";
+const FORUM_BUILD = "2026.08.14.7";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -1389,12 +1389,14 @@ const Forum = () => {
       {/* ═══ MAIN CHAT AREA ═══ */}
       <div className="flex-1 flex flex-col min-w-0 relative overflow-x-hidden">
         {/* ── Header (48px) with scroll hide ── */}
-        <div className={`h-12 flex items-center gap-2 px-3 border-b border-border bg-card flex-shrink-0 z-10 transition-transform duration-[250ms] ease-in-out ${showHeader ? 'translate-y-0' : '-translate-y-full'}`}>
+        <div className={`h-14 flex items-center gap-2.5 px-3 border-b border-border/70 bg-card/95 backdrop-blur-xl flex-shrink-0 z-10 shadow-sm transition-transform duration-[250ms] ease-in-out ${showHeader ? 'translate-y-0' : '-translate-y-full'}`}>
           <button onClick={() => setSidebarOpen(true)} className="lg:hidden w-9 h-9 flex items-center justify-center rounded-lg hover:bg-accent active:scale-95 transition-all" aria-label="Open menu">
             <img src="/cirkle-logo.png" alt="Cirkle" className="w-7 h-7 rounded-md" />
           </button>
 
-          <Hash className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+          <div className="w-9 h-9 rounded-full bg-[hsl(152,68%,32%)]/12 text-[hsl(152,68%,32%)] flex items-center justify-center flex-shrink-0">
+            <Users className="w-5 h-5" />
+          </div>
           <div className="flex-1 min-w-0">
             <p className="text-[14px] sm:text-[15px] font-bold text-foreground truncate leading-tight">{(activeScopeDef as any)?.label}</p>
             {(activeScopeDef as any)?.subtitle && (
@@ -1531,7 +1533,7 @@ const Forum = () => {
         )}
 
         {/* ── Messages area ── */}
-        <div ref={scrollContainerRef} onScroll={handleScroll} onClick={restoreAll} className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 overscroll-y-contain">
+        <div ref={scrollContainerRef} onScroll={handleScroll} onClick={restoreAll} className="forum-chat-wallpaper flex-1 overflow-y-auto overflow-x-hidden min-h-0 overscroll-y-contain">
           <div className="px-0 w-full">
             {/* Pagination: Beginning marker or spinner */}
             {!hasMoreOlder && posts && posts.length > 0 && (
@@ -1629,7 +1631,7 @@ const Forum = () => {
 
         {/* ── Ultra-smooth Composer (FIX 2) ── */}
         {canPost && !editingPost && (
-          <div className={`backdrop-blur-xl bg-card/95 border-t border-border/60 px-3 py-2 flex-shrink-0 safe-bottom transition-transform duration-[250ms] ease-in-out ${showInput ? 'translate-y-0' : 'translate-y-full absolute bottom-0 left-0 right-0'}`}>
+          <div className={`relative z-20 backdrop-blur-xl bg-card/95 border-t border-border/60 px-2.5 sm:px-3 py-2 flex-shrink-0 safe-bottom transition-transform duration-[250ms] ease-in-out ${showInput ? 'translate-y-0' : 'translate-y-full absolute bottom-0 left-0 right-0'}`}>
             {/* Reply preview */}
             {replyTo && (
               <div className="flex items-center bg-accent/80 rounded-t-lg mb-1 overflow-hidden animate-fade-in">
@@ -1712,23 +1714,33 @@ const Forum = () => {
               </div>
             )}
 
-            {/* Attach menu popover */}
+            {/* WhatsApp-inspired attachment tray */}
             {showAttachMenu && (
-              <div className="mb-2 bg-card border border-border rounded-xl shadow-xl p-2 grid grid-cols-2 gap-1 animate-fade-in max-w-[240px]">
-                <label className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg hover:bg-accent cursor-pointer transition-colors">
-                  <div className="w-8 h-8 rounded-full bg-primary/15 flex items-center justify-center"><ImageLucide className="w-4 h-4 text-primary" /></div>
-                  <span className="text-[13px] font-medium text-foreground">Photo</span>
+              <div className="absolute bottom-full left-2 right-2 lg:left-3 lg:right-auto lg:w-[430px] mb-2 bg-card/98 backdrop-blur-xl border border-border/70 rounded-3xl shadow-2xl p-4 grid grid-cols-3 sm:grid-cols-5 gap-3 animate-bounce-in">
+                <label className="flex flex-col items-center gap-2 rounded-2xl p-1.5 hover:bg-accent cursor-pointer transition-colors">
+                  <div className="w-12 h-12 rounded-full bg-[hsl(213,90%,55%)]/14 flex items-center justify-center"><ImageLucide className="w-5 h-5 text-[hsl(213,90%,55%)]" /></div>
+                  <span className="text-[11px] font-medium text-foreground">Photos</span>
                   <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
                 </label>
-                <label className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg hover:bg-accent cursor-pointer transition-colors">
-                  <div className="w-8 h-8 rounded-full bg-[hsl(234,89%,64%)]/15 flex items-center justify-center"><Paperclip className="w-4 h-4 text-[hsl(234,89%,64%)]" /></div>
-                  <span className="text-[13px] font-medium text-foreground">File</span>
-                  <input ref={docInputRef} type="file" className="hidden" onChange={handleFileSelect} />
+                <label className="flex flex-col items-center gap-2 rounded-2xl p-1.5 hover:bg-accent cursor-pointer transition-colors">
+                  <div className="w-12 h-12 rounded-full bg-[hsl(142,65%,42%)]/14 flex items-center justify-center"><Camera className="w-5 h-5 text-[hsl(142,65%,42%)]" /></div>
+                  <span className="text-[11px] font-medium text-foreground">Camera</span>
+                  <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleImageSelect} />
+                </label>
+                <label className="flex flex-col items-center gap-2 rounded-2xl p-1.5 hover:bg-accent cursor-pointer transition-colors">
+                  <div className="w-12 h-12 rounded-full bg-[hsl(234,89%,64%)]/14 flex items-center justify-center"><Paperclip className="w-5 h-5 text-[hsl(234,89%,64%)]" /></div>
+                  <span className="text-[11px] font-medium text-foreground">Document</span>
+                  <input ref={docInputRef} type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip" className="hidden" onChange={handleFileSelect} />
                 </label>
                 <button onClick={() => { setShowPollCreator(true); setShowAttachMenu(false); }}
-                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg hover:bg-accent transition-colors">
-                  <div className="w-8 h-8 rounded-full bg-[hsl(38,96%,55%)]/15 flex items-center justify-center"><BarChart3 className="w-4 h-4 text-[hsl(38,96%,55%)]" /></div>
-                  <span className="text-[13px] font-medium text-foreground">Poll</span>
+                  className="flex flex-col items-center gap-2 rounded-2xl p-1.5 hover:bg-accent transition-colors">
+                  <div className="w-12 h-12 rounded-full bg-[hsl(38,96%,55%)]/14 flex items-center justify-center"><BarChart3 className="w-5 h-5 text-[hsl(38,96%,48%)]" /></div>
+                  <span className="text-[11px] font-medium text-foreground">Poll</span>
+                </button>
+                <button onClick={() => { setShowAttachMenu(false); navigate("/calendar"); }}
+                  className="flex flex-col items-center gap-2 rounded-2xl p-1.5 hover:bg-accent transition-colors">
+                  <div className="w-12 h-12 rounded-full bg-[hsl(340,78%,52%)]/14 flex items-center justify-center"><Calendar className="w-5 h-5 text-[hsl(340,78%,52%)]" /></div>
+                  <span className="text-[11px] font-medium text-foreground">Event</span>
                 </button>
               </div>
             )}
@@ -1751,7 +1763,7 @@ const Forum = () => {
                     placeholder={`Message #${(activeScopeDef as any)?.label || "channel"}`}
                     rows={1}
                     style={{ transition: 'height 100ms ease' }}
-                    className="w-full min-h-[40px] max-h-[96px] bg-accent border-0 rounded-lg text-[16px] resize-none py-2.5 px-3 pr-24 focus:outline-none focus:ring-0 placeholder:text-muted-foreground/60"
+                    className="w-full min-h-[42px] max-h-[104px] bg-accent border-0 rounded-[22px] text-[16px] resize-none py-2.5 px-4 pr-24 focus:outline-none focus:ring-0 placeholder:text-muted-foreground/60"
                   />
                   <div className="absolute right-1 bottom-1 flex items-center gap-0">
                     <button onClick={() => setShowGifPicker(!showGifPicker)}
@@ -2258,41 +2270,37 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
         </button>
       )}
 
-      <div className={`flex gap-3 sm:gap-4 px-3 sm:px-4 ${isGrouped ? 'py-[1px]' : 'pt-1.5 pb-0.5'} ${isDeleted ? "opacity-50" : ""}`}>
+      <div className={`flex gap-2 px-2.5 sm:px-5 ${isMine ? "justify-end" : "justify-start"} ${isGrouped ? 'py-[1px]' : 'pt-1.5 pb-0.5'} ${isDeleted ? "opacity-50" : ""}`}>
         {/* Avatar column */}
-        <div className="w-9 sm:w-10 flex-shrink-0 pt-0.5">
+        {!isMine && <div className="w-8 sm:w-9 flex-shrink-0 self-end mb-0.5">
           {!isGrouped ? (
-            <button onClick={goToProfile} className="w-9 h-9 sm:w-10 sm:h-10 rounded-full overflow-hidden hover:opacity-80 transition-opacity">
+            <button onClick={goToProfile} className="w-8 h-8 sm:w-9 sm:h-9 rounded-full overflow-hidden hover:opacity-80 transition-opacity block">
               {avatar ? (
-                <img src={avatar} alt="" className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover" loading="lazy" />
+                <img src={avatar} alt="" className="w-8 h-8 sm:w-9 sm:h-9 rounded-full object-cover" loading="lazy" />
               ) : (
-                <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full ${post.is_anonymous ? "bg-muted" : colors.bg} flex items-center justify-center`}>
+                <div className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full ${post.is_anonymous ? "bg-muted" : colors.bg} flex items-center justify-center`}>
                   <span className="text-xs font-bold text-white">{post.is_anonymous ? "?" : getInitials(post.profile?.name)}</span>
                 </div>
               )}
             </button>
           ) : (
-            <span className="text-[10px] text-transparent hover:text-muted-foreground transition-colors w-9 sm:w-10 text-center block pt-1.5 select-none cursor-default" title={fullTime}>
-              {format(new Date(post.created_at), "h:mm")}
-            </span>
+            <span className="block w-8 sm:w-9" aria-hidden="true" />
           )}
-        </div>
+        </div>}
 
-        {/* Content */}
-        <div className="flex-1 min-w-0">
-          {!isGrouped && (
-            <div className="flex items-baseline gap-2 mb-0.5">
+        {/* Compact group-chat bubble */}
+        <div className={`relative min-w-0 max-w-[84%] sm:max-w-[min(72%,44rem)] px-3 py-1.5 shadow-sm border border-border/35 ${
+          isMine
+            ? "bg-[hsl(142,52%,89%)] dark:bg-[hsl(152,55%,20%)] rounded-2xl rounded-br-[5px]"
+            : "bg-card rounded-2xl rounded-bl-[5px]"
+        }`}>
+          {!isGrouped && !isMine && (
+            <div className="flex items-baseline gap-1.5 mb-0.5">
               <button onClick={goToProfile} className={`text-[15px] font-semibold hover:underline ${post.is_anonymous ? "text-muted-foreground italic" : colors.text}`}>
                 {displayName}
               </button>
               {post.is_anonymous && <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded font-medium">ANON</span>}
-              <span className="text-[11px] text-muted-foreground" title={fullTime}>{time}</span>
               {isEdited && <span className="text-[10px] text-muted-foreground italic">(edited)</span>}
-              {isMine && seenBy.length > 0 && (
-                <button onClick={() => { setShowActions(false); setShowSeenBy(!showSeenBy); }} className="inline-flex items-center gap-0.5 text-[10px] text-primary" title={`Seen by ${seenBy.length}`}>
-                  <Eye className="w-3 h-3" /> {seenBy.length}
-                </button>
-              )}
             </div>
           )}
 
@@ -2341,6 +2349,18 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
               <ChevronRight className="w-3 h-3 opacity-0 group-hover/thread:opacity-100 transition-opacity" />
             </button>
           )}
+
+          <div className="flex items-center justify-end gap-1 pl-10 -mt-0.5 min-h-[14px]">
+            {isEdited && isMine && <span className="text-[9px] text-muted-foreground">edited</span>}
+            <span className="text-[10px] text-muted-foreground tabular-nums" title={fullTime}>{time}</span>
+            {isMine && (
+              post.is_pending
+                ? <Clock className="w-3 h-3 text-muted-foreground" aria-label="Sending" />
+                : <button onClick={() => { setShowActions(false); setShowSeenBy(!showSeenBy); }} className="inline-flex" title={seenBy.length ? `Seen by ${seenBy.length}` : "Sent"}>
+                    <CheckCheck className={`w-3.5 h-3.5 ${seenBy.length > 0 ? "text-[hsl(202,90%,48%)]" : "text-muted-foreground"}`} />
+                  </button>
+            )}
+          </div>
         </div>
       </div>
 
