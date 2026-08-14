@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search, FileUp, Clock3, LockKeyhole, RefreshCw } from "lucide-react";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
-import { defaultIitLogo, IIT_LIST, iitLogoSettingKey, type IitInstitute } from "@/data/iitInstitutes";
+import { defaultIitLogo, expectedIitEmailDomain, IIT_LIST, iitLogoSettingKey, isMatchingIitEmail, type IitInstitute, type IitMemberStatus } from "@/data/iitInstitutes";
 import { clearMobileTestDocumentSubmission, clearMobileTestSession, isEmailTestMode, MOBILE_TEST_OTP, readMobileTestSession, saveMobileTestDocumentSubmission, updateMobileTestSession, withdrawMobileTestDocumentSubmission } from "@/lib/mobileVerification";
 
 const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
@@ -130,8 +130,8 @@ const IitVerification = () => {
   };
 
   const getExpectedDomain = () => {
-    if (!selectedIit) return "";
-    return studentStatus === "alumni" ? selectedIit.alumniDomain : selectedIit.studentDomain;
+    if (!selectedIit || (studentStatus !== "current_student" && studentStatus !== "alumni")) return "";
+    return expectedIitEmailDomain(selectedIit, studentStatus);
   };
 
   const completeEmailVerification = async (normalizedEmail: string) => {
@@ -184,13 +184,15 @@ const IitVerification = () => {
 
   const handleSendCode = async () => {
     const normalizedEmail = email.trim().toLowerCase();
-    if (!normalizedEmail || !/^\S+@\S+\.\S+$/.test(normalizedEmail)) { toast.error("Please enter a valid email address"); return; }
-    const domain = email.split("@")[1]?.toLowerCase();
+    if (!selectedIit || (studentStatus !== "current_student" && studentStatus !== "alumni")) {
+      toast.error("Choose your IIT and member type first");
+      setStep("select_iit");
+      return;
+    }
     const expectedDomain = getExpectedDomain();
-    const isValidDomain = domain === expectedDomain || domain === selectedIit?.studentDomain;
-    const isAcademicEmail = domain?.endsWith(".ac.in");
-    if (!emailTestMode && !isValidDomain && !isAcademicEmail) {
-      toast.error(`Please use a valid email from ${selectedIit?.name} (${expectedDomain})`);
+    if (!isMatchingIitEmail(normalizedEmail, selectedIit, studentStatus as IitMemberStatus)) {
+      const accountType = studentStatus === "alumni" ? "alumni" : "institute";
+      toast.error(`Use your official ${selectedIit.name} ${accountType} email ending in @${expectedDomain}`);
       return;
     }
     setLoading(true);
@@ -200,7 +202,7 @@ const IitVerification = () => {
         return;
       }
       const res = await supabase.functions.invoke("send-verification-email", {
-        body: { email: email.trim().toLowerCase(), iit_name: selectedIit?.name, user_id: user?.id },
+        body: { email: normalizedEmail, iit_name: selectedIit.name, student_status: studentStatus, user_id: user?.id },
       });
       
       const data = res.data as any;
@@ -541,13 +543,13 @@ const IitVerification = () => {
               <h1 className="text-xl font-bold text-foreground">Verify your email</h1>
             </div>
             <p className="text-sm text-muted-foreground mb-6">
-              {emailTestMode ? "Temporary test mode accepts any valid email address." : <>Enter your <span className="text-foreground font-medium">@{getExpectedDomain()}</span> email</>}
+              Enter your official <span className="text-foreground font-medium">@{getExpectedDomain()}</span> email. Other IIT or academic domains will not be accepted.
             </p>
             <Input type="email" placeholder={`yourname@${getExpectedDomain()}`} value={email} onChange={(e) => setEmail(e.target.value)} className="bg-secondary border-border h-12 rounded-xl mb-4" onKeyDown={(e) => e.key === "Enter" && handleSendCode()} />
             <Button size="lg" className="w-full h-12 text-base font-semibold rounded-xl" onClick={handleSendCode} disabled={loading}>
               {loading ? "Verifying..." : emailTestMode ? "Verify & Continue" : "Send Verification Code"}
             </Button>
-            <p className="text-xs text-muted-foreground mt-4 text-center">{emailTestMode ? "Email test mode skips the code step." : "We'll send a 6-digit code to verify your email"}</p>
+            <p className="text-xs text-muted-foreground mt-4 text-center">{emailTestMode ? "Test mode skips the code step, but the official IIT domain is still required." : "We'll send a 6-digit code to verify that you own this email."}</p>
             <div className="flex items-center gap-3 my-6" aria-hidden="true">
               <div className="h-px bg-border flex-1" />
               <span className="text-xs font-medium text-muted-foreground">or</span>

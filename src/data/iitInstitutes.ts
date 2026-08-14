@@ -25,6 +25,15 @@ export const IIT_LIST = [
 ] as const;
 
 export type IitInstitute = (typeof IIT_LIST)[number];
+export type IitMemberStatus = "current_student" | "alumni";
+
+export const expectedIitEmailDomain = (iit: IitInstitute, status: IitMemberStatus) =>
+  status === "alumni" ? iit.alumniDomain : iit.studentDomain;
+
+export const isMatchingIitEmail = (email: string, iit: IitInstitute, status: IitMemberStatus) => {
+  const match = email.trim().toLowerCase().match(/^[^@\s]+@([^@\s]+)$/);
+  return match?.[1] === expectedIitEmailDomain(iit, status);
+};
 
 export const iitLogoSettingKey = (domain: string) => `iit_logo_${domain.replace(/[^a-z0-9]/gi, "_")}`;
 
