@@ -633,7 +633,7 @@ const Admin = () => {
                         <p className="text-sm font-bold text-foreground truncate">{submission.profile?.name || "Unnamed member"}</p>
                         <p className="text-xs text-muted-foreground mt-0.5">{submission.iit_name} · {submission.student_status?.replace("_", " ")}</p>
                       </div>
-                      <span className={`text-[10px] font-bold px-2 py-1 rounded-full capitalize ${submission.status === "approved" ? "bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]" : submission.status === "rejected" ? "bg-destructive/10 text-destructive" : "bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))]"}`}>{submission.status}</span>
+                      <span className={`text-[10px] font-bold px-2 py-1 rounded-full capitalize ${submission.status === "approved" ? "bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]" : submission.status === "rejected" ? "bg-destructive/10 text-destructive" : submission.status === "withdrawn" ? "bg-primary/10 text-primary" : "bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))]"}`}>{submission.status}</span>
                     </div>
                     <div className="rounded-xl bg-secondary/60 p-3 flex items-center gap-3">
                       <FileText className="w-5 h-5 text-primary shrink-0" />
@@ -648,6 +648,8 @@ const Admin = () => {
                           <Button size="sm" variant="destructive" className="h-9 text-xs" onClick={() => reviewDocument(submission, "rejected")} disabled={isReviewing}><XCircle className="w-3.5 h-3.5 mr-1" /> Reject</Button>
                         </div>
                       </>
+                    ) : submission.status === "withdrawn" ? (
+                      <p className="text-xs font-medium text-primary">Withdrawn by the member to try another verification method.</p>
                     ) : submission.review_notes ? <p className="text-xs text-muted-foreground"><span className="font-semibold text-foreground">Review note:</span> {submission.review_notes}</p> : null}
                     <p className="text-[10px] text-muted-foreground">Submitted {new Date(submission.created_at).toLocaleString()}</p>
                   </div>

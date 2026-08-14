@@ -11,7 +11,7 @@ import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle,
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, IIT_LIST, iitLogoSettingKey, type IitInstitute } from "@/data/iitInstitutes";
-import { clearMobileTestSession, isEmailTestMode, MOBILE_TEST_OTP, readMobileTestSession, updateMobileTestSession } from "@/lib/mobileVerification";
+import { clearMobileTestDocumentSubmission, clearMobileTestSession, isEmailTestMode, MOBILE_TEST_OTP, readMobileTestSession, saveMobileTestDocumentSubmission, updateMobileTestSession, withdrawMobileTestDocumentSubmission } from "@/lib/mobileVerification";
 
 const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
   const [failed, setFailed] = useState(false);
@@ -57,8 +57,11 @@ const IitVerification = () => {
   const navigate = useNavigate();
   const { user, profile, refetchProfile } = useAuth();
   const [step, setStep] = useState<Step>(() => readMobileTestSession()?.documentVerificationStatus === "pending" ? "documents_pending" : "select_iit");
-  const [selectedIit, setSelectedIit] = useState<typeof IIT_LIST[0] | null>(null);
-  const [studentStatus, setStudentStatus] = useState<string>("");
+  const [selectedIit, setSelectedIit] = useState<typeof IIT_LIST[0] | null>(() => {
+    const session = readMobileTestSession();
+    return IIT_LIST.find((iit) => iit.name === session?.iitName) || null;
+  });
+  const [studentStatus, setStudentStatus] = useState<string>(() => readMobileTestSession()?.studentStatus || "");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
@@ -84,13 +87,13 @@ const IitVerification = () => {
     queryFn: async () => {
       const { data, error } = await (supabase as any)
         .from("document_verifications")
-        .select("status,iit_name,student_status,review_notes")
+        .select("id,status,iit_name,student_status,review_notes")
         .eq("user_id", user!.id)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
       if (error) throw error;
-      return data as { status: "pending" | "approved" | "rejected"; iit_name: string; student_status: string; review_notes?: string } | null;
+      return data as { id: string; status: "pending" | "approved" | "rejected" | "withdrawn"; iit_name: string; student_status: string; review_notes?: string } | null;
     },
     enabled: !!user && !readMobileTestSession(),
     staleTime: 60_000,
@@ -134,6 +137,7 @@ const IitVerification = () => {
   const completeEmailVerification = async (normalizedEmail: string) => {
     const mobileTestSession = readMobileTestSession();
     if (mobileTestSession) {
+      clearMobileTestDocumentSubmission();
       updateMobileTestSession({
         iitName: selectedIit?.name,
         iitEmail: normalizedEmail,
@@ -312,11 +316,7 @@ const IitVerification = () => {
     try {
       const mobileTestSession = readMobileTestSession();
       if (mobileTestSession) {
-        updateMobileTestSession({
-          iitName: selectedIit.name,
-          studentStatus,
-          documentVerificationStatus: "pending",
-        });
+        saveMobileTestDocumentSubmission(selectedIit.name, studentStatus);
         setStep("documents_pending");
         toast.success("Test submission recorded locally");
         return;
@@ -391,6 +391,33 @@ const IitVerification = () => {
       navigate("/auth", { replace: true });
     } catch (error: any) {
       toast.error(error.message || "Could not sign out. Please try again.");
+      setLoading(false);
+    }
+  };
+
+  const handleTryAnotherWay = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      if (readMobileTestSession()) {
+        withdrawMobileTestDocumentSubmission();
+      } else {
+        if (!latestDocumentSubmission?.id || latestDocumentSubmission.status !== "pending") {
+          throw new Error("No pending verification request was found");
+        }
+        const { error } = await (supabase as any).rpc("withdraw_document_verification", {
+          p_submission_id: latestDocumentSubmission.id,
+        });
+        if (error) throw error;
+        await refetchDocumentSubmission();
+      }
+      setEmail("");
+      setOtp("");
+      setStep("verify_email");
+      toast.success("Document request withdrawn. Choose another verification method.");
+    } catch (error: any) {
+      toast.error(error.message || "Could not withdraw this request");
+    } finally {
       setLoading(false);
     }
   };
@@ -592,6 +619,9 @@ const IitVerification = () => {
                 {loading ? "Signing out..." : "Return to login"}
               </Button>
             </div>
+            <Button variant="link" className="mt-3 text-primary font-semibold" onClick={handleTryAnotherWay} disabled={loading}>
+              Try another verification method
+            </Button>
           </div>
         )}
 
