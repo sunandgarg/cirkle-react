@@ -84,6 +84,9 @@ export type MobileTestSession = {
   isVerified?: boolean;
   onboardingCompleted?: boolean;
   name?: string;
+  degree?: string;
+  specialisation?: string;
+  passingYear?: string;
   documentVerificationStatus?: "pending" | "withdrawn" | "rejected";
   customCourseName?: string;
   courseApprovalStatus?: "pending" | "approved" | "rejected" | "withdrawn";

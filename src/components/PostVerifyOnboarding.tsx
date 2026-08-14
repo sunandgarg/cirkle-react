@@ -215,7 +215,15 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete }: PostVerifyOnboardingPr
     try {
       if (readMobileTestSession()) {
         clearMobileTestCourseRequest();
-        updateMobileTestSession({ name: name.trim(), iitName: iit, isVerified: true, onboardingCompleted: true });
+        updateMobileTestSession({
+          name: name.trim(),
+          iitName: iit,
+          degree,
+          specialisation,
+          passingYear: year,
+          isVerified: true,
+          onboardingCompleted: true,
+        });
         await refetchProfile();
         toast.success("Test profile complete! Welcome to Cirkle 🎉");
         onComplete();

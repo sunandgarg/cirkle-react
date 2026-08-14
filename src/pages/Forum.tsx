@@ -28,14 +28,10 @@ import FileAttachment from "@/components/forum/FileAttachment";
 import ThreadPanel from "@/components/forum/ThreadPanel";
 import { getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead, setChannelUnread } from "@/hooks/useForumCache";
 import { useScrollBehavior } from "@/hooks/useScrollBehavior";
+import { buildForumScopes, type ForumScope as ScopeDef } from "@/lib/forumScopes";
+import { readMobileTestSession } from "@/lib/mobileVerification";
 
 /* ─── Types ─── */
-interface ScopeDef {
-  id: string; type: string; key: string; label: string;
-  subtitle?: string; emoji: string; section: "recommended" | "all" | "saved";
-  hasToggle?: boolean;
-  toggleOptions?: { id: string; type: string; key: string; label: string; scopeLabel?: string; subtitle?: string }[];
-}
 interface SavedView {
   id: string; user_id: string; name: string; scope_type: string;
   scope_key: string; filters_json: any; sort: string; pinned: boolean; created_at: string;
@@ -74,68 +70,6 @@ const getDateLabel = (dateStr: string): string => {
   if (isToday(date)) return "Today";
   if (isYesterday(date)) return "Yesterday";
   return format(date, "MMMM d, yyyy");
-};
-
-/* ─── Build scopes from profile ─── */
-const buildScopes = (profile: any, education: any): ScopeDef[] => {
-  const iit = profile?.iit_name || education?.institution || "";
-  const degree = education?.degree || "";
-  const branch = education?.branch_area || "";
-  const batch = education?.passing_year || "";
-  const iitCode = iit.replace(/\s+/g, "_").toUpperCase();
-  const scopes: ScopeDef[] = [];
-
-  scopes.push({ id: "global", type: "GLOBAL", key: "IIT_ALL", label: "Multiverse", subtitle: "All 23 IITs · Everyone", emoji: "🌐", section: "all" });
-
-  if (iit) {
-    scopes.push({ id: "campus", type: "CAMPUS", key: iitCode, label: "My Campus", subtitle: `${iit} · All batches`, emoji: "🏛️", section: "recommended" });
-  }
-
-  if (degree && branch) {
-    const courseCode = `${degree.replace(/\s+/g, "_")}_${branch.replace(/\s+/g, "_")}`.toUpperCase();
-    scopes.push({
-      id: "course", type: iit ? "COURSE_CAMPUS" : "COURSE_GLOBAL", key: iit ? `${iitCode}|${courseCode}` : courseCode,
-      label: "My Course", subtitle: `${degree} · ${branch}`, emoji: "📖", section: "recommended",
-      hasToggle: !!iit,
-      toggleOptions: iit ? [
-        { id: "course-campus", type: "COURSE_CAMPUS", key: `${iitCode}|${courseCode}`, label: "Campus" },
-        { id: "course-global", type: "COURSE_GLOBAL", key: courseCode, label: "Global" },
-      ] : undefined,
-    });
-  }
-
-  if (batch) {
-    scopes.push({
-      id: "batch", type: iit ? "BATCH_CAMPUS" : "BATCH_GLOBAL", key: iit ? `${iitCode}|${batch}` : batch,
-      label: "My Batch", subtitle: `Batch ${batch}`, emoji: "🎓", section: "recommended",
-      hasToggle: !!iit,
-      toggleOptions: iit ? [
-        { id: "batch-campus", type: "BATCH_CAMPUS", key: `${iitCode}|${batch}`, label: "Campus" },
-        { id: "batch-global", type: "BATCH_GLOBAL", key: batch, label: "Global" },
-      ] : undefined,
-    });
-  }
-
-  if (degree && branch && batch) {
-    const cohortGlobalKey = `${degree.replace(/\s+/g, "_")}|${branch.replace(/\s+/g, "_")}|${batch}`.toUpperCase();
-    if (iit) {
-      const cohortKey = `${iitCode}|${cohortGlobalKey}`;
-      scopes.push({
-        id: "cohort", type: "COHORT", key: cohortKey,
-        label: "My Cohort", subtitle: `${iit} · ${degree} · ${branch} · ${batch}`, emoji: "👥", section: "recommended",
-        hasToggle: true,
-        toggleOptions: [
-          { id: "cohort-campus", type: "COHORT", key: cohortKey, label: "Campus", scopeLabel: "My Cohort", subtitle: `${iit} · ${degree} · ${branch} · ${batch}` },
-          { id: "cohort-global", type: "COHORT_GLOBAL", key: cohortGlobalKey, label: "All IITs", scopeLabel: `All IITs · ${degree} · ${branch} · ${batch}`, subtitle: `Every IIT · ${degree} · ${branch} · ${batch}` },
-        ],
-      });
-    } else {
-      scopes.push({ id: "cohort", type: "COHORT_GLOBAL", key: cohortGlobalKey, label: "My Cohort · All IITs", subtitle: `${degree} · ${branch} · ${batch} · All IITs`, emoji: "👥", section: "recommended" });
-    }
-  }
-
-
-  return scopes;
 };
 
 /* ─── Build query for a scope ─── */
@@ -483,6 +417,15 @@ const Forum = () => {
     queryKey: ["primary-education", user?.id],
     queryFn: async () => {
       if (!user?.id) return null;
+      const testSession = readMobileTestSession();
+      if (testSession?.degree && testSession.specialisation && testSession.passingYear) {
+        return {
+          institution: testSession.iitName || profile?.iit_name || "",
+          degree: testSession.degree,
+          branch_area: testSession.specialisation,
+          passing_year: testSession.passingYear,
+        };
+      }
       if ((profile as any)?.primary_education_id) {
         const { data } = await supabase.from("education").select("*").eq("id", (profile as any).primary_education_id).maybeSingle();
         return data;
@@ -494,7 +437,7 @@ const Forum = () => {
     staleTime: Infinity,
   });
 
-  const scopes = useMemo(() => buildScopes(profile, primaryEducation), [profile, primaryEducation]);
+  const scopes = useMemo(() => buildForumScopes(profile, primaryEducation), [profile, primaryEducation]);
 
   const { data: savedViews = [] } = useQuery({
     queryKey: ["saved-views", user?.id],
