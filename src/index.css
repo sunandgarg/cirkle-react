@@ -185,6 +185,13 @@
       radial-gradient(circle at 7px 31px, hsl(210 18% 80% / 0.035) 1px, transparent 1.2px);
   }
 
+  /* Skip layout/paint work for messages well outside the viewport. The
+     intrinsic fallback prevents scroll jumps while long channels hydrate. */
+  .forum-message-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 76px;
+  }
+
   .story-ring {
     background: conic-gradient(
       hsl(var(--story-ring)),
@@ -302,6 +309,59 @@
   }
   .bg-iit-gold {
     background-color: hsl(var(--iit-gold));
+  }
+}
+
+@layer components {
+  /* One resilient mobile shell for login, verification and onboarding. It
+     keeps controls inside the visual viewport when the iOS keyboard opens. */
+  .onboarding-shell {
+    @apply relative flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background text-foreground;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background-image:
+      radial-gradient(circle at 12% -8%, hsl(var(--primary) / 0.14), transparent 35%),
+      radial-gradient(circle at 96% 18%, hsl(152 60% 48% / 0.07), transparent 28%);
+  }
+
+  .onboarding-topbar {
+    @apply relative z-20 flex min-h-14 flex-shrink-0 items-center gap-3 border-b border-border/60 bg-background/80 px-4 backdrop-blur-xl;
+  }
+
+  .onboarding-scroll {
+    @apply min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain px-4 pb-8 pt-4;
+    -webkit-overflow-scrolling: touch;
+    scroll-padding-bottom: 7rem;
+  }
+
+  .onboarding-stage {
+    @apply mx-auto w-full max-w-xl rounded-[28px] border border-white/60 bg-card/90 p-5 shadow-[0_20px_70px_-38px_hsl(var(--foreground)/0.38)] backdrop-blur-xl sm:p-7;
+  }
+
+  .dark .onboarding-stage {
+    @apply border-border/80 bg-card/90;
+  }
+
+  .onboarding-footer {
+    @apply relative z-20 flex-shrink-0 border-t border-border/60 bg-background/[0.88] px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl;
+  }
+
+  .onboarding-option {
+    @apply min-h-12 rounded-2xl border border-border bg-card px-4 py-3 text-left font-semibold text-foreground shadow-sm transition-[transform,border-color,background-color,box-shadow] duration-150 active:scale-[0.985] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2;
+  }
+
+  .onboarding-option:hover {
+    @apply border-primary/40 bg-primary/[0.035] shadow-md;
+  }
+
+  .onboarding-option-selected {
+    @apply border-primary bg-primary/10 text-primary shadow-[0_10px_28px_-18px_hsl(var(--primary))];
+  }
+
+  @media (max-height: 720px) {
+    .onboarding-scroll { @apply pt-2; }
+    .onboarding-stage { @apply rounded-3xl p-4; }
+    .onboarding-topbar { @apply min-h-12; }
   }
 }
 

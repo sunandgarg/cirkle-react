@@ -64,6 +64,34 @@ describe("mobile test document verification lifecycle", () => {
     expect(hasMobileTestAcademicProfile(readMobileTestSession())).toBe(true);
   });
 
+  it("does not ask a verified test member to verify or onboard again on the next login", () => {
+    startMobileTestSession("+91", "9999999999");
+    updateMobileTestSession({
+      name: "Returning Member",
+      iitName: "IIT Delhi",
+      iitEmail: "returning@iitd.ac.in",
+      studentStatus: "current_student",
+      degree: "BTech",
+      specialisation: "General",
+      passingYear: "2026",
+      isVerified: true,
+      onboardingCompleted: true,
+    });
+
+    clearMobileTestSession();
+    startMobileTestSession("+91", "9999999999");
+
+    expect(readMobileTestSession()).toMatchObject({
+      name: "Returning Member",
+      iitName: "IIT Delhi",
+      isVerified: true,
+      onboardingCompleted: true,
+      degree: "BTech",
+      specialisation: "General",
+      passingYear: "2026",
+    });
+  });
+
   it("marks legacy test sessions without academic details as incomplete", () => {
     startMobileTestSession("+91", "9999999999");
     updateMobileTestSession({ onboardingCompleted: true, iitName: "IIT Delhi" });

@@ -305,7 +305,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = 200;
-const FORUM_BUILD = "2026.08.14.11";
+const FORUM_BUILD = "2026.08.14.12";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -1493,14 +1493,15 @@ const Forum = () => {
 
       {/* ═══ MAIN CHAT AREA ═══ */}
       <div className="flex-1 flex flex-col min-w-0 relative overflow-x-hidden">
-        {/* ── Header (48px) with scroll hide ── */}
-        <div className={`h-14 flex items-center gap-2.5 px-3 border-b border-border/70 bg-card/95 backdrop-blur-xl flex-shrink-0 z-10 shadow-sm transition-transform duration-200 ease-in-out ${showHeader ? 'translate-y-0' : '-translate-y-full'}`}>
-          <button onClick={() => setSidebarOpen(true)} className="lg:hidden w-9 h-9 flex items-center justify-center rounded-lg hover:bg-accent active:scale-95 transition-all" aria-label="Open menu">
-            <img src="/cirkle-logo.png" alt="Cirkle" className="w-7 h-7 rounded-md" />
+        {/* ── Compact, touch-safe group header ── */}
+        <div className={`h-16 flex items-center gap-2.5 px-2.5 sm:px-3 border-b border-border/55 bg-card/[0.88] backdrop-blur-2xl flex-shrink-0 z-10 shadow-[0_8px_28px_-22px_hsl(var(--foreground)/0.55)] transition-transform duration-200 ease-in-out ${showHeader ? 'translate-y-0' : '-translate-y-full'}`}>
+          <button onClick={() => setSidebarOpen(true)} className="lg:hidden w-11 h-11 flex items-center justify-center rounded-2xl hover:bg-accent active:scale-95 transition-all" aria-label="Open channels">
+            <img src="/cirkle-logo.png" alt="Cirkle" className="w-8 h-8 rounded-xl shadow-sm" />
           </button>
 
-          <div className="w-9 h-9 rounded-full bg-[hsl(152,68%,32%)]/12 text-[hsl(152,68%,32%)] flex items-center justify-center flex-shrink-0">
+          <div className="relative w-10 h-10 rounded-2xl bg-gradient-to-br from-primary/20 to-[hsl(152,68%,42%)]/10 text-primary flex items-center justify-center flex-shrink-0 shadow-sm ring-1 ring-primary/10">
             <Users className="w-5 h-5" />
+            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-[hsl(142,68%,42%)] border-2 border-card" aria-label="Community active" />
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[14px] sm:text-[15px] font-bold text-foreground truncate leading-tight">{(activeScopeDef as any)?.label}</p>
@@ -1518,7 +1519,8 @@ const Forum = () => {
           <div className="flex items-center gap-0 flex-shrink-0">
             {isAdmin && (
               <button
-                className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${slowModeEnabled ? "text-warning bg-warning/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}
+                className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${slowModeEnabled ? "text-warning bg-warning/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}
+                aria-label={slowModeEnabled ? "Disable slow mode" : "Enable slow mode"}
                 onClick={async () => {
                   const scopeKey = `slow_mode_${activeScope.type}_${activeScope.key}`;
                   const newEnabled = !slowModeEnabled;
@@ -1546,13 +1548,13 @@ const Forum = () => {
               </div>
             ) : (
               <>
-                <button onClick={() => setSavingView(true)} className="w-9 h-9 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent" title="Save view">
+                <button onClick={() => setSavingView(true)} className="w-11 h-11 flex items-center justify-center rounded-2xl text-muted-foreground hover:text-foreground hover:bg-accent" title="Save view" aria-label="Save this channel view">
                   <BookmarkPlus className="w-4 h-4" />
                 </button>
-                <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); setSearchTab("messages"); setSearchFilter(null); setShowSearchFilters(false); }} className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${showSearch ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}>
+                <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); setSearchTab("messages"); setSearchFilter(null); setShowSearchFilters(false); }} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${showSearch ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="Search messages">
                   <Search className="w-4 h-4" />
                 </button>
-                <button onClick={() => setMemberPanelOpen(!memberPanelOpen)} className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${memberPanelOpen ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}>
+                <button onClick={() => setMemberPanelOpen(!memberPanelOpen)} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${memberPanelOpen ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="View channel members">
                   <Users className="w-4 h-4" />
                 </button>
               </>
@@ -1644,7 +1646,7 @@ const Forum = () => {
           onPointerDown={dismissComposerOverlays}
           className="forum-chat-wallpaper flex-1 overflow-y-auto overflow-x-hidden min-h-0 overscroll-y-contain"
         >
-          <div className="px-0 w-full">
+          <div className="mx-auto w-full max-w-5xl px-0">
             {/* Pagination: Beginning marker or spinner */}
             {!hasMoreOlder && posts && posts.length > 0 && (
               <div className="flex items-center justify-center py-6">
@@ -1741,7 +1743,7 @@ const Forum = () => {
 
         {/* ── Ultra-smooth Composer (FIX 2) ── */}
         {canPost && !editingPost && (
-          <div className={`z-20 backdrop-blur-xl bg-card/95 border-t border-border/60 px-2.5 sm:px-3 py-2 flex-shrink-0 safe-bottom transition-[transform,opacity] duration-200 ease-out ${showInput ? 'relative translate-y-0 opacity-100' : 'absolute translate-y-full opacity-0 bottom-0 left-0 right-0 pointer-events-none'}`}>
+          <div className={`z-20 backdrop-blur-2xl bg-card/[0.9] border-t border-border/55 px-2 sm:px-3 py-2 flex-shrink-0 safe-bottom shadow-[0_-12px_40px_-32px_hsl(var(--foreground)/0.6)] transition-[transform,opacity] duration-200 ease-out ${showInput ? 'relative translate-y-0 opacity-100' : 'absolute translate-y-full opacity-0 bottom-0 left-0 right-0 pointer-events-none'}`}>
             {/* Reply preview */}
             {replyTo && (
               <div className="flex items-center bg-accent/80 rounded-t-lg mb-1 overflow-hidden animate-fade-in">
@@ -1879,7 +1881,7 @@ const Forum = () => {
                 <button onClick={() => { setShowAttachMenu(!showAttachMenu); setShowGifPicker(false); setShowEmojiPicker(false); setShowFormatBar(false); dismissKeyboard(); }}
                   type="button"
                   aria-label={showAttachMenu ? "Close attachments" : "Open attachments"}
-                  className={`w-10 h-10 flex items-center justify-center rounded-full flex-shrink-0 transition-all ${showAttachMenu ? "text-primary bg-primary/10 rotate-45" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}>
+                  className={`w-11 h-11 flex items-center justify-center rounded-full flex-shrink-0 transition-all active:scale-95 ${showAttachMenu ? "text-primary bg-primary/10 rotate-45" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}>
                   <Plus className="w-5 h-5" />
                 </button>
 
@@ -1895,7 +1897,7 @@ const Forum = () => {
                     placeholder={`Message #${(activeScopeDef as any)?.label || "channel"}`}
                     rows={1}
                     style={{ transition: 'height 100ms ease' }}
-                    className="w-full min-h-[42px] max-h-[104px] bg-accent border-0 rounded-[22px] text-[16px] resize-none py-2.5 px-4 pr-24 focus:outline-none focus:ring-0 placeholder:text-muted-foreground/60"
+                    className="w-full min-h-[44px] max-h-[104px] bg-secondary/80 border border-border/45 rounded-[24px] text-[16px] resize-none py-2.5 px-4 pr-24 shadow-inner focus:outline-none focus:border-primary/25 focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground/60"
                   />
                   <div className="absolute right-1 bottom-1 flex items-center gap-0">
                     <button
@@ -1962,7 +1964,7 @@ const Forum = () => {
                     aria-label="Send message"
                     onClick={() => createPost.mutate()}
                     disabled={createPost.isPending || (slowModeEnabled && slowModeCooldown > 0 && !isAdmin)}
-                    className="w-10 h-10 flex items-center justify-center rounded-full bg-primary text-primary-foreground flex-shrink-0 active:scale-95 transition-all duration-150 disabled:opacity-50"
+                    className="w-11 h-11 flex items-center justify-center rounded-full bg-primary text-primary-foreground flex-shrink-0 shadow-[0_8px_22px_-10px_hsl(var(--primary))] active:scale-95 transition-all duration-150 disabled:opacity-50"
                   >
                     {slowModeCooldown > 0 && slowModeEnabled && !isAdmin
                       ? <span className="text-[10px] font-bold tabular-nums">{slowModeCooldown}</span>
@@ -2232,10 +2234,8 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, onReply, onRea
         )}
         {Object.entries(groupedByDate).map(([dateKey, datePosts]) => (
           <div key={dateKey}>
-            <div className="flex items-center px-4 my-4">
-              <div className="flex-1 h-px bg-border" />
-              <span className="text-[11px] font-semibold text-muted-foreground bg-background px-3 py-0.5 rounded-full border border-border">{dateKey}</span>
-              <div className="flex-1 h-px bg-border" />
+            <div className="sticky top-2 z-[2] my-3 flex justify-center px-4 pointer-events-none">
+              <span className="rounded-full border border-white/60 bg-card/80 px-3 py-1 text-[11px] font-semibold text-muted-foreground shadow-sm backdrop-blur-xl dark:border-border/70">{dateKey}</span>
             </div>
             {datePosts.map((post: any, idx: number) => {
               const prevPost = idx > 0 ? datePosts[idx - 1] : null;
@@ -2385,7 +2385,7 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
   return (
     <div
       ref={(el) => { messageRefs.current[post.id] = el; messageRef.current = el; }}
-      className={`relative transition-colors duration-300 ${isHighlighted ? 'bg-primary/5' : ''} ${isGrouped ? '' : 'mt-[2px]'}`}
+      className={`forum-message-row relative transition-colors duration-300 ${isHighlighted ? 'bg-primary/5' : ''} ${isGrouped ? '' : 'mt-[2px]'}`}
       style={{ transform: `translateX(${swipeOffset}px)`, transition: swipeOffset === 0 ? 'transform 0.18s ease-out' : 'none', touchAction: 'pan-y pinch-zoom', WebkitTouchCallout: 'none' } as React.CSSProperties}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -2447,10 +2447,10 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
         </div>}
 
         {/* Compact group-chat bubble */}
-        <div className={`relative min-w-0 max-w-[84%] sm:max-w-[min(72%,44rem)] px-3 py-1.5 shadow-sm border border-border/35 ${
+        <div className={`relative min-w-0 max-w-[84%] sm:max-w-[min(72%,44rem)] px-3.5 py-2 shadow-[0_3px_14px_-9px_hsl(var(--foreground)/0.55)] border border-border/30 backdrop-blur-sm ${
           isMine
-            ? "bg-[hsl(142,52%,89%)] dark:bg-[hsl(152,55%,20%)] rounded-2xl rounded-br-[5px]"
-            : "bg-card rounded-2xl rounded-bl-[5px]"
+            ? "bg-gradient-to-br from-[hsl(142,54%,91%)] to-[hsl(142,48%,87%)] dark:from-[hsl(152,50%,22%)] dark:to-[hsl(152,48%,18%)] rounded-2xl rounded-br-[5px]"
+            : "bg-card/95 rounded-2xl rounded-bl-[5px]"
         }`}>
           {!isGrouped && !isMine && (
             <div className="flex items-baseline gap-1.5 mb-0.5">

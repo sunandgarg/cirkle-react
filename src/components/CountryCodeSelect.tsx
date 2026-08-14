@@ -52,6 +52,7 @@ const CountryCodeSelect = ({ value, onChange }: Props) => {
     <>
       <button
         type="button"
+        aria-label={`Country code ${value.code}`}
         onClick={() => setOpen(true)}
         className="h-12 px-3 rounded-xl bg-secondary border border-border flex items-center gap-1.5 flex-shrink-0 hover:bg-accent transition-colors"
       >
@@ -61,15 +62,15 @@ const CountryCodeSelect = ({ value, onChange }: Props) => {
       </button>
 
       <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setShowCustom(false); }}>
-        <DialogContent className="max-w-sm max-h-[70vh]">
+        <DialogContent className="max-h-[min(82dvh,680px)] w-[calc(100%_-_1.5rem)] max-w-sm overflow-hidden rounded-[24px] p-4 sm:p-6">
           <DialogHeader><DialogTitle>Select Country</DialogTitle></DialogHeader>
-          <div className="space-y-1 overflow-y-auto max-h-[45vh]">
+          <div className="max-h-[50dvh] space-y-1 overflow-y-auto overscroll-contain pr-1">
             {COUNTRY_CODES.map((c) => (
               <button
                 key={c.code}
                 type="button"
                 onClick={() => { onChange(c); setOpen(false); }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors ${
+                className={`flex min-h-12 w-full items-center gap-3 rounded-xl px-3 py-2.5 transition-colors ${
                   value.code === c.code ? "bg-primary/10" : "hover:bg-muted/50"
                 }`}
               >

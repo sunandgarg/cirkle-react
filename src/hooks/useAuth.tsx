@@ -101,6 +101,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // Network error - keep existing user state, don't sign out
       console.warn("Failed to load user data, keeping session:", err);
       setUser(u);
+    } finally {
+      setLoading(false);
+      initializedRef.current = true;
     }
   }, []);
 
@@ -119,14 +122,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
 
       if (session?.user) {
-        // Render the authenticated shell and cached profile immediately.
+        // A verified cached profile may render immediately. New/unverified
+        // sessions wait for the authoritative profile to avoid briefly sending
+        // returning members back through verification.
         setUser(session.user);
         const cachedProfile = readCachedProfile(session.user.id);
         if (cachedProfile) setProfile(cachedProfile);
-        if (!initializedRef.current) {
-          setLoading(false);
-          initializedRef.current = true;
-        }
+        setLoading(!cachedProfile?.is_verified);
         // Use setTimeout to avoid Supabase deadlock
         setTimeout(async () => {
           await loadUserData(session.user);

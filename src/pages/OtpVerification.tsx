@@ -131,41 +131,47 @@ const OtpVerification = () => {
   };
 
   return (
-    <div className="min-h-[100dvh] bg-background flex flex-col" style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
-      <div className="px-5 pt-5 pb-2">
-        <button aria-label="Change mobile number" onClick={() => navigate("/auth")} className="w-11 h-11 -ml-2 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+    <div className="onboarding-shell">
+      <header className="onboarding-topbar">
+        <button aria-label="Change mobile number" onClick={() => navigate("/auth")} className="flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
           <ArrowLeft className="w-6 h-6" />
         </button>
-      </div>
-      <main className="flex-1 flex flex-col items-center px-5 pt-[7vh] pb-8">
-        <div className="relative w-20 h-20 rounded-3xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-6 shadow-sm">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-foreground">Secure verification</p>
+          <p className="text-[11px] text-muted-foreground">Step 2 of 2 · mobile</p>
+        </div>
+        <ShieldCheck className="h-5 w-5 text-primary" />
+      </header>
+      <main className="onboarding-scroll flex items-center">
+        <section className="onboarding-stage text-center" aria-labelledby="otp-title">
+        <div className="relative mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-[26px] border border-primary/20 bg-gradient-to-br from-primary/15 to-primary/5 shadow-[0_18px_45px_-24px_hsl(var(--primary))]">
           <ShieldCheck className="w-9 h-9 text-primary" />
           <span className="absolute -right-1 -bottom-1 w-7 h-7 rounded-full bg-primary text-primary-foreground border-4 border-background flex items-center justify-center">
             <Check className="w-3.5 h-3.5" strokeWidth={3} />
           </span>
         </div>
-        <h1 className="text-[28px] leading-tight font-bold tracking-tight text-foreground text-center">Enter your code</h1>
+        <h1 id="otp-title" className="text-[28px] leading-tight font-black tracking-tight text-foreground">Enter your code</h1>
         <p className="text-sm leading-6 text-muted-foreground mt-2 text-center max-w-sm">
           We sent a 6-digit verification code to<br />
           <span className="text-foreground font-semibold">{countryCode} {maskedPhone}</span>
           <button onClick={() => navigate("/auth")} className="ml-2 text-primary font-semibold hover:underline">Change</button>
         </p>
         {isTestMode && (
-          <button onClick={() => setOtp(MOBILE_TEST_OTP)} className="mt-6 w-full max-w-sm bg-primary/10 border border-primary/20 rounded-2xl px-4 py-3.5 text-center hover:bg-primary/15 active:scale-[0.99] transition-all">
+          <button onClick={() => setOtp(MOBILE_TEST_OTP)} className="mt-5 w-full max-w-sm rounded-2xl border border-primary/20 bg-primary/[0.07] px-4 py-3 text-center transition-all hover:bg-primary/15 active:scale-[0.99]">
             <span className="block text-[11px] uppercase tracking-[0.14em] text-primary font-bold">Test mode · tap to use code</span>
             <span className="block text-xl font-mono font-bold text-foreground tracking-[0.35em] mt-1 pl-[0.35em]">{MOBILE_TEST_OTP}</span>
           </button>
         )}
-        <div className="mt-7 w-full flex justify-center">
+        <div className="mt-6 flex w-full justify-center overflow-hidden">
           <InputOTP autoFocus maxLength={6} value={otp} onChange={setOtp}>
-            <InputOTPGroup className="gap-1.5 sm:gap-3">
+            <InputOTPGroup className="gap-1 sm:gap-3">
               {[0, 1, 2, 3, 4, 5].map((index) => (
-                <InputOTPSlot key={index} index={index} className="w-10 sm:w-12 h-14 text-xl font-bold text-foreground bg-secondary border-border rounded-xl first:rounded-xl last:rounded-xl" />
+                <InputOTPSlot key={index} index={index} className="h-[52px] w-10 rounded-xl border-border bg-secondary text-xl font-bold text-foreground first:rounded-xl last:rounded-xl sm:h-14 sm:w-12" />
               ))}
             </InputOTPGroup>
           </InputOTP>
         </div>
-        <Button size="lg" className="w-full max-w-sm h-12 text-base font-semibold rounded-xl mt-7 shadow-sm" onClick={handleVerify} disabled={loading || otp.length !== 6}>
+        <Button size="lg" className="mt-6 h-12 w-full max-w-sm rounded-xl text-base font-bold shadow-[0_14px_30px_-16px_hsl(var(--primary))]" onClick={handleVerify} disabled={loading || otp.length !== 6}>
           {loading ? "Checking code..." : "Verify and continue"}
         </Button>
         <div className="h-10 mt-4 flex items-center justify-center text-sm">
@@ -177,7 +183,8 @@ const OtpVerification = () => {
             </button>
           )}
         </div>
-        <p className="mt-auto pt-8 text-xs text-muted-foreground text-center max-w-xs">Your code is private. Cirkle will never ask you to share it.</p>
+        <p className="mx-auto mt-5 max-w-xs text-center text-xs text-muted-foreground">Your code is private. Cirkle will never ask you to share it.</p>
+        </section>
       </main>
     </div>
   );

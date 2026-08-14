@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { ChevronDown, Check, Search } from "lucide-react";
@@ -18,18 +18,12 @@ const SearchableSelect = ({ options, value, onChange, placeholder = "Select...",
   const [search, setSearch] = useState("");
   const [isOther, setIsOther] = useState(false);
   const [otherValue, setOtherValue] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const filtered = search
     ? options.filter(o => o.toLowerCase().includes(search.toLowerCase()))
     : options;
 
-  useEffect(() => {
-    if (open) {
-      setSearch("");
-      setTimeout(() => inputRef.current?.focus(), 100);
-    }
-  }, [open]);
+  useEffect(() => { if (open) setSearch(""); }, [open]);
 
   // Check if current value is a custom "other" value
   useEffect(() => {
@@ -76,7 +70,7 @@ const SearchableSelect = ({ options, value, onChange, placeholder = "Select...",
         <button
           type="button"
           className={cn(
-            "flex h-10 w-full items-center justify-between rounded-md border border-input bg-secondary px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+            "flex h-12 w-full items-center justify-between rounded-xl border border-input bg-secondary px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
             !value && "text-muted-foreground",
             className
           )}
@@ -85,16 +79,15 @@ const SearchableSelect = ({ options, value, onChange, placeholder = "Select...",
           <ChevronDown className="w-4 h-4 opacity-50 flex-shrink-0" />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 z-[100]" align="start" sideOffset={4}>
+      <PopoverContent className="z-[100] w-[min(var(--radix-popover-trigger-width),calc(100vw-24px))] overflow-hidden rounded-2xl border-border p-0 shadow-2xl" align="start" sideOffset={6} collisionPadding={12}>
         <div className="p-2 border-b border-border">
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
             <Input
-              ref={inputRef}
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search..."
-              className="pl-8 h-9 text-sm bg-background border-border"
+              className="h-11 rounded-xl border-border bg-background pl-8 text-[16px]"
             />
           </div>
         </div>
@@ -108,7 +101,7 @@ const SearchableSelect = ({ options, value, onChange, placeholder = "Select...",
               type="button"
               onClick={() => handleSelect(opt)}
               className={cn(
-                "flex items-center gap-2 w-full text-left text-sm px-3 py-2 rounded-md hover:bg-accent transition-colors",
+                "flex min-h-11 w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors hover:bg-accent",
                 value === opt && "bg-accent font-medium"
               )}
             >
@@ -120,7 +113,7 @@ const SearchableSelect = ({ options, value, onChange, placeholder = "Select...",
             <button
               type="button"
               onClick={handleOther}
-              className="flex items-center gap-2 w-full text-left text-sm px-3 py-2 rounded-md hover:bg-accent transition-colors text-primary font-medium border-t border-border mt-1 pt-2"
+              className="mt-1 flex min-h-11 w-full items-center gap-2 border-t border-border px-3 py-2 pt-2 text-left text-sm font-medium text-primary transition-colors hover:bg-accent"
             >
               <span className="pl-5">+ Other (custom)</span>
             </button>

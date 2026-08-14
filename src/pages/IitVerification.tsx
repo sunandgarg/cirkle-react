@@ -438,12 +438,13 @@ const IitVerification = () => {
     );
   }
 
-  const stepIndex = step === "select_iit" ? 0 : step === "select_status" ? 1 : 2;
+  const stepIndex = step === "select_iit" ? 0 : step === "select_status" ? 1 : step === "verify_email" ? 2 : 3;
 
   return (
-    <div className="h-[100dvh] min-h-0 bg-background flex flex-col overflow-hidden" style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
-      <div className="px-4 pt-6 pb-4 flex items-center gap-3">
+    <div className="onboarding-shell">
+      <header className="onboarding-topbar">
         <button
+          aria-label="Go back"
           onClick={() => {
             if (step === "documents_pending") void handleReturnToLogin();
             else if (step === "upload_documents" || step === "verify_otp") setStep("verify_email");
@@ -451,34 +452,39 @@ const IitVerification = () => {
             else if (step === "select_status") setStep("select_iit");
             else navigate(-1);
           }}
-          className="text-muted-foreground hover:text-foreground transition-colors"
+          className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
-        <div className="flex gap-1.5 flex-1">
+        <div className="min-w-0 flex-1">
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <p className="truncate text-xs font-bold text-foreground">Verify your IIT identity</p>
+            <span className="text-[10px] font-semibold text-muted-foreground">{Math.min(stepIndex + 1, 4)} of 4</span>
+          </div>
+          <div className="flex gap-1.5" aria-label={`Verification step ${Math.min(stepIndex + 1, 4)} of 4`}>
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className={`h-1 flex-1 rounded-full transition-all duration-300 ${stepIndex >= i ? "bg-primary" : "bg-border"}`} />
+            <div key={i} className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${stepIndex >= i ? "bg-primary shadow-[0_3px_10px_-4px_hsl(var(--primary))]" : "bg-border"}`} />
           ))}
+          </div>
         </div>
-      </div>
+      </header>
 
-      <div className="flex-1 min-h-0 px-4 pb-8 overflow-y-auto overscroll-y-contain touch-pan-y" style={{ WebkitOverflowScrolling: "touch" }}>
+      <div className="onboarding-scroll touch-pan-y">
         {step === "select_iit" && (
-          <div className="animate-fade-in max-w-2xl mx-auto">
+          <div className="onboarding-stage animate-fade-in !max-w-2xl">
             <div className="flex items-center gap-3 mb-2">
               <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center">
                 <GraduationCap className="w-6 h-6 text-primary" />
               </div>
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">Step 1 of 4</p>
-                <h1 className="text-2xl font-bold tracking-tight text-foreground">Which IIT are you from?</h1>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">Personalize your community</p>
+                <h1 className="text-2xl font-black tracking-tight text-foreground">Which IIT are you from?</h1>
               </div>
             </div>
             <p className="text-sm text-muted-foreground mb-5 ml-[60px]">Select your institute to personalize your Cirkle community.</p>
             <div className="relative mb-5">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
               <Input
-                autoFocus
                 aria-label="Search all IITs"
                 placeholder="Search all 23 IITs"
                 value={searchQuery}
@@ -493,7 +499,7 @@ const IitVerification = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pb-4">
               {filteredIits.map((iit) => (
                 <button key={iit.studentDomain} onClick={() => handleSelectIit(iit)}
-                  className="group min-h-[68px] px-4 py-2.5 rounded-2xl bg-card border border-border hover:border-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary transition-all text-left press-scale flex items-center gap-3">
+                  className="onboarding-option group flex min-h-[68px] items-center gap-3 px-4 py-2.5">
                   <IitLogo iit={iit} customUrl={iitLogos[iitLogoSettingKey(iit.studentDomain)]} />
                   <span className="text-sm leading-5 text-foreground font-semibold group-hover:text-primary transition-colors">{iit.name}</span>
                 </button>
@@ -509,19 +515,19 @@ const IitVerification = () => {
         )}
 
         {step === "select_status" && (
-          <div className="animate-fade-in max-w-lg mx-auto">
+          <div className="onboarding-stage animate-fade-in">
             <div className="flex items-center gap-2 mb-2">
               <CheckCircle2 className="w-4 h-4 text-primary" />
               <span className="text-sm text-primary font-medium">{selectedIit?.name}</span>
             </div>
-            <h1 className="text-xl font-bold text-foreground mb-2 mt-4">Student or Alumni?</h1>
-            <p className="text-sm text-muted-foreground mb-8">This helps personalize your experience</p>
+            <h1 className="text-2xl font-black tracking-tight text-foreground mb-2 mt-4">How are you connected?</h1>
+            <p className="text-sm leading-6 text-muted-foreground mb-6">We’ll use this only to show the right current-student or alumni spaces.</p>
             <div className="space-y-3">
               {[
                 { value: "current_student", label: "🎓 Current Student", desc: `I'm currently studying at ${selectedIit?.name}` },
                 { value: "alumni", label: "🏛️ Alumni", desc: `I graduated from ${selectedIit?.name}` },
               ].map(s => (
-                <button key={s.value} onClick={() => handleSelectStatus(s.value)} className="w-full p-5 rounded-2xl bg-card border border-border hover:border-primary hover:bg-primary/5 transition-all text-left press-scale">
+                <button key={s.value} onClick={() => handleSelectStatus(s.value)} className="onboarding-option w-full p-5">
                   <p className="text-base font-bold text-foreground">{s.label}</p>
                   <p className="text-sm text-muted-foreground mt-1">{s.desc}</p>
                 </button>
@@ -531,7 +537,7 @@ const IitVerification = () => {
         )}
 
         {step === "verify_email" && (
-          <div className="animate-fade-in max-w-lg mx-auto">
+          <div className="onboarding-stage animate-fade-in">
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">{selectedIit?.name}</span>
               <span className="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded-full capitalize">{studentStatus?.replace("_", " ")}</span>
@@ -540,7 +546,7 @@ const IitVerification = () => {
               <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
                 <Mail className="w-6 h-6 text-primary" />
               </div>
-              <h1 className="text-xl font-bold text-foreground">Verify your email</h1>
+              <h1 className="text-2xl font-black tracking-tight text-foreground">Verify your email</h1>
             </div>
             <p className="text-sm text-muted-foreground mb-6">
               Enter your official <span className="text-foreground font-medium">@{getExpectedDomain()}</span> email. Other IIT or academic domains will not be accepted.
@@ -563,7 +569,7 @@ const IitVerification = () => {
         )}
 
         {step === "upload_documents" && (
-          <div className="animate-fade-in max-w-lg mx-auto">
+          <div className="onboarding-stage animate-fade-in">
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">{selectedIit?.name}</span>
               <span className="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded-full capitalize">{studentStatus?.replace("_", " ")}</span>
@@ -571,7 +577,7 @@ const IitVerification = () => {
             <div className="flex items-center gap-3 mt-6 mb-2">
               <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center"><FileUp className="w-6 h-6 text-primary" /></div>
               <div>
-                <h1 className="text-xl font-bold text-foreground">Verify with a document</h1>
+                <h1 className="text-2xl font-black tracking-tight text-foreground">Verify with a document</h1>
                 <p className="text-sm text-muted-foreground mt-0.5">A clear document helps us review faster.</p>
               </div>
             </div>
@@ -603,7 +609,7 @@ const IitVerification = () => {
         )}
 
         {step === "documents_pending" && (
-          <div className="animate-fade-in max-w-lg mx-auto min-h-[65vh] flex flex-col items-center justify-center text-center">
+          <div className="onboarding-stage animate-fade-in flex min-h-[min(65vh,580px)] flex-col items-center justify-center text-center">
             <div className="w-20 h-20 rounded-3xl bg-primary/10 flex items-center justify-center mb-6"><Clock3 className="w-9 h-9 text-primary" /></div>
             <span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Submitted securely</span>
             <h1 className="text-2xl font-bold text-foreground mt-3">We’ll get back to you after verification</h1>
@@ -628,7 +634,7 @@ const IitVerification = () => {
         )}
 
         {step === "verify_otp" && (
-          <div className="animate-fade-in max-w-lg mx-auto">
+          <div className="onboarding-stage animate-fade-in">
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">{selectedIit?.name}</span>
               <span className="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded-full">{email}</span>
@@ -637,7 +643,7 @@ const IitVerification = () => {
               <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
                 <ShieldCheck className="w-6 h-6 text-primary" />
               </div>
-              <h1 className="text-xl font-bold text-foreground">Enter verification code</h1>
+              <h1 className="text-2xl font-black tracking-tight text-foreground">Enter verification code</h1>
             </div>
             <p className="text-sm text-muted-foreground mb-6">
               Enter the 6-digit code sent to <span className="text-foreground font-medium">{email}</span>
@@ -666,7 +672,7 @@ const IitVerification = () => {
       </div>
 
       <Dialog open={!!existingRecordMessage} onOpenChange={(open) => !open && setExistingRecordMessage("")}>
-        <DialogContent className="max-w-sm rounded-2xl">
+        <DialogContent className="max-h-[88dvh] w-[calc(100%_-_1.5rem)] max-w-sm overflow-y-auto rounded-[24px] p-5 sm:p-6">
           <DialogHeader>
             <div className="w-12 h-12 rounded-xl bg-destructive/10 flex items-center justify-center mb-2">
               <AlertCircle className="w-6 h-6 text-destructive" />

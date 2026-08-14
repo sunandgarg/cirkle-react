@@ -10,6 +10,7 @@ export const isMobileTestUserId = (userId?: string | null) =>
 const MOBILE_TEST_SESSION_KEY = "cirkle:mobile-test-session";
 const MOBILE_TEST_DOCUMENT_KEY = "cirkle:mobile-test-document";
 const MOBILE_TEST_COURSE_KEY = "cirkle:mobile-test-course";
+const MOBILE_TEST_PROFILES_KEY = "cirkle:mobile-test-profiles";
 
 const mobileTestModeEnabled = import.meta.env.VITE_MOBILE_TEST_MODE === "true";
 const mobileTestAllowAll = import.meta.env.VITE_MOBILE_TEST_ALLOW_ALL === "true";
@@ -44,6 +45,23 @@ type MobileTestCourseState = {
   updatedAt: string;
 };
 
+type MobileTestProfiles = Record<string, Partial<MobileTestSession>>;
+
+const readMobileTestProfiles = (): MobileTestProfiles => {
+  try {
+    return JSON.parse(localStorage.getItem(MOBILE_TEST_PROFILES_KEY) || "{}") as MobileTestProfiles;
+  } catch {
+    return {};
+  }
+};
+
+const saveMobileTestProfile = (session: MobileTestSession) => {
+  const phoneKey = normalizePhone(session.countryCode, session.phone);
+  const profiles = readMobileTestProfiles();
+  profiles[phoneKey] = { ...profiles[phoneKey], ...session };
+  localStorage.setItem(MOBILE_TEST_PROFILES_KEY, JSON.stringify(profiles));
+};
+
 const readMobileTestDocumentState = (): MobileTestDocumentState | null => {
   try {
     return JSON.parse(localStorage.getItem(MOBILE_TEST_DOCUMENT_KEY) || "null") as MobileTestDocumentState | null;
@@ -63,20 +81,25 @@ const readMobileTestCourseState = (): MobileTestCourseState | null => {
 export const startMobileTestSession = (countryCode: string, phone: string) => {
   if (!isMobileTestPhone(countryCode, phone)) return false;
   const normalizedPhone = normalizePhone(countryCode, phone);
+  const savedProfile = readMobileTestProfiles()[normalizedPhone] || {};
   const documentState = readMobileTestDocumentState();
+  const isOwnDocumentState = documentState?.phone === normalizedPhone;
   const pendingDocument = documentState?.phone === normalizedPhone && documentState.status === "pending" ? documentState : null;
   const courseState = readMobileTestCourseState();
+  const isOwnCourseState = courseState?.phone === normalizedPhone;
   const pendingCourse = courseState?.phone === normalizedPhone && courseState.status === "pending" ? courseState : null;
-  localStorage.setItem(MOBILE_TEST_SESSION_KEY, JSON.stringify({
+  const session: MobileTestSession = {
+    ...savedProfile,
     phone: phone.replace(/\D/g, ""),
     countryCode,
     createdAt: new Date().toISOString(),
-    iitName: pendingDocument?.iitName,
-    studentStatus: pendingDocument?.studentStatus,
-    documentVerificationStatus: pendingDocument?.status,
-    customCourseName: pendingCourse?.courseName,
-    courseApprovalStatus: pendingCourse?.status,
-  }));
+    iitName: pendingDocument?.iitName || savedProfile.iitName,
+    studentStatus: pendingDocument?.studentStatus || savedProfile.studentStatus,
+    documentVerificationStatus: pendingDocument?.status || (isOwnDocumentState ? undefined : savedProfile.documentVerificationStatus),
+    customCourseName: pendingCourse?.courseName || (isOwnCourseState ? undefined : savedProfile.customCourseName),
+    courseApprovalStatus: pendingCourse?.status || (isOwnCourseState ? undefined : savedProfile.courseApprovalStatus),
+  };
+  localStorage.setItem(MOBILE_TEST_SESSION_KEY, JSON.stringify(session));
   return true;
 };
 
@@ -114,7 +137,9 @@ export const readMobileTestSession = (): MobileTestSession | null => {
 export const updateMobileTestSession = (updates: Partial<MobileTestSession>) => {
   const session = readMobileTestSession();
   if (!session) return false;
-  localStorage.setItem(MOBILE_TEST_SESSION_KEY, JSON.stringify({ ...session, ...updates }));
+  const nextSession = { ...session, ...updates };
+  localStorage.setItem(MOBILE_TEST_SESSION_KEY, JSON.stringify(nextSession));
+  saveMobileTestProfile(nextSession);
   return true;
 };
 

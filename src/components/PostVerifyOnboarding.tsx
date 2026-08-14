@@ -295,8 +295,9 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
   if (step === "course_pending") {
     const rejected = courseRequest?.status === "rejected";
     return (
-      <div className="fixed inset-0 z-50 bg-background flex flex-col overflow-y-auto px-5 py-8 safe-bottom">
-        <div className="w-full max-w-md mx-auto my-auto text-center animate-fade-in">
+      <div className="onboarding-shell fixed inset-0 z-50">
+        <div className="onboarding-scroll flex items-center">
+        <div className="onboarding-stage my-auto text-center animate-fade-in">
           <div className={`w-20 h-20 rounded-3xl flex items-center justify-center mx-auto mb-6 ${rejected ? "bg-destructive/10" : "bg-primary/10"}`}>
             {rejected ? <GraduationCap className="w-9 h-9 text-destructive" /> : <Clock3 className="w-9 h-9 text-primary" />}
           </div>
@@ -336,15 +337,15 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
             </Button>
           </div>
           <p className="text-[11px] text-muted-foreground mt-5">Only authorized admins can review custom course names.</p>
-        </div>
+        </div></div>
       </div>
     );
   }
 
   if (step === "done") {
     return (
-      <div className="fixed inset-0 z-50 bg-background flex items-center justify-center p-6">
-        <div className="text-center animate-fade-in">
+      <div className="onboarding-shell fixed inset-0 z-50 items-center justify-center p-6">
+        <div className="onboarding-stage text-center animate-fade-in">
           <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-6">
             <Sparkles className="w-10 h-10 text-primary" />
           </div>
@@ -356,24 +357,30 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-background flex flex-col overflow-hidden">
+    <div className="onboarding-shell fixed inset-0 z-50">
       {/* Progress */}
-      <div className="px-4 pt-6 pb-4 flex items-center gap-3">
+      <header className="onboarding-topbar">
         {stepIdx > 0 && (
-          <button onClick={handleBack} className="text-muted-foreground hover:text-foreground transition-colors">
+          <button aria-label="Go back" onClick={handleBack} className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
             <ArrowLeft className="w-5 h-5" />
           </button>
         )}
-        <div className="flex gap-1.5 flex-1">
+        {stepIdx === 0 && <div className="h-11 w-11 flex-shrink-0" aria-hidden="true" />}
+        <div className="min-w-0 flex-1">
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className="truncate text-xs font-bold text-foreground">Build your Cirkle profile</span>
+            <span className="text-[10px] font-semibold text-muted-foreground">{stepIdx + 1} of {totalSteps}</span>
+          </div>
+          <div className="flex gap-1.5" aria-label={`Profile step ${stepIdx + 1} of ${totalSteps}`}>
           {activeStepOrder.map((_, i) => (
-            <div key={i} className={`h-1 flex-1 rounded-full transition-all duration-300 ${stepIdx >= i ? "bg-primary" : "bg-border"}`} />
+            <div key={i} className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${stepIdx >= i ? "bg-primary shadow-[0_3px_10px_-4px_hsl(var(--primary))]" : "bg-border"}`} />
           ))}
+          </div>
         </div>
-        <span className="text-xs text-muted-foreground">{stepIdx + 1}/{totalSteps}</span>
-      </div>
+      </header>
 
-      <div className="flex-1 px-4 pb-8 overflow-y-auto">
-        <div className="max-w-lg mx-auto">
+      <div className="onboarding-scroll">
+        <div className="onboarding-stage">
           {/* Locked IIT badge */}
           {iit && (
             <div className="flex items-center gap-2 mb-4">
@@ -388,9 +395,9 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
               <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
                 <User className="w-6 h-6 text-primary" />
               </div>
-              <h2 className="text-xl font-bold text-foreground mb-1">What's your full name?</h2>
-              <p className="text-sm text-muted-foreground mb-6">This will be visible to other community members</p>
-              <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g., Rahul Sharma" className="h-12 rounded-xl bg-secondary border-border" autoFocus />
+              <h2 className="text-2xl font-black tracking-tight text-foreground mb-1">What should people call you?</h2>
+              <p className="text-sm leading-6 text-muted-foreground mb-6">Use the name classmates and alumni will recognize.</p>
+              <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g., Rahul Sharma" className="h-12 rounded-xl bg-secondary border-border text-[16px]" autoComplete="name" />
             </div>
           )}
 
@@ -404,13 +411,13 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
               <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
                 <GraduationCap className="w-6 h-6 text-primary" />
               </div>
-              <h2 className="text-xl font-bold text-foreground mb-1">Select your program</h2>
+              <h2 className="text-2xl font-black tracking-tight text-foreground mb-1">Select your program</h2>
               <p className="text-sm text-muted-foreground mb-6">{academicRecovery ? "We’ll use this only to place you in the right course, batch, and cohort conversations." : "Choose your primary course of study."}</p>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {ALL_COURSES.map(d => (
                   <button key={d} onClick={() => setDegree(d)}
-                    className={`p-3 rounded-xl border text-sm font-medium transition-all press-scale ${
-                      degree === d ? "bg-primary/10 border-primary text-primary" : "bg-card border-border text-foreground hover:border-primary/30"
+                    className={`onboarding-option min-h-[52px] text-center text-sm ${
+                      degree === d ? "onboarding-option-selected" : ""
                     }`}>
                     {d}
                   </button>
@@ -420,7 +427,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
                 <div className="mt-5 rounded-2xl border border-primary/20 bg-primary/5 p-4 animate-fade-in">
                   <label htmlFor="other-course" className="text-sm font-semibold text-foreground">Enter your course name</label>
                   <p className="text-xs text-muted-foreground mt-1 mb-3">Use the official name shown by your institute.</p>
-                  <Input id="other-course" value={otherCourse} onChange={(event) => setOtherCourse(event.target.value.slice(0, 100))} placeholder="e.g., Master of Urban Systems" className="h-12 rounded-xl bg-background border-border" autoFocus />
+                  <Input id="other-course" value={otherCourse} onChange={(event) => setOtherCourse(event.target.value.slice(0, 100))} placeholder="e.g., Master of Urban Systems" className="h-12 rounded-xl bg-background border-border text-[16px]" />
                   <div className="flex justify-between mt-2"><span className="text-[11px] text-muted-foreground">Admin approval required</span><span className="text-[11px] text-muted-foreground">{otherCourse.trim().length}/100</span></div>
                 </div>
               )}
@@ -432,13 +439,13 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
               <div className="flex items-center gap-2 mb-4">
                 <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">{degree}</span>
               </div>
-              <h2 className="text-xl font-bold text-foreground mb-1">Select your specialisation</h2>
+              <h2 className="text-2xl font-black tracking-tight text-foreground mb-1">Select your specialisation</h2>
               <p className="text-sm text-muted-foreground mb-6">Your branch or area of focus</p>
-              <div className="grid grid-cols-2 gap-2 max-h-[50vh] overflow-y-auto scrollbar-hide">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {specialisations.map(b => (
                   <button key={b} onClick={() => setSpecialisation(b)}
-                    className={`p-3 rounded-xl border text-sm font-medium text-left transition-all press-scale ${
-                      specialisation === b ? "bg-primary/10 border-primary text-primary" : "bg-card border-border text-foreground hover:border-primary/30"
+                    className={`onboarding-option min-h-[52px] text-sm ${
+                      specialisation === b ? "onboarding-option-selected" : ""
                     }`}>
                     {b}
                   </button>
@@ -449,13 +456,13 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
 
           {step === "year" && (
             <div className="animate-fade-in">
-              <h2 className="text-xl font-bold text-foreground mb-1">Batch / Passout year</h2>
-              <p className="text-sm text-muted-foreground mb-6">When do/did you graduate?</p>
-              <div className="grid grid-cols-4 gap-2 max-h-[50vh] overflow-y-auto">
+              <h2 className="text-2xl font-black tracking-tight text-foreground mb-1">Your graduation year</h2>
+              <p className="text-sm text-muted-foreground mb-6">This creates your batch and cohort conversations automatically.</p>
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                 {YEARS.map(y => (
                   <button key={y} onClick={() => setYear(y)}
-                    className={`p-3 rounded-xl border text-sm font-medium transition-all press-scale ${
-                      year === y ? "bg-primary/10 border-primary text-primary" : "bg-card border-border text-foreground hover:border-primary/30"
+                    className={`onboarding-option min-h-[50px] text-center text-sm ${
+                      year === y ? "onboarding-option-selected" : ""
                     }`}>
                     {y}
                   </button>
@@ -469,8 +476,8 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
               <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
                 <Briefcase className="w-6 h-6 text-primary" />
               </div>
-              <h2 className="text-xl font-bold text-foreground mb-1">Optional details</h2>
-              <p className="text-sm text-muted-foreground mb-6">Add anything useful now, or leave fields blank and continue.</p>
+              <h2 className="text-2xl font-black tracking-tight text-foreground mb-1">Make the network useful</h2>
+              <p className="text-sm leading-6 text-muted-foreground mb-6">Optional details help people find relevant peers. You can edit them later.</p>
               <div className="space-y-4">
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1.5 block">Location</label>
@@ -485,7 +492,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
                 </div>
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1.5 block">LinkedIn URL</label>
-                  <Input value={linkedin} onChange={e => setLinkedin(e.target.value)} placeholder="https://linkedin.com/in/..." className="h-11 rounded-xl bg-secondary border-border" />
+                  <Input value={linkedin} onChange={e => setLinkedin(e.target.value)} placeholder="https://linkedin.com/in/..." className="h-12 rounded-xl bg-secondary border-border text-[16px]" inputMode="url" autoComplete="url" />
                 </div>
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1.5 block">Current Company</label>
@@ -500,12 +507,12 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
                 </div>
 
                 {/* Terms acceptance */}
-                <label className="flex items-start gap-2 mt-2 cursor-pointer select-none">
+                <label className="flex min-h-12 cursor-pointer select-none items-start gap-3 rounded-2xl border border-border bg-secondary/50 p-3">
                   <input
                     type="checkbox"
                     checked={acceptedTerms}
                     onChange={(e) => setAcceptedTerms(e.target.checked)}
-                    className="mt-0.5 w-4 h-4 rounded border-border accent-primary"
+                    className="mt-0.5 h-5 w-5 flex-shrink-0 rounded border-border accent-primary"
                   />
                   <span className="text-xs text-muted-foreground leading-snug">{termsText}</span>
                 </label>
@@ -517,10 +524,10 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
 
       {/* Bottom action */}
       {(step as string) !== "done" && (
-        <div className="px-4 pb-6 safe-bottom">
+      <div className="onboarding-footer">
           <div className="max-w-lg mx-auto">
             <Button
-              className="w-full h-12 rounded-xl font-semibold gap-2"
+              className="w-full h-12 rounded-xl font-bold gap-2 shadow-[0_14px_30px_-16px_hsl(var(--primary))]"
               onClick={handleNext}
               disabled={!canProceed() || loading}
             >
