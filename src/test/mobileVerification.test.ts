@@ -27,6 +27,11 @@ describe("mobile test document verification lifecycle", () => {
     });
   });
 
+  it("accepts the second configured test number", () => {
+    expect(startMobileTestSession("+91", "8888888888")).toBe(true);
+    expect(readMobileTestSession()).toMatchObject({ phone: "8888888888", countryCode: "+91" });
+  });
+
   it("does not restore a request after it is withdrawn", () => {
     startMobileTestSession("+91", "9999999999");
     saveMobileTestDocumentSubmission("IIT Delhi", "alumni");
