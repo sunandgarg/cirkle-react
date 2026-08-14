@@ -57,7 +57,7 @@ const IitVerification = () => {
   const navigate = useNavigate();
   const { user, profile, refetchProfile } = useAuth();
   const [step, setStep] = useState<Step>(() => readMobileTestSession()?.documentVerificationStatus === "pending" ? "documents_pending" : "select_iit");
-  const [selectedIit, setSelectedIit] = useState<typeof IIT_LIST[0] | null>(() => {
+  const [selectedIit, setSelectedIit] = useState<IitInstitute | null>(() => {
     const session = readMobileTestSession();
     return IIT_LIST.find((iit) => iit.name === session?.iitName) || null;
   });
@@ -119,7 +119,7 @@ const IitVerification = () => {
     iit.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleSelectIit = (iit: typeof IIT_LIST[0]) => {
+  const handleSelectIit = (iit: IitInstitute) => {
     setSelectedIit(iit);
     setStep("select_status");
   };

@@ -15,6 +15,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:chat-load": "vitest run src/test/forumLoad.test.ts --reporter verbose",
     "test:watch": "vitest"
   },
   "dependencies": {

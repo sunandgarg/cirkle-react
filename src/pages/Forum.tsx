@@ -8,7 +8,7 @@ import {
   Send, Smile, Search, ImageIcon, X, BarChart3, Plus, Trash2, Reply,
   ChevronDown, Menu, Hash, Bookmark, BookmarkPlus, Pin,
   MoreHorizontal, Check, Users, Megaphone, Copy, Forward,
-  CheckCheck, Clock, Pencil, AtSign, ArrowDown,
+  Clock, Pencil, AtSign, ArrowDown,
   Mic, Paperclip, MessageSquare, Bold, Italic, Code, Timer, Settings2, Eye,
   Filter, Calendar, User, Link2, Image as ImageLucide, ChevronRight, Camera,
   Volume2, EyeOff, Flag, Sticker, Keyboard
@@ -38,6 +38,7 @@ import {
   type CanonicalAcademicIdentity, type ForumScope as ScopeDef,
 } from "@/lib/forumScopes";
 import { hasMobileTestAcademicProfile, readMobileTestSession } from "@/lib/mobileVerification";
+import { applyForumRealtimeEvent, type ForumRealtimeEvent } from "@/lib/forumRealtime";
 
 /* ─── Types ─── */
 interface SavedView {
@@ -304,7 +305,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = 200;
-const FORUM_BUILD = "2026.08.14.10";
+const FORUM_BUILD = "2026.08.14.11";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -1019,53 +1020,95 @@ const Forum = () => {
     if (readMobileTestSession()) return;
     const filter = `scope_key=eq.${activeScope.key}`;
     const roomQueryKey = ["forum-posts", activeScope.type, activeScope.key] as const;
-    const channel = supabase.channel(`forum-rt-${activeScope.type}-${activeScope.key}`)
+    const applyRoomEvent = (event: ForumRealtimeEvent) => {
+      queryClient.setQueryData(roomQueryKey, (current: any) => {
+        if (!current?.posts) return current;
+        const nextEvent = event.eventType === "INSERT" && event.new ? {
+          ...event,
+          new: {
+            ...event.new,
+            profile: profileMap.get(event.new.author_id) || null,
+            poll: null,
+            replyCount: 0,
+            reactions: {},
+            myReactions: [],
+          },
+        } : event;
+        return {
+          ...current,
+          posts: applyForumRealtimeEvent(
+            current.posts,
+            nextEvent,
+            { type: activeScope.type, key: activeScope.key },
+            PAGE_SIZE,
+          ),
+        };
+      });
+    };
+    let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
+    let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
+    let fallbackStarted = false;
+    let disposed = false;
+    const startPostgresFallback = () => {
+      if (fallbackStarted || disposed) return;
+      fallbackStarted = true;
+      fallbackChannel = supabase.channel(`forum-pg-${activeScope.type}-${activeScope.key}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts', filter }, (payload: any) => {
-        const row = payload.new || {};
-        if (row.scope_type === activeScope.type && row.scope_key === activeScope.key) {
-          queryClient.setQueryData(roomQueryKey, (current: any) => {
-            const existing = current?.posts || [];
-            if (existing.some((post: any) => post.id === row.id)) return current;
-            const incoming = {
-              ...row,
-              profile: profileMap.get(row.author_id) || null,
-              poll: null,
-              replyCount: 0,
-              reactions: {},
-              myReactions: [],
-            };
-            return { posts: [...existing, incoming].slice(-PAGE_SIZE), isDemo: false, demos: [] };
-          });
-        }
+        applyRoomEvent({ eventType: "INSERT", new: payload.new || {} });
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts', filter }, (payload: any) => {
-        const row = payload.new || {};
-        if (row.scope_type === activeScope.type && row.scope_key === activeScope.key) {
-          queryClient.setQueryData(roomQueryKey, (current: any) => {
-            if (!current?.posts) return current;
-            return {
-              ...current,
-              posts: current.posts.map((post: any) => post.id === row.id ? { ...post, ...row } : post),
-            };
-          });
-        }
+        applyRoomEvent({ eventType: "UPDATE", new: payload.new || {} });
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts', filter }, (payload: any) => {
-        const deletedId = payload.old?.id;
-        if (!deletedId) return;
-        queryClient.setQueryData(roomQueryKey, (current: any) => current?.posts ? {
-          ...current,
-          posts: current.posts.filter((post: any) => post.id !== deletedId),
-        } : current);
+        applyRoomEvent({ eventType: "DELETE", old: payload.old || {} });
       })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    };
+
+    // Broadcast is Supabase's recommended scalable path. The capability RPC
+    // prevents a silent no-event state on databases that have not migrated yet.
+    void (async () => {
+      const { data: broadcastReady } = await (supabase as any).rpc("forum_broadcast_ready");
+      if (disposed) return;
+      if (broadcastReady !== true) {
+        startPostgresFallback();
+        return;
+      }
+      await supabase.realtime.setAuth();
+      if (disposed) return;
+      broadcastChannel = supabase.channel(`forum:${activeScope.type}:${activeScope.key}`, {
+        config: { private: true },
+      })
+        .on('broadcast', { event: 'INSERT' }, (payload: any) => {
+          applyRoomEvent({ eventType: "INSERT", new: payload.new || payload.payload?.new || {} });
+        })
+        .on('broadcast', { event: 'UPDATE' }, (payload: any) => {
+          applyRoomEvent({ eventType: "UPDATE", new: payload.new || payload.payload?.new || {} });
+        })
+        .on('broadcast', { event: 'DELETE' }, (payload: any) => {
+          applyRoomEvent({ eventType: "DELETE", old: payload.old || payload.payload?.old || {} });
+        })
+        .subscribe((status) => {
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            startPostgresFallback();
+          }
+        });
+    })();
+
+    return () => {
+      disposed = true;
+      if (broadcastChannel) supabase.removeChannel(broadcastChannel);
+      if (fallbackChannel) supabase.removeChannel(fallbackChannel);
+    };
   }, [queryClient, activeScope.type, activeScope.key, profileMap]);
 
 
   /* ─── Typing indicator ─── */
   useEffect(() => {
-    if (!user?.id || readMobileTestSession()) return;
+    // Typing fan-out is useful in small cohorts and wasteful in campus/global
+    // rooms where thousands of people may be active simultaneously.
+    const typingEnabled = activeScope.type === "COHORT" || activeScope.type === "COHORT_GLOBAL";
+    if (!user?.id || readMobileTestSession() || !typingEnabled) return;
     const presenceChannel = supabase.channel(`typing-${activeScope.type}-${activeScope.key}`, {
       config: { broadcast: { self: false } },
     });
@@ -1834,6 +1877,8 @@ const Forum = () => {
             {!isRecordingVoice && (
               <div className="flex items-end gap-1.5">
                 <button onClick={() => { setShowAttachMenu(!showAttachMenu); setShowGifPicker(false); setShowEmojiPicker(false); setShowFormatBar(false); dismissKeyboard(); }}
+                  type="button"
+                  aria-label={showAttachMenu ? "Close attachments" : "Open attachments"}
                   className={`w-10 h-10 flex items-center justify-center rounded-full flex-shrink-0 transition-all ${showAttachMenu ? "text-primary bg-primary/10 rotate-45" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}>
                   <Plus className="w-5 h-5" />
                 </button>
@@ -1841,6 +1886,8 @@ const Forum = () => {
                 <div className="flex-1 min-w-0 relative">
                   <textarea
                     ref={textareaRef}
+                    data-testid="forum-composer"
+                    aria-label={`Message ${(activeScopeDef as any)?.label || "channel"}`}
                     value={content}
                     onChange={(e) => handleContentChange(e.target.value)}
                     onKeyDown={handleKeyDown}
@@ -1892,6 +1939,7 @@ const Forum = () => {
                           return !v;
                         });
                       }}
+                      aria-label={isAnonymous ? "Send anonymously" : "Send as yourself"}
                       className={`w-8 h-8 flex items-center justify-center rounded relative transition-all duration-200 ${
                         isAnonymous
                           ? "text-primary bg-primary/10 shadow-[0_0_8px_hsl(var(--primary)/0.3)]"
@@ -1910,6 +1958,8 @@ const Forum = () => {
                 {/* Send / Voice button with smooth state transition */}
                 {hasContent ? (
                   <button
+                    type="button"
+                    aria-label="Send message"
                     onClick={() => createPost.mutate()}
                     disabled={createPost.isPending || (slowModeEnabled && slowModeCooldown > 0 && !isAdmin)}
                     className="w-10 h-10 flex items-center justify-center rounded-full bg-primary text-primary-foreground flex-shrink-0 active:scale-95 transition-all duration-150 disabled:opacity-50"
@@ -1920,7 +1970,7 @@ const Forum = () => {
                     }
                   </button>
                 ) : (
-                  <button onClick={() => setIsRecordingVoice(true)}
+                  <button type="button" aria-label="Record voice message" onClick={() => setIsRecordingVoice(true)}
                     className="w-10 h-10 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-accent flex-shrink-0 active:scale-95 transition-all duration-150">
                     <Mic className="w-4 h-4" />
                   </button>
@@ -1952,7 +2002,7 @@ const Forum = () => {
           </div>
           <div className="flex-1 overflow-y-auto p-2 scrollbar-hide">
             <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-2 py-2">
-              Online - {scopeMembers?.length || 0}
+              Recent contributors - {scopeMembers?.length || 0}
             </p>
             {scopeMembers?.map((member: any) => (
               <button key={member.user_id} onClick={() => navigate(member.slug ? `/u/${member.slug}` : `/profile/${member.user_id}`)}
@@ -1989,7 +2039,7 @@ const Forum = () => {
           </SheetTitle>
           <div className="overflow-y-auto scrollbar-hide p-2" style={{ height: 'calc(100% - 48px)' }}>
             <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-2 py-2">
-              Online - {scopeMembers?.length || 0}
+              Recent contributors - {scopeMembers?.length || 0}
             </p>
             {scopeMembers?.map((member: any) => (
               <button key={member.user_id} onClick={() => { navigate(member.slug ? `/u/${member.slug}` : `/profile/${member.user_id}`); setMemberPanelOpen(false); }}
@@ -2251,10 +2301,9 @@ interface DiscordMessageProps {
 
 const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, onUserPin, isUserPinned, navigate, messageRefs, highlightedPostId, onScrollToMessage, findParentPost, onEdit, onDelete, onCopy, onForward, profileMap, onImageClick, onThread, isGrouped }: DiscordMessageProps) => {
   const [showActions, setShowActions] = useState(false);
-  const [showSeenBy, setShowSeenBy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
-  const swipeStartXRef = useRef<number | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gestureStartRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
   const [swipeOffset, setSwipeOffset] = useState(0);
   const swipeThreshold = 60;
 
@@ -2274,59 +2323,55 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
   const replyCount = post.replyCount || 0;
   const parentPost = findParentPost(post.reply_to_id);
   const canDeleteForEveryone = isMine && !isDeleted && ((Date.now() - new Date(post.created_at).getTime()) < 3 * 60 * 1000);
-  const seenBy = (post.seen_by || []) as string[];
-  const seenByNames = seenBy.map((id: string) => profileMap.get(id)?.name || "Unknown").filter(Boolean);
-
   const goToProfile = () => {
     if (post.is_anonymous) return;
     if (profileSlug) navigate(`/u/${profileSlug}`);
     else if (post.author_id) navigate(`/profile/${post.author_id}`);
   };
 
-  // Long-press: 500ms (FIX 7)
-  const handleLongPressStart = () => {
-    longPressTimer.current = setTimeout(() => setShowActions(true), 500);
-  };
-  const handleLongPressEnd = () => { if (longPressTimer.current) clearTimeout(longPressTimer.current); };
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    swipeStartXRef.current = e.touches[0].clientX;
-    handleLongPressStart();
+  const cancelLongPress = () => {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    longPressTimer.current = null;
   };
 
-  // Close all popups on any tap outside
+  // A single pointer gesture handles touch, pen and hybrid devices. Vertical
+  // movement always belongs to scrolling; horizontal movement can reveal reply.
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (!e.isPrimary || (e.pointerType !== "touch" && e.pointerType !== "pen")) return;
+    if ((e.target as HTMLElement).closest("button, a, input, textarea, audio")) return;
+    gestureStartRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+    cancelLongPress();
+    longPressTimer.current = setTimeout(() => {
+      setSwipeOffset(0);
+      setShowActions(true);
+      gestureStartRef.current = null;
+      longPressTimer.current = null;
+      if ("vibrate" in navigator) navigator.vibrate(8);
+    }, 460);
+  };
+
   const messageRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!showActions && !showSeenBy) return;
-    const handler = (e: TouchEvent | MouseEvent) => {
-      if (messageRef.current && !messageRef.current.contains(e.target as Node)) {
-        setShowActions(false);
-        setShowSeenBy(false);
-        setConfirmDelete(false);
-      }
-    };
-    document.addEventListener("pointerdown", handler, true);
-    return () => document.removeEventListener("pointerdown", handler, true);
-  }, [showActions, showSeenBy]);
+  useEffect(() => () => cancelLongPress(), []);
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (swipeStartXRef.current === null) return;
-    const diff = e.touches[0].clientX - swipeStartXRef.current;
-    if (Math.abs(diff) > 15) {
-      if (longPressTimer.current) clearTimeout(longPressTimer.current);
-    }
-    if (diff > 0) {
-      setSwipeOffset(Math.min(diff * 0.6, 80));
+  const handlePointerMove = (e: React.PointerEvent) => {
+    const start = gestureStartRef.current;
+    if (!start || start.pointerId !== e.pointerId) return;
+    const diffX = e.clientX - start.x;
+    const diffY = e.clientY - start.y;
+    if (Math.abs(diffX) > 10 || Math.abs(diffY) > 10) cancelLongPress();
+    if (diffX > 0 && Math.abs(diffX) > Math.abs(diffY) * 1.15) {
+      setSwipeOffset(Math.min(diffX * 0.55, 76));
+    } else if (Math.abs(diffY) > Math.abs(diffX)) {
+      setSwipeOffset(0);
     }
   };
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    handleLongPressEnd();
-    if (swipeStartXRef.current === null) return;
-    const endX = e.changedTouches[0].clientX;
-    const diff = endX - swipeStartXRef.current;
-    swipeStartXRef.current = null;
+
+  const finishPointerGesture = (e: React.PointerEvent, cancelled = false) => {
+    cancelLongPress();
+    const start = gestureStartRef.current;
+    gestureStartRef.current = null;
     setSwipeOffset(0);
-    if (diff > swipeThreshold && !isDeleted) {
+    if (!cancelled && start && start.pointerId === e.pointerId && e.clientX - start.x > swipeThreshold && Math.abs(e.clientY - start.y) < 42 && !isDeleted) {
       onReply(post);
     }
   };
@@ -2341,9 +2386,14 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
     <div
       ref={(el) => { messageRefs.current[post.id] = el; messageRef.current = el; }}
       className={`relative transition-colors duration-300 ${isHighlighted ? 'bg-primary/5' : ''} ${isGrouped ? '' : 'mt-[2px]'}`}
-      style={{ transform: `translateX(${swipeOffset}px)`, transition: swipeOffset === 0 ? 'transform 0.2s ease-out' : 'none' }}
-      onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
+      style={{ transform: `translateX(${swipeOffset}px)`, transition: swipeOffset === 0 ? 'transform 0.18s ease-out' : 'none', touchAction: 'pan-y pinch-zoom', WebkitTouchCallout: 'none' } as React.CSSProperties}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={(e) => finishPointerGesture(e)}
+      onPointerCancel={(e) => finishPointerGesture(e, true)}
+      onPointerLeave={(e) => { if (e.pointerType !== "mouse") finishPointerGesture(e, true); }}
       onContextMenu={handleContextMenu}
+      data-message-id={post.id}
     >
       {/* Pinned indicator */}
       {post.pinned_at && (
@@ -2461,13 +2511,7 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
           <div className="flex items-center justify-end gap-1 pl-10 -mt-0.5 min-h-[14px]">
             {isEdited && isMine && <span className="text-[9px] text-muted-foreground">edited</span>}
             <span className="text-[10px] text-muted-foreground tabular-nums" title={fullTime}>{time}</span>
-            {isMine && (
-              post.is_pending
-                ? <Clock className="w-3 h-3 text-muted-foreground" aria-label="Sending" />
-                : <button onClick={() => { setShowActions(false); setShowSeenBy(!showSeenBy); }} className="inline-flex" title={seenBy.length ? `Seen by ${seenBy.length}` : "Sent"}>
-                    <CheckCheck className={`w-3.5 h-3.5 ${seenBy.length > 0 ? "text-[hsl(202,90%,48%)]" : "text-muted-foreground"}`} />
-                  </button>
-            )}
+            {isMine && post.is_pending && <Clock className="w-3 h-3 text-muted-foreground" aria-label="Sending" />}
           </div>
         </div>
       </div>
@@ -2481,30 +2525,37 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
 
       {/* NO hover actions (FIX 1 - removed entirely) */}
 
-      {/* Long-press / right-click action sheet (FIX 7) */}
-      {showActions && (
-        <>
-          <div className="fixed inset-0 z-30 bg-foreground/20 backdrop-blur-[2px]" onClick={() => { setShowActions(false); setConfirmDelete(false); }} />
-          <div className="fixed left-0 right-0 bottom-0 z-40 animate-slide-up safe-bottom sm:absolute sm:left-auto sm:right-4 sm:top-0 sm:bottom-auto sm:w-auto">
-            <div className="bg-card border-t sm:border border-border sm:rounded-lg rounded-t-2xl shadow-2xl overflow-hidden sm:min-w-[220px]">
-              {/* Row 1: Quick reactions */}
-              <div className="flex items-center justify-around px-4 py-3 border-b border-border">
-                {QUICK_REACTIONS.map(emoji => (
-                  <button key={emoji} onClick={() => { onReact(post.id, emoji); setShowActions(false); }}
-                    className={`text-xl w-11 h-11 flex items-center justify-center rounded-xl hover:bg-accent transition-all active:scale-90 ${myReactions.includes(emoji) ? "bg-primary/10 ring-2 ring-primary/30" : ""}`}>
-                    {emoji}
-                  </button>
-                ))}
-                <button onClick={() => { /* could open full emoji picker */ setShowActions(false); }}
-                  className="text-xl w-11 h-11 flex items-center justify-center rounded-xl hover:bg-accent transition-all active:scale-90 text-muted-foreground">
-                  <Plus className="w-5 h-5" />
-                </button>
-              </div>
-              {/* Row 2: Reply, Copy, Report */}
-              <div className="py-1">
+      {/* Portal-based action sheet: never clipped by a message or keyboard. */}
+      <Sheet open={showActions} onOpenChange={(open) => { setShowActions(open); if (!open) setConfirmDelete(false); }}>
+        <SheetContent side="bottom" aria-describedby={undefined} data-testid="message-action-sheet"
+          className="max-h-[min(78dvh,640px)] overflow-y-auto overscroll-contain rounded-t-[28px] border-border bg-card px-3 pb-[max(14px,env(safe-area-inset-bottom))] pt-2 shadow-2xl sm:left-1/2 sm:right-auto sm:w-[420px] sm:-translate-x-1/2 sm:rounded-[22px] sm:border [&>button.absolute]:hidden">
+          <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-muted-foreground/25" aria-hidden="true" />
+          <SheetTitle className="sr-only">Message actions</SheetTitle>
+          <div className="mb-2 rounded-2xl bg-accent/55 px-3 py-2.5">
+            <p className="text-[11px] font-semibold text-muted-foreground">{isMine ? "You" : displayName} · {time}</p>
+            <p className="mt-0.5 truncate text-[13px] text-foreground">{post.content || "Attachment"}</p>
+          </div>
+          <div className="mb-2 flex items-center justify-between rounded-2xl border border-border/60 bg-background/55 px-2 py-1.5">
+            {QUICK_REACTIONS.map(emoji => (
+              <button key={emoji} onClick={() => { onReact(post.id, emoji); setShowActions(false); }}
+                aria-label={`React ${emoji}`}
+                className={`text-xl min-w-11 min-h-11 flex items-center justify-center rounded-xl hover:bg-accent transition-all active:scale-90 ${myReactions.includes(emoji) ? "bg-primary/10 ring-2 ring-primary/30" : ""}`}>
+                {emoji}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-1 rounded-2xl bg-background/45 p-1">
                 <ActionButton icon={Reply} label="Reply" onClick={() => { onReply(post); setShowActions(false); }} />
                 <ActionButton icon={Copy} label="Copy" onClick={() => { onCopy(post.content); setShowActions(false); }} />
-                <ActionButton icon={Flag} label="Report" onClick={async () => {
+                <ActionButton icon={Bookmark} label={isUserPinned ? "Unsave" : "Save"} onClick={() => { onUserPin(post.id); setShowActions(false); }} active={isUserPinned} />
+                <ActionButton icon={MessageSquare} label="Thread" onClick={() => { onThread(post); setShowActions(false); }} />
+                <ActionButton icon={Forward} label="Forward" onClick={() => { onForward(post); setShowActions(false); }} />
+                {isMine && !isDeleted && <ActionButton icon={Pencil} label="Edit" onClick={() => { onEdit(post); setShowActions(false); }} />}
+                {isAdmin && (
+                  <ActionButton icon={Pin} label={post.pinned_at ? "Unpin" : "Pin"} onClick={() => { onAdminPin(post.id); setShowActions(false); }} />
+                )}
+                {!isMine && !isDeleted && <ActionButton icon={Trash2} label="Delete for me" onClick={() => { onDelete(post.id, false); setShowActions(false); }} muted />}
+                {!isMine && !isDeleted && <ActionButton icon={Flag} label="Report" onClick={async () => {
                   if (!userId) { toast.error("Please sign in to report"); setShowActions(false); return; }
                   if (isDemoId(post.id)) { toast("This is a demo message"); setShowActions(false); return; }
                   try {
@@ -2513,70 +2564,25 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
                     toast.success("Report submitted");
                   } catch { toast.error("Could not submit report"); }
                   setShowActions(false);
-                }} />
-                <ActionButton icon={Bookmark} label={isUserPinned ? "Unsave" : "Save"} onClick={() => { onUserPin(post.id); setShowActions(false); }} active={isUserPinned} />
-                <ActionButton icon={MessageSquare} label="Thread" onClick={() => { onThread(post); setShowActions(false); }} />
-                <ActionButton icon={Forward} label="Forward" onClick={() => { onForward(post); setShowActions(false); }} />
-                
-                {/* Row 3: Delete - only own messages with confirm */}
-                {isMine && !isDeleted && (
-                  <>
-                    <div className="h-px bg-border mx-3 my-1" />
-                    <ActionButton icon={Pencil} label="Edit" onClick={() => { onEdit(post); setShowActions(false); }} />
-                    {!confirmDelete ? (
-                      <ActionButton icon={Trash2} label="Delete" onClick={() => setConfirmDelete(true)} destructive />
-                    ) : (
-                      <div className="px-4 py-2 space-y-1 animate-fade-in">
-                        <p className="text-[12px] text-destructive font-semibold">Delete this message?</p>
-                        {canDeleteForEveryone && (
-                          <button onClick={() => { onDelete(post.id, true); setShowActions(false); setConfirmDelete(false); }}
-                            className="w-full text-left text-[13px] text-destructive px-3 py-2 rounded-lg hover:bg-destructive/10 transition-colors">
-                            Delete for everyone
-                          </button>
-                        )}
-                        <button onClick={() => { onDelete(post.id, false); setShowActions(false); setConfirmDelete(false); }}
-                          className="w-full text-left text-[13px] text-muted-foreground px-3 py-2 rounded-lg hover:bg-accent transition-colors">
-                          Delete for me
-                        </button>
-                        <button onClick={() => setConfirmDelete(false)}
-                          className="w-full text-left text-[13px] text-foreground px-3 py-2 rounded-lg hover:bg-accent transition-colors">
-                          Cancel
-                        </button>
-                      </div>
-                    )}
-                  </>
-                )}
-                {!isMine && !isDeleted && (
-                  <>
-                    <div className="h-px bg-border mx-3 my-1" />
-                    <ActionButton icon={Trash2} label="Delete for me" onClick={() => { onDelete(post.id, false); setShowActions(false); }} muted />
-                  </>
-                )}
-                {isAdmin && (
-                  <ActionButton icon={Pin} label={post.pinned_at ? "Unpin" : "Pin"} onClick={() => { onAdminPin(post.id); setShowActions(false); }} />
-                )}
-              </div>
-            </div>
+                }} />}
           </div>
-        </>
-      )}
-
-      {/* Seen-by tooltip */}
-      {showSeenBy && isMine && seenByNames.length > 0 && (
-        <>
-          <div className="fixed inset-0 z-20" onClick={() => setShowSeenBy(false)} />
-          <div className="absolute right-4 top-0 z-30 animate-fade-in">
-            <div className="bg-card border border-border rounded-lg shadow-xl p-3 min-w-[140px] max-w-[200px]">
-              <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1"><Eye className="w-3 h-3" /> Seen by {seenBy.length}</p>
-              <div className="space-y-1 max-h-28 overflow-y-auto">
-                {seenByNames.map((name: string, i: number) => (
-                  <p key={i} className="text-xs text-foreground truncate">{name}</p>
-                ))}
-              </div>
+          {isMine && !isDeleted && (
+            <div className="mt-2 rounded-2xl border border-destructive/20 bg-destructive/5 p-1">
+              {!confirmDelete ? (
+                <ActionButton icon={Trash2} label="Delete message" onClick={() => setConfirmDelete(true)} destructive />
+              ) : (
+                <div className="space-y-1 p-1 animate-fade-in">
+                  <p className="px-3 py-1 text-[12px] font-semibold text-destructive">Choose where to delete it</p>
+                  {canDeleteForEveryone && <ActionButton icon={Trash2} label="Delete for everyone" onClick={() => { onDelete(post.id, true); setShowActions(false); }} destructive />}
+                  <ActionButton icon={Trash2} label="Delete for me" onClick={() => { onDelete(post.id, false); setShowActions(false); }} muted />
+                  <button onClick={() => setConfirmDelete(false)} className="min-h-11 w-full rounded-xl px-4 text-left text-[14px] font-medium text-foreground hover:bg-accent">Cancel</button>
+                </div>
+              )}
             </div>
-          </div>
-        </>
-      )}
+          )}
+          <button onClick={() => setShowActions(false)} className="mt-2 min-h-11 w-full rounded-2xl bg-accent text-[14px] font-semibold text-foreground active:scale-[0.99]">Close</button>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 };
@@ -2628,7 +2634,7 @@ const ActionButton = ({ icon: Icon, label, onClick, destructive, muted, active }
   icon: any; label: string; onClick: () => void; destructive?: boolean; muted?: boolean; active?: boolean;
 }) => (
   <button onClick={onClick}
-    className={`w-full flex items-center gap-3 px-4 py-2.5 text-[14px] transition-colors active:bg-accent/80 ${
+    className={`min-h-11 w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-medium transition-colors active:bg-accent/80 ${
       destructive ? "text-destructive hover:bg-destructive/10" :
       muted ? "text-muted-foreground hover:bg-accent" :
       "text-foreground hover:bg-accent"
@@ -2661,7 +2667,7 @@ const PollDisplay = ({ poll }: { poll: any }) => {
       setTestVote((current) => current === idx ? null : idx);
       return;
     }
-    if (myVote) {
+    if (myVote && "id" in myVote) {
       if (myVote.option_index === idx) await supabase.from("poll_votes").delete().eq("id", myVote.id);
       else await supabase.from("poll_votes").update({ option_index: idx }).eq("id", myVote.id);
     } else {
