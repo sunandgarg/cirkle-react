@@ -304,7 +304,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = 200;
-const FORUM_BUILD = "2026.08.14.9";
+const FORUM_BUILD = "2026.08.14.10";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -343,6 +343,7 @@ const Forum = () => {
   const [mentionQuery, setMentionQuery] = useState("");
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [showGifPicker, setShowGifPicker] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [threadPost, setThreadPost] = useState<any>(null);
@@ -359,8 +360,9 @@ const Forum = () => {
   const [hasMoreOlder, setHasMoreOlder] = useState(true);
   const [olderPages, setOlderPages] = useState<any[]>([]);
 
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const presenceChannelRef = useRef<any>(null);
+  const typingLastSentRef = useRef(0);
+  const remoteTypingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1014,50 +1016,79 @@ const Forum = () => {
 
   /* ─── Realtime: subscribe only to the open room ─── */
   useEffect(() => {
+    if (readMobileTestSession()) return;
     const filter = `scope_key=eq.${activeScope.key}`;
+    const roomQueryKey = ["forum-posts", activeScope.type, activeScope.key] as const;
     const channel = supabase.channel(`forum-rt-${activeScope.type}-${activeScope.key}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts', filter }, (payload: any) => {
         const row = payload.new || {};
         if (row.scope_type === activeScope.type && row.scope_key === activeScope.key) {
-          queryClient.invalidateQueries({ queryKey: ["forum-posts", activeScope.type, activeScope.key] });
+          queryClient.setQueryData(roomQueryKey, (current: any) => {
+            const existing = current?.posts || [];
+            if (existing.some((post: any) => post.id === row.id)) return current;
+            const incoming = {
+              ...row,
+              profile: profileMap.get(row.author_id) || null,
+              poll: null,
+              replyCount: 0,
+              reactions: {},
+              myReactions: [],
+            };
+            return { posts: [...existing, incoming].slice(-PAGE_SIZE), isDemo: false, demos: [] };
+          });
         }
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts', filter }, (payload: any) => {
         const row = payload.new || {};
         if (row.scope_type === activeScope.type && row.scope_key === activeScope.key) {
-          queryClient.invalidateQueries({ queryKey: ["forum-posts", activeScope.type, activeScope.key] });
+          queryClient.setQueryData(roomQueryKey, (current: any) => {
+            if (!current?.posts) return current;
+            return {
+              ...current,
+              posts: current.posts.map((post: any) => post.id === row.id ? { ...post, ...row } : post),
+            };
+          });
         }
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts', filter }, () => {
-        queryClient.invalidateQueries({ queryKey: ["forum-posts", activeScope.type, activeScope.key] });
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts', filter }, (payload: any) => {
+        const deletedId = payload.old?.id;
+        if (!deletedId) return;
+        queryClient.setQueryData(roomQueryKey, (current: any) => current?.posts ? {
+          ...current,
+          posts: current.posts.filter((post: any) => post.id !== deletedId),
+        } : current);
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [queryClient, activeScope.type, activeScope.key]);
+  }, [queryClient, activeScope.type, activeScope.key, profileMap]);
 
 
   /* ─── Typing indicator ─── */
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id || readMobileTestSession()) return;
     const presenceChannel = supabase.channel(`typing-${activeScope.type}-${activeScope.key}`, {
-      config: { presence: { key: user.id } },
+      config: { broadcast: { self: false } },
     });
     presenceChannelRef.current = presenceChannel;
     presenceChannel
-      .on('presence', { event: 'sync' }, () => {
-        const state = presenceChannel.presenceState();
-        const typing: string[] = [];
-        Object.entries(state).forEach(([userId, presences]) => {
-          if (userId !== user?.id && (presences as any[])?.[0]?.typing) {
-            const name = (presences as any[])?.[0]?.name;
-            if (name) typing.push(name);
-          }
-        });
-        setTypingUsers(typing);
+      .on('broadcast', { event: 'typing' }, ({ payload }: any) => {
+        const remoteUserId = payload?.userId;
+        const name = payload?.name;
+        if (!remoteUserId || remoteUserId === user.id || !name) return;
+        setTypingUsers((current) => [...new Set([...current, name])].slice(0, 3));
+        const previousTimer = remoteTypingTimersRef.current.get(remoteUserId);
+        if (previousTimer) clearTimeout(previousTimer);
+        remoteTypingTimersRef.current.set(remoteUserId, setTimeout(() => {
+          setTypingUsers((current) => current.filter((item) => item !== name));
+          remoteTypingTimersRef.current.delete(remoteUserId);
+        }, 2500));
       })
       .subscribe();
     return () => {
       if (presenceChannelRef.current === presenceChannel) presenceChannelRef.current = null;
+      remoteTypingTimersRef.current.forEach(clearTimeout);
+      remoteTypingTimersRef.current.clear();
+      setTypingUsers([]);
       supabase.removeChannel(presenceChannel);
     };
   }, [user?.id, activeScope.type, activeScope.key]);
@@ -1066,11 +1097,14 @@ const Forum = () => {
     if (!user?.id || !profile?.name) return;
     const ch = presenceChannelRef.current;
     if (!ch) return;
-    void ch.track({ typing: true, name: profile.name });
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    typingTimeoutRef.current = setTimeout(() => {
-      void ch.track({ typing: false, name: profile.name });
-    }, 3000);
+    const now = Date.now();
+    if (now - typingLastSentRef.current < 1500) return;
+    typingLastSentRef.current = now;
+    void ch.send({
+      type: 'broadcast',
+      event: 'typing',
+      payload: { userId: user.id, name: profile.name },
+    });
   }, [user?.id, profile?.name]);
 
   // Auto-scroll on initial load
@@ -1092,6 +1126,7 @@ const Forum = () => {
     dismissKeyboard();
     setShowAttachMenu(false);
     setShowGifPicker(false);
+    setShowEmojiPicker(false);
     setShowFormatBar(false);
     setShowMentionSuggestions(false);
   }, [dismissKeyboard]);
@@ -1099,7 +1134,6 @@ const Forum = () => {
   const handleScroll = useCallback(async () => {
     const el = scrollContainerRef.current;
     if (!el) return;
-    dismissComposerOverlays();
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     setShowScrollDown(distFromBottom > 100);
     if (distFromBottom < 50) setNewMsgCount(0);
@@ -1133,7 +1167,7 @@ const Forum = () => {
         setLoadingOlder(false);
       }
     }
-  }, [loadingOlder, hasMoreOlder, posts, activeScope.type, activeScope.key, enrichPosts, dismissComposerOverlays]);
+  }, [loadingOlder, hasMoreOlder, posts, activeScope.type, activeScope.key, enrichPosts]);
 
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -1173,6 +1207,20 @@ const Forum = () => {
     if (lastAt !== -1) setContent(content.slice(0, lastAt) + `@${name} `);
     setShowMentionSuggestions(false);
     textareaRef.current?.focus();
+  };
+
+  const insertEmoji = (emoji: string) => {
+    const ta = textareaRef.current;
+    const start = ta?.selectionStart ?? content.length;
+    const end = ta?.selectionEnd ?? content.length;
+    const next = content.slice(0, start) + emoji + content.slice(end);
+    setContent(next);
+    setForumDraft(activeScope.type, activeScope.key, next);
+    setShowEmojiPicker(false);
+    requestAnimationFrame(() => {
+      ta?.focus();
+      ta?.setSelectionRange(start + emoji.length, start + emoji.length);
+    });
   };
 
   const insertFormatting = (wrapper: string) => {
@@ -1707,6 +1755,24 @@ const Forum = () => {
               <div className="mb-2 animate-fade-in"><GifPicker onSelect={handleGifSelect} onClose={() => setShowGifPicker(false)} /></div>
             )}
 
+            {/* Local-first emoji tray: instant, offline and zero egress */}
+            {showEmojiPicker && (
+              <div className="mb-2 flex items-center gap-1 overflow-x-auto scrollbar-hide rounded-2xl border border-border bg-card p-2 shadow-lg animate-fade-in">
+                {EMOJIS.map((emoji) => (
+                  <button key={emoji} type="button" onClick={() => insertEmoji(emoji)}
+                    className="w-10 h-10 flex-shrink-0 rounded-xl text-xl hover:bg-accent active:scale-90 transition-all"
+                    aria-label={`Insert ${emoji}`}>
+                    {emoji}
+                  </button>
+                ))}
+                <button type="button" onClick={() => { setShowEmojiPicker(false); setShowFormatBar(true); }}
+                  className="w-10 h-10 flex-shrink-0 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent"
+                  aria-label="Open formatting">
+                  <Bold className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
             {/* Mention suggestions */}
             {showMentionSuggestions && mentionSuggestions.length > 0 && (
               <div className="mb-2 bg-card border border-border rounded-lg shadow-lg overflow-hidden animate-fade-in">
@@ -1767,7 +1833,7 @@ const Forum = () => {
             {/* Input row - buttery smooth */}
             {!isRecordingVoice && (
               <div className="flex items-end gap-1.5">
-                <button onClick={() => { setShowAttachMenu(!showAttachMenu); setShowGifPicker(false); setShowFormatBar(false); dismissKeyboard(); }}
+                <button onClick={() => { setShowAttachMenu(!showAttachMenu); setShowGifPicker(false); setShowEmojiPicker(false); setShowFormatBar(false); dismissKeyboard(); }}
                   className={`w-10 h-10 flex items-center justify-center rounded-full flex-shrink-0 transition-all ${showAttachMenu ? "text-primary bg-primary/10 rotate-45" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}>
                   <Plus className="w-5 h-5" />
                 </button>
@@ -1778,7 +1844,7 @@ const Forum = () => {
                     value={content}
                     onChange={(e) => handleContentChange(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    onFocus={() => { setShowAttachMenu(false); restoreAll(); }}
+                    onFocus={() => { setShowAttachMenu(false); setShowGifPicker(false); setShowEmojiPicker(false); restoreAll(); }}
                     placeholder={`Message #${(activeScopeDef as any)?.label || "channel"}`}
                     rows={1}
                     style={{ transition: 'height 100ms ease' }}
@@ -1793,6 +1859,7 @@ const Forum = () => {
                         } else {
                           setShowGifPicker(true);
                           setShowAttachMenu(false);
+                          setShowEmojiPicker(false);
                           setShowFormatBar(false);
                           dismissKeyboard();
                         }
@@ -1801,9 +1868,19 @@ const Forum = () => {
                       className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${showGifPicker ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}>
                       {showGifPicker ? <Keyboard className="w-[18px] h-[18px]" /> : <Sticker className="w-[18px] h-[18px]" />}
                     </button>
-                    <button onClick={() => setShowFormatBar(!showFormatBar)}
-                      className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${showFormatBar ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}>
-                      <Bold className="w-4 h-4" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const opening = !showEmojiPicker;
+                        setShowEmojiPicker(opening);
+                        setShowGifPicker(false);
+                        setShowAttachMenu(false);
+                        setShowFormatBar(false);
+                        if (opening) dismissKeyboard();
+                      }}
+                      aria-label={showEmojiPicker ? "Close emojis" : "Open emojis"}
+                      className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${showEmojiPicker ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground"}`}>
+                      <Smile className="w-[18px] h-[18px]" />
                     </button>
                     <button
                       type="button"

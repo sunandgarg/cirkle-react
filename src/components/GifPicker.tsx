@@ -81,7 +81,6 @@ const GifPicker = ({ onSelect, onClose }: GifPickerProps) => {
             onChange={(e) => handleQueryChange(e.target.value)}
             placeholder={`Search ${activeTab}...`}
             className="h-8 pl-8 text-xs bg-secondary border-border rounded-lg"
-            autoFocus
           />
         </div>
       </div>
