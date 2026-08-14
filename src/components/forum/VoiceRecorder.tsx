@@ -1,14 +1,26 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Mic, Square, Trash2, Send, Pause, Play } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 interface VoiceRecorderProps {
   userId: string;
-  onSend: (voiceUrl: string, duration: number) => void;
+  onSend: (voiceUrl: string, duration: number) => Promise<void> | void;
   onCancel: () => void;
+  localOnly?: boolean;
 }
 
-const VoiceRecorder = ({ userId, onSend, onCancel }: VoiceRecorderProps) => {
+const getSupportedVoiceMimeType = () => {
+  if (typeof MediaRecorder === "undefined") return "";
+  return [
+    "audio/webm;codecs=opus",
+    "audio/mp4;codecs=mp4a.40.2",
+    "audio/mp4",
+    "audio/webm",
+  ].find((type) => MediaRecorder.isTypeSupported(type)) || "";
+};
+
+const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRecorderProps) => {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -19,51 +31,93 @@ const VoiceRecorder = ({ userId, onSend, onCancel }: VoiceRecorderProps) => {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const mountedRef = useRef(true);
+  const onCancelRef = useRef(onCancel);
+  const maxDuration = localOnly ? 120 : 300;
+
+  useEffect(() => { onCancelRef.current = onCancel; }, [onCancel]);
+
+  const releaseMedia = useCallback(() => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      void audioContextRef.current.close();
+    }
+    audioContextRef.current = null;
+    if (animFrameRef.current !== null) cancelAnimationFrame(animFrameRef.current);
+    animFrameRef.current = null;
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+  }, []);
 
   const startRecording = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const audioContext = new AudioContext();
-      const source = audioContext.createMediaStreamSource(stream);
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 64;
-      source.connect(analyser);
-      analyserRef.current = analyser;
-
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4",
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        throw new Error("Voice recording is not supported by this browser.");
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
+      streamRef.current = stream;
+      const mimeType = getSupportedVoiceMimeType();
+      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType, audioBitsPerSecond: 64000 } : undefined);
       mediaRecorderRef.current = mediaRecorder;
       chunksRef.current = [];
+
+      try {
+        const audioContext = new AudioContext();
+        audioContextRef.current = audioContext;
+        const source = audioContext.createMediaStreamSource(stream);
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 64;
+        source.connect(analyser);
+        analyserRef.current = analyser;
+      } catch {
+        analyserRef.current = null;
+      }
 
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
 
       mediaRecorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mediaRecorder.mimeType });
+        const blob = new Blob(chunksRef.current, { type: mediaRecorder.mimeType || mimeType || "audio/mp4" });
+        if (!mountedRef.current) return;
         setAudioBlob(blob);
         setAudioUrl(URL.createObjectURL(blob));
-        stream.getTracks().forEach((t) => t.stop());
-        audioContext.close();
-        if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+        releaseMedia();
+      };
+      mediaRecorder.onerror = () => {
+        releaseMedia();
+        toast.error("Recording stopped unexpectedly. Please try again.");
+        onCancelRef.current();
       };
 
-      mediaRecorder.start(100);
+      mediaRecorder.start(250);
       setIsRecording(true);
       setDuration(0);
       setWaveformData([]);
 
       timerRef.current = setInterval(() => {
-        setDuration((d) => d + 1);
+        setDuration((current) => {
+          const next = current + 1;
+          if (next >= maxDuration && mediaRecorder.state !== "inactive") {
+            mediaRecorder.stop();
+            setIsRecording(false);
+            setIsPaused(false);
+          }
+          return Math.min(next, maxDuration);
+        });
       }, 1000);
 
       // Waveform animation
       const updateWaveform = () => {
-        if (!analyserRef.current) return;
+        if (!analyserRef.current || mediaRecorderRef.current?.state === "inactive") return;
         const data = new Uint8Array(analyserRef.current.frequencyBinCount);
         analyserRef.current.getByteFrequencyData(data);
         const avg = data.reduce((a, b) => a + b, 0) / data.length;
@@ -71,13 +125,18 @@ const VoiceRecorder = ({ userId, onSend, onCancel }: VoiceRecorderProps) => {
         animFrameRef.current = requestAnimationFrame(updateWaveform);
       };
       updateWaveform();
-    } catch {
-      onCancel();
+    } catch (error) {
+      releaseMedia();
+      const message = error instanceof DOMException && error.name === "NotAllowedError"
+        ? "Microphone access is off. Allow it in Safari Settings, then try again."
+        : error instanceof Error ? error.message : "Could not start voice recording.";
+      toast.error(message);
+      onCancelRef.current();
     }
-  }, [onCancel]);
+  }, [maxDuration, releaseMedia]);
 
   const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current?.state === "recording") {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
     }
     setIsRecording(false);
@@ -101,18 +160,38 @@ const VoiceRecorder = ({ userId, onSend, onCancel }: VoiceRecorderProps) => {
     if (!audioBlob) return;
     setIsUploading(true);
     try {
-      const ext = audioBlob.type.includes("webm") ? "webm" : "mp4";
-      const path = `${userId}/${Date.now()}.${ext}`;
-      const { error: uploadError } = await supabase.storage.from("voice-notes").upload(path, audioBlob);
+      if (audioBlob.size === 0 || duration < 1) throw new Error("Record at least one second before sending.");
+      if (localOnly) {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not prepare this recording."));
+          reader.onerror = () => reject(new Error("Could not prepare this recording."));
+          reader.readAsDataURL(audioBlob);
+        });
+        await onSend(dataUrl, duration);
+        return;
+      }
+      const ext = audioBlob.type.includes("webm") ? "webm" : "m4a";
+      const path = `${userId}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+      const { error: uploadError } = await supabase.storage.from("voice-notes").upload(path, audioBlob, {
+        contentType: audioBlob.type || (ext === "webm" ? "audio/webm" : "audio/mp4"),
+        cacheControl: "31536000",
+        upsert: false,
+      });
       if (uploadError) throw uploadError;
       const { data: urlData } = supabase.storage.from("voice-notes").getPublicUrl(path);
-      onSend(urlData.publicUrl, duration);
-    } catch {
-      // error handled by caller
+      try {
+        await onSend(urlData.publicUrl, duration);
+      } catch (error) {
+        await supabase.storage.from("voice-notes").remove([path]);
+        throw error;
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Voice note could not be sent. Please try again.");
     } finally {
       setIsUploading(false);
     }
-  }, [audioBlob, duration, userId, onSend]);
+  }, [audioBlob, duration, localOnly, userId, onSend]);
 
   const handleDiscard = useCallback(() => {
     stopRecording();
@@ -124,19 +203,27 @@ const VoiceRecorder = ({ userId, onSend, onCancel }: VoiceRecorderProps) => {
   }, [stopRecording, onCancel]);
 
   useEffect(() => {
+    mountedRef.current = true;
     startRecording();
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      mountedRef.current = false;
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      releaseMedia();
     };
-  }, []);
+  }, [releaseMedia, startRecording]);
+
+  useEffect(() => () => {
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+  }, [audioUrl]);
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
 
   return (
     <div className="flex items-center gap-2 w-full animate-fade-in">
       {/* Discard */}
-      <button onClick={handleDiscard} className="p-2 text-destructive hover:bg-destructive/10 rounded-full transition-colors">
+      <button onClick={handleDiscard} aria-label="Discard voice note" className="min-h-11 min-w-11 flex items-center justify-center text-destructive hover:bg-destructive/10 rounded-full transition-colors">
         <Trash2 className="w-5 h-5" />
       </button>
 
@@ -168,10 +255,10 @@ const VoiceRecorder = ({ userId, onSend, onCancel }: VoiceRecorderProps) => {
       {/* Actions */}
       {isRecording && !audioUrl ? (
         <div className="flex items-center gap-1">
-          <button onClick={togglePause} className="p-2 text-muted-foreground hover:text-foreground rounded-full hover:bg-secondary transition-colors">
+          <button onClick={togglePause} aria-label={isPaused ? "Resume recording" : "Pause recording"} className="min-h-11 min-w-11 flex items-center justify-center text-muted-foreground hover:text-foreground rounded-full hover:bg-secondary transition-colors">
             {isPaused ? <Play className="w-5 h-5" /> : <Pause className="w-5 h-5" />}
           </button>
-          <button onClick={stopRecording} className="p-2.5 bg-destructive text-destructive-foreground rounded-full hover:opacity-90 transition-opacity">
+          <button onClick={stopRecording} aria-label="Stop recording" className="min-h-11 min-w-11 flex items-center justify-center bg-destructive text-destructive-foreground rounded-full hover:opacity-90 transition-opacity">
             <Square className="w-4 h-4" />
           </button>
         </div>
@@ -179,7 +266,8 @@ const VoiceRecorder = ({ userId, onSend, onCancel }: VoiceRecorderProps) => {
         <button
           onClick={handleSend}
           disabled={isUploading}
-          className="p-2.5 bg-primary text-primary-foreground rounded-full hover:opacity-90 transition-opacity disabled:opacity-50"
+          aria-label={isUploading ? "Sending voice note" : "Send voice note"}
+          className="min-h-11 min-w-11 flex items-center justify-center bg-primary text-primary-foreground rounded-full hover:opacity-90 transition-opacity disabled:opacity-50"
         >
           <Send className="w-5 h-5" />
         </button>
@@ -195,26 +283,57 @@ export const VoicePlayback = ({ url, duration }: { url: string; duration: number
   const [playbackRate, setPlaybackRate] = useState(1);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const togglePlay = () => {
+  useEffect(() => () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.removeAttribute("src");
+      audioRef.current.load();
+      audioRef.current = null;
+    }
+  }, [url]);
+
+  const ensureAudio = () => {
     if (!audioRef.current) {
-      audioRef.current = new Audio(url);
-      audioRef.current.playbackRate = playbackRate;
-      audioRef.current.onended = () => {
+      const audio = new Audio(url);
+      audio.preload = "metadata";
+      audio.playbackRate = playbackRate;
+      audio.onended = () => {
         setIsPlaying(false);
         setProgress(0);
       };
-      audioRef.current.ontimeupdate = () => {
-        if (audioRef.current) {
-          setProgress(audioRef.current.currentTime / (audioRef.current.duration || 1));
-        }
+      audio.onpause = () => setIsPlaying(false);
+      audio.ontimeupdate = () => {
+        setProgress(audio.currentTime / (audio.duration || duration || 1));
       };
+      audio.onerror = () => {
+        setIsPlaying(false);
+        toast.error("This voice note could not be played.");
+      };
+      audioRef.current = audio;
     }
+    return audioRef.current;
+  };
+
+  const togglePlay = async () => {
+    const audio = ensureAudio();
     if (isPlaying) {
-      audioRef.current.pause();
-    } else {
-      audioRef.current.play();
+      audio.pause();
+      return;
     }
-    setIsPlaying(!isPlaying);
+    try {
+      await audio.play();
+      setIsPlaying(true);
+    } catch {
+      setIsPlaying(false);
+      toast.error("Tap play again or check Silent Mode and media permissions.");
+    }
+  };
+
+  const seekTo = (nextProgress: number) => {
+    const audio = ensureAudio();
+    const resolvedDuration = Number.isFinite(audio.duration) ? audio.duration : duration;
+    audio.currentTime = Math.max(0, Math.min(resolvedDuration, resolvedDuration * nextProgress));
+    setProgress(nextProgress);
   };
 
   const cycleSpeed = () => {
@@ -228,19 +347,23 @@ export const VoicePlayback = ({ url, duration }: { url: string; duration: number
 
   return (
     <div className="flex items-center gap-2 w-full">
-      <button onClick={togglePlay} className="p-1 text-primary hover:text-primary/80 transition-colors flex-shrink-0">
+      <button onClick={() => void togglePlay()} aria-label={isPlaying ? "Pause voice note" : "Play voice note"} className="min-h-9 min-w-9 flex items-center justify-center text-primary hover:text-primary/80 transition-colors flex-shrink-0 rounded-full">
         {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
       </button>
-      <div className="flex-1 h-1.5 bg-border rounded-full overflow-hidden">
-        <div
-          className="h-full bg-primary rounded-full transition-all"
-          style={{ width: `${progress * 100}%` }}
-        />
-      </div>
+      <input
+        type="range"
+        min="0"
+        max="1"
+        step="0.01"
+        value={progress}
+        onChange={(event) => seekTo(Number(event.target.value))}
+        aria-label="Voice note playback position"
+        className="flex-1 h-1.5 accent-primary cursor-pointer"
+      />
       <span className="text-[10px] font-mono text-muted-foreground min-w-[32px]">
         {formatTime(Math.round(duration * (1 - progress)))}
       </span>
-      <button onClick={cycleSpeed} className="text-[10px] font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded-full hover:bg-primary/20 transition-colors">
+      <button onClick={cycleSpeed} aria-label={`Playback speed ${playbackRate} times`} className="min-h-8 text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full hover:bg-primary/20 transition-colors">
         {playbackRate}x
       </button>
     </div>

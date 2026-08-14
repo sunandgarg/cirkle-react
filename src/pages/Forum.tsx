@@ -305,7 +305,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = 200;
-const FORUM_BUILD = "2026.08.14.12";
+const FORUM_BUILD = "2026.08.14.13";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -1325,21 +1325,53 @@ const Forum = () => {
 
   const handleVoiceSend = async (voiceUrl: string, duration: number) => {
     if (!user) return;
-    setIsRecordingVoice(false);
+    const testSession = readMobileTestSession();
+    if (testSession) {
+      const localPost = {
+        id: `test-voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        community_id: "test", scope_type: activeScope.type, scope_key: activeScope.key,
+        channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
+        content: "🎤 Voice message", is_anonymous: false, author_id: user.id,
+        created_at: new Date().toISOString(), voice_url: voiceUrl, voice_duration: duration,
+        image_url: null, file_url: null, reply_to_id: replyTo?.id || null,
+        deleted_at: null, is_deleted_for_everyone: false, seen_by: [], edited_at: null, pinned_at: null,
+        profile: { name: testSession.name || profile?.name || "Test User", avatar_url: null, slug: null },
+        poll: null, replyCount: 0, reactions: {}, myReactions: [],
+      };
+      setTestRoomPosts(appendForumTestPost(activeScope.type, activeScope.key, localPost));
+      setIsRecordingVoice(false);
+      setReplyTo(null);
+      requestAnimationFrame(() => scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" }));
+      return;
+    }
+
     try {
-      const { error } = await supabase.from("posts").insert({
+      const { data: newPost, error } = await supabase.from("posts").insert({
         community_id: "default", scope_type: activeScope.type, scope_key: activeScope.key,
         channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
         content: "🎤 Voice message", is_anonymous: false, author_id: user.id,
         voice_url: voiceUrl, voice_duration: duration,
         reply_to_id: replyTo?.id || null,
-      } as any);
+      } as any).select("*").single();
       if (error) throw error;
+      queryClient.setQueryData(
+        ["forum-posts", activeScope.type, activeScope.key],
+        (current: any) => {
+          const existing = current?.posts || [];
+          if (!newPost || existing.some((post: any) => post.id === newPost.id)) return current;
+          return {
+            posts: [...existing, { ...newPost, profile, replyCount: 0, reactions: {}, myReactions: [] }],
+            isDemo: false,
+            demos: [],
+          };
+        },
+      );
+      setIsRecordingVoice(false);
       setReplyTo(null);
-      queryClient.invalidateQueries({ queryKey: ["forum-posts"] });
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: ["forum-posts", activeScope.type, activeScope.key] }), 1200);
       setTimeout(() => scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" }), 300);
     } catch {
-      toast.error("Failed to send voice note");
+      throw new Error("The recording was saved, but the voice message could not be published.");
     }
   };
 
@@ -1793,7 +1825,7 @@ const Forum = () => {
             )}
 
             {/* Voice recorder */}
-            {isRecordingVoice && <VoiceRecorder userId={user?.id || ""} onSend={handleVoiceSend} onCancel={() => setIsRecordingVoice(false)} />}
+            {isRecordingVoice && <VoiceRecorder userId={user?.id || ""} localOnly={Boolean(readMobileTestSession())} onSend={handleVoiceSend} onCancel={() => setIsRecordingVoice(false)} />}
 
             {/* GIF picker */}
             {showGifPicker && (
@@ -1894,10 +1926,10 @@ const Forum = () => {
                     onChange={(e) => handleContentChange(e.target.value)}
                     onKeyDown={handleKeyDown}
                     onFocus={() => { setShowAttachMenu(false); setShowGifPicker(false); setShowEmojiPicker(false); restoreAll(); }}
-                    placeholder={`Message #${(activeScopeDef as any)?.label || "channel"}`}
+                    placeholder={(activeScopeDef as any)?.label || "Forum"}
                     rows={1}
                     style={{ transition: 'height 100ms ease' }}
-                    className="w-full min-h-[44px] max-h-[104px] bg-secondary/80 border border-border/45 rounded-[24px] text-[16px] resize-none py-2.5 px-4 pr-24 shadow-inner focus:outline-none focus:border-primary/25 focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground/60"
+                    className="w-full min-h-[44px] max-h-[104px] bg-secondary/80 border border-border/45 rounded-[24px] text-[16px] resize-none py-2.5 px-4 pr-24 shadow-inner focus:outline-none focus:border-primary/25 focus:ring-2 focus:ring-primary/10 placeholder:text-[14px] placeholder:font-medium placeholder:text-muted-foreground/60"
                   />
                   <div className="absolute right-1 bottom-1 flex items-center gap-0">
                     <button
@@ -1972,8 +2004,8 @@ const Forum = () => {
                     }
                   </button>
                 ) : (
-                  <button type="button" aria-label="Record voice message" onClick={() => setIsRecordingVoice(true)}
-                    className="w-10 h-10 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-accent flex-shrink-0 active:scale-95 transition-all duration-150">
+                  <button type="button" aria-label="Record voice message" onClick={() => { dismissKeyboard(); setShowAttachMenu(false); setShowEmojiPicker(false); setShowGifPicker(false); setIsRecordingVoice(true); }}
+                    className="w-11 h-11 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-accent flex-shrink-0 active:scale-95 transition-all duration-150">
                     <Mic className="w-4 h-4" />
                   </button>
                 )}

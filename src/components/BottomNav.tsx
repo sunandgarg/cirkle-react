@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Users, Waypoints, Briefcase, Calendar } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -23,6 +24,38 @@ const ALL_TABS = [
 const BottomNav = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const isEditable = (target: EventTarget | null) =>
+      target instanceof HTMLElement && Boolean(target.closest("input, textarea, [contenteditable='true']"));
+
+    const updateFromViewport = () => {
+      if (!viewport) return;
+      const keyboardHeight = window.innerHeight - viewport.height - viewport.offsetTop;
+      setKeyboardOpen(keyboardHeight > 120 || isEditable(document.activeElement));
+    };
+    const handleFocusIn = (event: FocusEvent) => {
+      if (isEditable(event.target)) setKeyboardOpen(true);
+    };
+    const handleFocusOut = () => {
+      window.setTimeout(() => {
+        if (!isEditable(document.activeElement)) updateFromViewport();
+      }, 80);
+    };
+
+    document.addEventListener("focusin", handleFocusIn);
+    document.addEventListener("focusout", handleFocusOut);
+    viewport?.addEventListener("resize", updateFromViewport);
+    viewport?.addEventListener("scroll", updateFromViewport);
+    return () => {
+      document.removeEventListener("focusin", handleFocusIn);
+      document.removeEventListener("focusout", handleFocusOut);
+      viewport?.removeEventListener("resize", updateFromViewport);
+      viewport?.removeEventListener("scroll", updateFromViewport);
+    };
+  }, []);
 
   const { data: navConfig } = useQuery({
     queryKey: ["nav-config"],
@@ -36,7 +69,12 @@ const BottomNav = () => {
   });
 
   return (
-    <nav className="z-50 safe-bottom lg:hidden" role="navigation" aria-label="Main navigation">
+    <nav
+      className={`z-50 safe-bottom lg:hidden overflow-hidden transition-[max-height,opacity,transform] duration-150 ${keyboardOpen ? "max-h-0 translate-y-2 opacity-0 pointer-events-none" : "max-h-20 translate-y-0 opacity-100"}`}
+      role="navigation"
+      aria-label="Main navigation"
+      aria-hidden={keyboardOpen}
+    >
       <div className="relative max-w-lg mx-auto">
         <div className="bg-card border-t border-border">
           <div className="flex items-center justify-around py-1.5 pb-2">
