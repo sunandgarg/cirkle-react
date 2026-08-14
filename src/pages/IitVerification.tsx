@@ -7,11 +7,11 @@ import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search, FileUp, Clock3, LockKeyhole } from "lucide-react";
+import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search, FileUp, Clock3, LockKeyhole, RefreshCw } from "lucide-react";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, IIT_LIST, iitLogoSettingKey, type IitInstitute } from "@/data/iitInstitutes";
-import { isEmailTestMode, MOBILE_TEST_OTP, readMobileTestSession, updateMobileTestSession } from "@/lib/mobileVerification";
+import { clearMobileTestSession, isEmailTestMode, MOBILE_TEST_OTP, readMobileTestSession, updateMobileTestSession } from "@/lib/mobileVerification";
 
 const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
   const [failed, setFailed] = useState(false);
@@ -75,10 +75,11 @@ const IitVerification = () => {
       const { data } = await supabase.from("app_settings").select("key,value").in("key", keys);
       return Object.fromEntries((data ?? []).map((item) => [item.key, item.value])) as Record<string, string>;
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 60 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
   });
 
-  const { data: latestDocumentSubmission } = useQuery({
+  const { data: latestDocumentSubmission, refetch: refetchDocumentSubmission, isFetching: checkingDocumentStatus } = useQuery({
     queryKey: ["my-document-verification", user?.id],
     queryFn: async () => {
       const { data, error } = await (supabase as any)
@@ -92,11 +93,16 @@ const IitVerification = () => {
       return data as { status: "pending" | "approved" | "rejected"; iit_name: string; student_status: string; review_notes?: string } | null;
     },
     enabled: !!user && !readMobileTestSession(),
-    staleTime: 15_000,
-    refetchInterval: 30_000,
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
   });
 
   useEffect(() => {
+    if (latestDocumentSubmission?.iit_name) {
+      const restoredIit = IIT_LIST.find((iit) => iit.name === latestDocumentSubmission.iit_name);
+      if (restoredIit) setSelectedIit(restoredIit);
+      setStudentStatus(latestDocumentSubmission.student_status);
+    }
     if (latestDocumentSubmission?.status === "pending") {
       setStep("documents_pending");
       return;
@@ -104,7 +110,7 @@ const IitVerification = () => {
     if (profile?.is_verified && !profile.onboarding_completed) {
       setStep("onboarding");
     }
-  }, [latestDocumentSubmission?.status, profile?.is_verified, profile?.onboarding_completed]);
+  }, [latestDocumentSubmission, profile?.is_verified, profile?.onboarding_completed]);
 
   const filteredIits = IIT_LIST.filter((iit) =>
     iit.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -347,6 +353,48 @@ const IitVerification = () => {
     }
   };
 
+  const handleCheckDocumentStatus = async () => {
+    if (readMobileTestSession()) {
+      toast.info("Your test submission is still pending");
+      return;
+    }
+    try {
+      const result = await refetchDocumentSubmission();
+      const submission = result.data;
+      if (submission?.status === "approved") {
+        await refetchProfile();
+        toast.success("Your document has been approved");
+        setStep("onboarding");
+      } else if (submission?.status === "rejected") {
+        setDocumentFile(null);
+        setStep("upload_documents");
+        toast.error(submission.review_notes || "Your document was not approved. Please submit another document.");
+      } else {
+        toast.info("Your verification is still being reviewed");
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Could not check verification status");
+    }
+  };
+
+  const handleReturnToLogin = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      if (readMobileTestSession()) {
+        clearMobileTestSession();
+        window.location.replace("/auth");
+        return;
+      }
+      const { error } = await supabase.auth.signOut({ scope: "local" });
+      if (error) throw error;
+      navigate("/auth", { replace: true });
+    } catch (error: any) {
+      toast.error(error.message || "Could not sign out. Please try again.");
+      setLoading(false);
+    }
+  };
+
   // Show onboarding wizard after verification
   if (step === "onboarding") {
     return (
@@ -368,7 +416,7 @@ const IitVerification = () => {
       <div className="px-4 pt-6 pb-4 flex items-center gap-3">
         <button
           onClick={() => {
-            if (step === "documents_pending") navigate("/auth", { replace: true });
+            if (step === "documents_pending") void handleReturnToLogin();
             else if (step === "upload_documents" || step === "verify_otp") setStep("verify_email");
             else if (step === "verify_email") setStep("select_status");
             else if (step === "select_status") setStep("select_iit");
@@ -535,7 +583,15 @@ const IitVerification = () => {
               <div className="flex items-center justify-between gap-3"><span className="text-sm font-semibold text-foreground">Review status</span><span className="text-xs font-semibold bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))] px-2.5 py-1 rounded-full">Pending</span></div>
               <p className="text-xs text-muted-foreground mt-2">No action is needed right now. Your document remains private.</p>
             </div>
-            <Button variant="outline" className="w-full h-11 rounded-xl mt-4" onClick={() => navigate("/auth", { replace: true })}>Return to login</Button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full mt-4">
+              <Button variant="outline" className="h-11 rounded-xl" onClick={handleCheckDocumentStatus} disabled={checkingDocumentStatus}>
+                <RefreshCw className={`w-4 h-4 mr-2 ${checkingDocumentStatus ? "animate-spin" : ""}`} />
+                {checkingDocumentStatus ? "Checking..." : "Check status"}
+              </Button>
+              <Button variant="ghost" className="h-11 rounded-xl" onClick={handleReturnToLogin} disabled={loading}>
+                {loading ? "Signing out..." : "Return to login"}
+              </Button>
+            </div>
           </div>
         )}
 

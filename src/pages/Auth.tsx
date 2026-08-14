@@ -32,7 +32,7 @@ const Auth = () => {
         navigate("/cirkle-forum", { replace: true });
       }
     }
-  }, [user, profile?.is_verified, authLoading, navigate]);
+  }, [user, profile?.is_verified, profile?.onboarding_completed, authLoading, navigate]);
 
   const handlePhoneChange = (value: string) => {
     setPhone(value.replace(/\D/g, "").slice(0, 10));
