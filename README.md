@@ -128,11 +128,27 @@ Continue developing this project in the [Lovable editor](https://lovable.dev/pro
 
 ## Development
 
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+Prefer working locally? You need Node.js 22 and pnpm 11.
 
 ```sh
 git clone <this-repository-url>
 cd <repository-name>
-npm i
-npm run dev
+corepack enable
+pnpm install --frozen-lockfile
+pnpm dev
 ```
+
+## Admin event scanning
+
+The Events control center supports manual creation and AI-assisted scanning with OpenAI, Gemini, or Claude. Scans import drafts only; an admin must review and publish every event.
+
+Deploy the database migration and Edge Function from an Owner or Administrator Supabase account:
+
+```sh
+supabase link --project-ref bugwubrwvlqayxwcazfd
+supabase db push --linked
+supabase secrets set OPENAI_API_KEY=... GEMINI_API_KEY=... ANTHROPIC_API_KEY=...
+supabase functions deploy scan-events
+```
+
+Only the provider keys you intend to use are required. Never place provider secrets in frontend environment variables or commit them to Git.

@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, Smartphone, Key, ToggleLeft, Briefcase, Plus, X, Pencil, Zap, ExternalLink, ClipboardCheck, Eye, XCircle, GraduationCap } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, Smartphone, Key, ToggleLeft, Briefcase, Plus, X, Pencil, Zap, ExternalLink, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { convertToWebP } from "@/lib/imageUtils";
 import { defaultIitLogo, IIT_LIST, iitLogoSettingKey } from "@/data/iitInstitutes";
+import AdminEvents from "@/components/admin/AdminEvents";
 
 const SUB_FILTERS: Record<string, string[]> = {
   "Full-time": ["0-1 yr", "1-3 yr", "3-5 yr", "5-7 yr", "7+ yr"],
@@ -505,9 +506,10 @@ const Admin = () => {
         </div>
 
         <Tabs defaultValue="users">
-          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-3 sm:grid-cols-7 gap-1 p-1">
+          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-4 sm:grid-cols-8 gap-1 p-1">
             <TabsTrigger value="users" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Users className="w-3.5 h-3.5 mr-1" /> Users</TabsTrigger>
             <TabsTrigger value="jobs" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Briefcase className="w-3.5 h-3.5 mr-1" /> Jobs</TabsTrigger>
+            <TabsTrigger value="events" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><CalendarDays className="w-3.5 h-3.5 mr-1" /> Events</TabsTrigger>
             <TabsTrigger value="posts" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><FileText className="w-3.5 h-3.5 mr-1" /> Posts</TabsTrigger>
             <TabsTrigger value="reports" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Ban className="w-3.5 h-3.5 mr-1" /> Reports</TabsTrigger>
             <TabsTrigger value="documents" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><ClipboardCheck className="w-3.5 h-3.5 mr-1" /> Documents</TabsTrigger>
@@ -569,6 +571,10 @@ const Admin = () => {
                 </div>
               ))}
             </div>
+          </TabsContent>
+
+          <TabsContent value="events" className="space-y-3">
+            <AdminEvents />
           </TabsContent>
 
           {/* Posts Tab */}

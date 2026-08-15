@@ -597,8 +597,69 @@ export type Database = {
         }
         Relationships: []
       }
+      event_scan_runs: {
+        Row: {
+          audience_mode: string
+          completed_at: string | null
+          created_at: string
+          discovered_count: number
+          error_message: string | null
+          id: string
+          imported_count: number
+          instructions: string | null
+          model: string
+          provider: string
+          requested_by: string
+          skipped_count: number
+          source_urls: string[]
+          status: string
+          target_courses: string[]
+          target_iits: string[]
+          target_specialisations: string[]
+        }
+        Insert: {
+          audience_mode?: string
+          completed_at?: string | null
+          created_at?: string
+          discovered_count?: number
+          error_message?: string | null
+          id?: string
+          imported_count?: number
+          instructions?: string | null
+          model: string
+          provider: string
+          requested_by: string
+          skipped_count?: number
+          source_urls?: string[]
+          status?: string
+          target_courses?: string[]
+          target_iits?: string[]
+          target_specialisations?: string[]
+        }
+        Update: {
+          audience_mode?: string
+          completed_at?: string | null
+          created_at?: string
+          discovered_count?: number
+          error_message?: string | null
+          id?: string
+          imported_count?: number
+          instructions?: string | null
+          model?: string
+          provider?: string
+          requested_by?: string
+          skipped_count?: number
+          source_urls?: string[]
+          status?: string
+          target_courses?: string[]
+          target_iits?: string[]
+          target_specialisations?: string[]
+        }
+        Relationships: []
+      }
       events: {
         Row: {
+          audience_mode: string
           community_id: string
           created_at: string
           created_by: string
@@ -606,10 +667,23 @@ export type Database = {
           end_time: string | null
           id: string
           location: string | null
+          organizer: string | null
+          published_at: string | null
+          registration_url: string | null
+          scan_run_id: string | null
+          source_fingerprint: string | null
+          source_type: string
+          source_url: string | null
           start_time: string
+          status: string
+          target_courses: string[]
+          target_iits: string[]
+          target_specialisations: string[]
           title: string
+          updated_at: string
         }
         Insert: {
+          audience_mode?: string
           community_id?: string
           created_at?: string
           created_by: string
@@ -617,10 +691,23 @@ export type Database = {
           end_time?: string | null
           id?: string
           location?: string | null
+          organizer?: string | null
+          published_at?: string | null
+          registration_url?: string | null
+          scan_run_id?: string | null
+          source_fingerprint?: string | null
+          source_type?: string
+          source_url?: string | null
           start_time: string
+          status?: string
+          target_courses?: string[]
+          target_iits?: string[]
+          target_specialisations?: string[]
           title: string
+          updated_at?: string
         }
         Update: {
+          audience_mode?: string
           community_id?: string
           created_at?: string
           created_by?: string
@@ -628,10 +715,30 @@ export type Database = {
           end_time?: string | null
           id?: string
           location?: string | null
+          organizer?: string | null
+          published_at?: string | null
+          registration_url?: string | null
+          scan_run_id?: string | null
+          source_fingerprint?: string | null
+          source_type?: string
+          source_url?: string | null
           start_time?: string
+          status?: string
+          target_courses?: string[]
+          target_iits?: string[]
+          target_specialisations?: string[]
           title?: string
+          updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "events_scan_run_id_fkey"
+            columns: ["scan_run_id"]
+            isOneToOne: false
+            referencedRelation: "event_scan_runs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       jobs: {
         Row: {
