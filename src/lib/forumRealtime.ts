@@ -62,3 +62,37 @@ export const applyForumRealtimeEvent = <T extends Record<string, any>>(
   }
   return insertInOrder(currentPosts, row).slice(-maxMessages);
 };
+
+/**
+ * Applies a burst as one cache transaction and one sort. This prevents a hot
+ * room from causing one React render and one browser-cache write per message.
+ */
+export const applyForumRealtimeBatch = <T extends Record<string, any>>(
+  currentPosts: T[],
+  events: ForumRealtimeEvent[],
+  scope: ForumScopeIdentity,
+  maxMessages = 1_200,
+): T[] => {
+  if (events.length === 0) return currentPosts;
+  const postsById = new Map(currentPosts.map((post) => [post.id, post]));
+
+  for (const event of events) {
+    if (event.eventType === "DELETE") {
+      if (event.old?.id) postsById.delete(event.old.id);
+      continue;
+    }
+
+    const row = event.new as T | undefined;
+    if (!row?.id) continue;
+    const belongsToRoom = row.scope_type === scope.type && row.scope_key === scope.key;
+    if (!belongsToRoom) {
+      if (event.eventType === "UPDATE") postsById.delete(row.id);
+      continue;
+    }
+
+    const existing = postsById.get(row.id);
+    postsById.set(row.id, existing ? { ...existing, ...row } : row);
+  }
+
+  return [...postsById.values()].sort(compareMessages).slice(-maxMessages);
+};

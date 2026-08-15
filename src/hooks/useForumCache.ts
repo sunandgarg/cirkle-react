@@ -1,30 +1,31 @@
 const CACHE_PREFIX = "forum_cache_";
 const CACHE_TS_PREFIX = "forum_cache_ts_";
 const MAX_CACHE_AGE_MS = 5 * 60 * 1000; // 5 minutes stale threshold
-const MAX_TOTAL_SIZE = 4 * 1024 * 1024; // 4MB guard
+const MAX_TOTAL_SIZE = 1024 * 1024; // keep localStorage lean; IndexedDB owns deep history
+const LOCAL_SNAPSHOT_MESSAGES = 100;
 
 // ─── Layer 1: In-memory singleton cache ───
 class MessageCacheStore {
   private cache = new Map<string, any[]>();
   private timestamps = new Map<string, number>();
 
-  getKey(scopeType: string, scopeKey: string) {
-    return `${scopeType}_${scopeKey}`;
+  getKey(scopeType: string, scopeKey: string, viewerId = "anonymous") {
+    return `${viewerId}_${scopeType}_${scopeKey}`;
   }
 
-  get(scopeType: string, scopeKey: string): any[] | null {
-    const key = this.getKey(scopeType, scopeKey);
+  get(scopeType: string, scopeKey: string, viewerId = "anonymous"): any[] | null {
+    const key = this.getKey(scopeType, scopeKey, viewerId);
     return this.cache.get(key) ?? null;
   }
 
-  set(scopeType: string, scopeKey: string, posts: any[]) {
-    const key = this.getKey(scopeType, scopeKey);
+  set(scopeType: string, scopeKey: string, posts: any[], viewerId = "anonymous") {
+    const key = this.getKey(scopeType, scopeKey, viewerId);
     this.cache.set(key, posts);
     this.timestamps.set(key, Date.now());
   }
 
-  isStale(scopeType: string, scopeKey: string): boolean {
-    const key = this.getKey(scopeType, scopeKey);
+  isStale(scopeType: string, scopeKey: string, viewerId = "anonymous"): boolean {
+    const key = this.getKey(scopeType, scopeKey, viewerId);
     const ts = this.timestamps.get(key);
     if (!ts) return true;
     return Date.now() - ts > MAX_CACHE_AGE_MS;
@@ -38,31 +39,31 @@ class MessageCacheStore {
 export const messageCache = new MessageCacheStore();
 
 // ─── Layer 2: localStorage cache ───
-export const getCachedPosts = (scopeType: string, scopeKey: string): any[] | null => {
+export const getCachedPosts = (scopeType: string, scopeKey: string, viewerId = "anonymous"): any[] | null => {
   // Try memory first
-  const memCached = messageCache.get(scopeType, scopeKey);
+  const memCached = messageCache.get(scopeType, scopeKey, viewerId);
   if (memCached) return memCached;
 
   // Fall back to localStorage
   try {
-    const key = `${CACHE_PREFIX}${scopeType}_${scopeKey}`;
+    const key = `${CACHE_PREFIX}${viewerId}_${scopeType}_${scopeKey}`;
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     // Populate memory cache too
-    messageCache.set(scopeType, scopeKey, parsed);
+    messageCache.set(scopeType, scopeKey, parsed, viewerId);
     return parsed;
   } catch {
     return null;
   }
 };
 
-export const isCacheStale = (scopeType: string, scopeKey: string): boolean => {
+export const isCacheStale = (scopeType: string, scopeKey: string, viewerId = "anonymous"): boolean => {
   // Check memory first
-  if (!messageCache.isStale(scopeType, scopeKey)) return false;
+  if (!messageCache.isStale(scopeType, scopeKey, viewerId)) return false;
 
   try {
-    const tsKey = `${CACHE_TS_PREFIX}${scopeType}_${scopeKey}`;
+    const tsKey = `${CACHE_TS_PREFIX}${viewerId}_${scopeType}_${scopeKey}`;
     const ts = localStorage.getItem(tsKey);
     if (!ts) return true;
     return Date.now() - parseInt(ts, 10) > MAX_CACHE_AGE_MS;
@@ -71,14 +72,14 @@ export const isCacheStale = (scopeType: string, scopeKey: string): boolean => {
   }
 };
 
-export const setCachedPosts = (scopeType: string, scopeKey: string, posts: any[]) => {
+export const setCachedPosts = (scopeType: string, scopeKey: string, posts: any[], viewerId = "anonymous") => {
   // Always set in memory
-  messageCache.set(scopeType, scopeKey, posts);
+  messageCache.set(scopeType, scopeKey, posts, viewerId);
 
   try {
-    const key = `${CACHE_PREFIX}${scopeType}_${scopeKey}`;
-    const tsKey = `${CACHE_TS_PREFIX}${scopeType}_${scopeKey}`;
-    const serialized = JSON.stringify(posts);
+    const key = `${CACHE_PREFIX}${viewerId}_${scopeType}_${scopeKey}`;
+    const tsKey = `${CACHE_TS_PREFIX}${viewerId}_${scopeType}_${scopeKey}`;
+    const serialized = JSON.stringify(posts.slice(-LOCAL_SNAPSHOT_MESSAGES));
     
     if (serialized.length > MAX_TOTAL_SIZE) return;
     

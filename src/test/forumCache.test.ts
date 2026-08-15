@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { appendForumTestPost, getForumTestPosts } from "@/hooks/useForumCache";
+import { appendForumTestPost, getCachedPosts, getForumTestPosts, setCachedPosts } from "@/hooks/useForumCache";
 
 describe("forum test-mode messages", () => {
   beforeEach(() => localStorage.clear());
@@ -36,5 +36,17 @@ describe("forum test-mode messages", () => {
     const posts = getForumTestPosts("GLOBAL", "IIT_ALL");
     expect(posts).toHaveLength(100);
     expect(posts[0].id).toBe("test-5");
+  });
+
+  it("isolates recent room snapshots per signed-in user and keeps localStorage lean", () => {
+    const messages = Array.from({ length: 125 }, (_, index) => ({ id: `message-${index}` }));
+    setCachedPosts("CAMPUS", "IIT_DELHI", messages, "viewer-a");
+    setCachedPosts("CAMPUS", "IIT_DELHI", [{ id: "viewer-b-message" }], "viewer-b");
+
+    expect(getCachedPosts("CAMPUS", "IIT_DELHI", "viewer-a")).toHaveLength(125);
+    expect(getCachedPosts("CAMPUS", "IIT_DELHI", "viewer-b")).toEqual([{ id: "viewer-b-message" }]);
+    const persisted = JSON.parse(localStorage.getItem("forum_cache_viewer-a_CAMPUS_IIT_DELHI") || "[]");
+    expect(persisted).toHaveLength(100);
+    expect(persisted[0].id).toBe("message-25");
   });
 });

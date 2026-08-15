@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyForumRealtimeEvent } from "@/lib/forumRealtime";
+import { applyForumRealtimeBatch, applyForumRealtimeEvent } from "@/lib/forumRealtime";
 
 type VirtualAgent = {
   id: string;
@@ -23,32 +23,34 @@ describe("forum burst and isolation simulation", () => {
     const coldAgents = agents.filter((agent) => agent.room !== hotRoom);
     expect(hotAgents).toHaveLength(1_000);
 
-    const startedAt = performance.now();
-    for (let sequence = 0; sequence < 1_000; sequence += 1) {
-      const message = {
+    const burst = Array.from({ length: 1_000 }, (_, sequence) => ({
+      eventType: "INSERT" as const,
+      new: {
         id: `hot-${sequence}`,
         scope_type: "CAMPUS",
         scope_key: "ZONE_0",
         author_id: hotAgents[sequence].id,
         content: `Concurrent message ${sequence}`,
         created_at: new Date(1_800_000_000_000 + sequence).toISOString(),
-      };
-      for (const agent of hotAgents) {
-        agent.inbox = applyForumRealtimeEvent(
-          agent.inbox,
-          { eventType: "INSERT", new: message },
-          { type: "CAMPUS", key: "ZONE_0" },
-          50,
-        );
-      }
+      },
+    }));
+
+    const startedAt = performance.now();
+    for (const agent of hotAgents) {
+      agent.inbox = applyForumRealtimeBatch(
+        agent.inbox,
+        burst,
+        { type: "CAMPUS", key: "ZONE_0" },
+        1_200,
+      );
     }
     const elapsedMs = performance.now() - startedAt;
 
     for (const agent of hotAgents) {
-      expect(agent.inbox).toHaveLength(50);
-      expect(agent.inbox[0].id).toBe("hot-950");
-      expect(agent.inbox[49].id).toBe("hot-999");
-      expect(new Set(agent.inbox.map((message) => message.id)).size).toBe(50);
+      expect(agent.inbox).toHaveLength(1_000);
+      expect(agent.inbox[0].id).toBe("hot-0");
+      expect(agent.inbox[999].id).toBe("hot-999");
+      expect(new Set(agent.inbox.map((message) => message.id)).size).toBe(1_000);
     }
     expect(coldAgents.every((agent) => agent.inbox.length === 0)).toBe(true);
 
@@ -60,7 +62,8 @@ describe("forum burst and isolation simulation", () => {
       hotRoomAgents: hotAgents.length,
       publishedMessages: 1_000,
       routedDeliveries: hotAgents.length * 1_000,
-      retainedPerClient: 50,
+      retainedPerClient: 1_000,
+      clientCacheTransactions: hotAgents.length,
       elapsedMs: Math.round(elapsedMs),
     }));
   }, 30_000);

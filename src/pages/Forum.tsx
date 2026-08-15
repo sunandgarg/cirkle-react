@@ -38,14 +38,18 @@ import {
   type CanonicalAcademicIdentity, type ForumScope as ScopeDef,
 } from "@/lib/forumScopes";
 import { hasMobileTestAcademicProfile, readMobileTestSession } from "@/lib/mobileVerification";
-import { applyForumRealtimeEvent, type ForumRealtimeEvent } from "@/lib/forumRealtime";
+import { applyForumRealtimeBatch, type ForumRealtimeEvent } from "@/lib/forumRealtime";
 import { acknowledgeForumPost } from "@/lib/forumMessages";
+import {
+  MAX_ROOM_HISTORY, mergeForumHistoryPosts, persistForumHistory, readForumHistory,
+} from "@/lib/forumHistoryCache";
 
 const EMOJIS = ["❤️", "🔥", "👍", "😂", "💯", "😮", "😢", "🎉"];
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
 );
 const QUICK_REACTIONS = ["❤️", "🔥", "👍", "😂", "💯"];
+const FORUM_POST_COLUMNS = "id,community_id,scope_type,scope_key,channel,content,is_anonymous,author_id,created_at,image_url,reply_to_id,file_url,file_name,file_size,file_type,deleted_at,deleted_for_users,is_deleted_for_everyone,edited_at,pinned_at,voice_url,voice_duration";
 
 /* ─── Color helpers ─── */
 const DISCORD_COLORS = [
@@ -80,7 +84,7 @@ const getDateLabel = (dateStr: string): string => {
 
 /* ─── Build query for a scope ─── */
 const buildScopeQuery = (scopeType: string, scopeKey: string, limit = 50, beforeDate?: string) => {
-  let q = supabase.from("posts").select("*")
+  let q = supabase.from("posts").select(FORUM_POST_COLUMNS)
     .is("reply_to_id", null)
     .is("deleted_at", null)
     .eq("scope_type", scopeType)
@@ -299,8 +303,8 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 };
 
 const PAGE_SIZE = 50;
-const MAX_RENDERED = 200;
-const FORUM_BUILD = "2026.08.14.13";
+const MAX_RENDERED = MAX_ROOM_HISTORY;
+const FORUM_BUILD = "2026.08.15.1";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -365,6 +369,7 @@ const Forum = () => {
   const hasScrolledRef = useRef(false);
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const prevPostCountRef = useRef(0);
+  const shouldFollowLiveRef = useRef(true);
 
   // Slow mode state
   const [slowModeEnabled, setSlowModeEnabled] = useState(false);
@@ -659,8 +664,12 @@ const Forum = () => {
   }, [user?.id]);
 
   /* ─── Posts query with localStorage cache ─── */
+  const initialCachedPosts = useMemo(
+    () => readMobileTestSession() ? null : getCachedPosts(activeScope.type, activeScope.key, user?.id),
+    [activeScope.type, activeScope.key, user?.id],
+  );
   const { data: postsData, isLoading } = useQuery({
-    queryKey: ["forum-posts", activeScope.type, activeScope.key],
+    queryKey: ["forum-posts", user?.id, activeScope.type, activeScope.key],
     queryFn: async () => {
       // Test accounts are a fully local sandbox. Do not wait for Supabase or let
       // an unavailable/partially-migrated backend hide the room from testers.
@@ -674,21 +683,47 @@ const Forum = () => {
       const q = buildScopeQuery(activeScope.type, activeScope.key, PAGE_SIZE);
       const { data: rawPosts, error } = await q;
       if (error) throw error;
+      const history = user?.id
+        ? await readForumHistory<any>(user.id, activeScope.type, activeScope.key)
+        : [];
       if (!rawPosts || rawPosts.length === 0) {
-        // Real empty: return marker so empty-state UI can show
+        if (history.length > 0) {
+          setCachedPosts(activeScope.type, activeScope.key, history, user?.id);
+          return { posts: history, isDemo: false, demos: [] };
+        }
+        // Real empty: return marker so empty-state UI can show.
         return { posts: [], isDemo: activeScope.type === "GLOBAL", demos: activeScope.type === "GLOBAL" ? DEMO_MESSAGES : [] };
       }
       const enriched = (await enrichPosts(rawPosts as any[])).reverse();
-      setCachedPosts(activeScope.type, activeScope.key, enriched);
+      const merged = mergeForumHistoryPosts(history, enriched);
+      setCachedPosts(activeScope.type, activeScope.key, merged, user?.id);
+      if (user?.id) void persistForumHistory(user.id, activeScope.type, activeScope.key, merged);
       if ((rawPosts as any[]).length < PAGE_SIZE) setHasMoreOlder(false);
-      return { posts: enriched, isDemo: false, demos: [] };
+      return { posts: merged, isDemo: false, demos: [] };
     },
-    placeholderData: () => {
-      const cached = getCachedPosts(activeScope.type, activeScope.key);
-      return cached ? { posts: cached, isDemo: false, demos: [] } : undefined;
-    },
-    staleTime: 15000,
+    initialData: initialCachedPosts
+      ? { posts: initialCachedPosts, isDemo: false, demos: [] }
+      : undefined,
+    initialDataUpdatedAt: initialCachedPosts ? Date.now() : undefined,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
+
+  // Hydrate deeper browser history without delaying the first paint or waiting
+  // for a server response. The latest localStorage snapshot stays synchronous.
+  useEffect(() => {
+    if (!user?.id || readMobileTestSession()) return;
+    let cancelled = false;
+    void readForumHistory<any>(user.id, activeScope.type, activeScope.key).then((history) => {
+      if (cancelled || history.length === 0) return;
+      queryClient.setQueryData(["forum-posts", user.id, activeScope.type, activeScope.key], (current: any) => {
+        const merged = mergeForumHistoryPosts(history, current?.posts || []);
+        setCachedPosts(activeScope.type, activeScope.key, merged, user.id);
+        return { ...current, posts: merged, isDemo: false, demos: [] };
+      });
+    });
+    return () => { cancelled = true; };
+  }, [activeScope.type, activeScope.key, queryClient, user?.id]);
 
   // Merge older pages on top
   const posts = useMemo(() => {
@@ -710,8 +745,12 @@ const Forum = () => {
     if (prevPostCountRef.current > 0 && currentCount > prevPostCountRef.current) {
       const el = scrollContainerRef.current;
       if (el) {
-        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        if (distFromBottom > 100) {
+        if (shouldFollowLiveRef.current) {
+          requestAnimationFrame(() => {
+            el.scrollTop = el.scrollHeight;
+            setNewMsgCount(0);
+          });
+        } else {
           setNewMsgCount(prev => Math.min(prev + (currentCount - prevPostCountRef.current), 99));
         }
       }
@@ -843,11 +882,12 @@ const Forum = () => {
         ));
       } else if (result?.serverPost) {
         queryClient.setQueryData(
-          ["forum-posts", result.scopeType, result.scopeKey],
+          ["forum-posts", user?.id, result.scopeType, result.scopeKey],
           (current: any) => {
             const existing = current?.posts || [];
-            const nextPosts = acknowledgeForumPost(existing, result.serverPost, PAGE_SIZE);
-            setCachedPosts(result.scopeType, result.scopeKey, nextPosts);
+            const nextPosts = acknowledgeForumPost(existing, result.serverPost, MAX_ROOM_HISTORY);
+            setCachedPosts(result.scopeType, result.scopeKey, nextPosts, user?.id);
+            if (user?.id) void persistForumHistory(user.id, result.scopeType, result.scopeKey, nextPosts);
             return { ...current, posts: nextPosts, isDemo: false, demos: [] };
           },
         );
@@ -975,38 +1015,79 @@ const Forum = () => {
   useEffect(() => {
     if (readMobileTestSession()) return;
     const filter = `scope_key=eq.${activeScope.key}`;
-    const roomQueryKey = ["forum-posts", activeScope.type, activeScope.key] as const;
-    const applyRoomEvent = (event: ForumRealtimeEvent) => {
+    const roomQueryKey = ["forum-posts", user?.id, activeScope.type, activeScope.key] as const;
+    const pendingEvents: ForumRealtimeEvent[] = [];
+    let flushFrame: number | null = null;
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    let historyPersistTimer: ReturnType<typeof setTimeout> | null = null;
+    let latestHistorySnapshot: any[] = [];
+    const scheduleHistoryPersistence = (posts: any[]) => {
+      if (!user?.id) return;
+      latestHistorySnapshot = posts;
+      if (historyPersistTimer !== null) clearTimeout(historyPersistTimer);
+      historyPersistTimer = setTimeout(() => {
+        historyPersistTimer = null;
+        void persistForumHistory(user.id, activeScope.type, activeScope.key, latestHistorySnapshot);
+      }, 400);
+    };
+    const flushRoomEvents = () => {
+      flushFrame = null;
+      flushTimer = null;
+      if (pendingEvents.length === 0) return;
+      const events = pendingEvents.splice(0, pendingEvents.length);
       queryClient.setQueryData(roomQueryKey, (current: any) => {
         if (!current?.posts) return current;
-        const nextEvent = event.eventType === "INSERT" && event.new ? {
+        const enrichedEvents = events.map((event) => event.eventType === "INSERT" && event.new ? {
           ...event,
           new: {
             ...event.new,
-            profile: profileMap.get(event.new.author_id) || null,
-            poll: null,
-            replyCount: 0,
-            reactions: {},
-            myReactions: [],
+            profile: event.new.profile || profileMap.get(event.new.author_id) || null,
+            poll: event.new.poll || null,
+            replyCount: event.new.replyCount || 0,
+            reactions: event.new.reactions || {},
+            myReactions: event.new.myReactions || [],
           },
-        } : event;
-        const nextPosts = applyForumRealtimeEvent(
+        } : event);
+        const nextPosts = applyForumRealtimeBatch(
           current.posts,
-          nextEvent,
+          enrichedEvents,
           { type: activeScope.type, key: activeScope.key },
-          PAGE_SIZE,
+          MAX_ROOM_HISTORY,
         );
-        setCachedPosts(activeScope.type, activeScope.key, nextPosts);
-        return {
-          ...current,
-          posts: nextPosts,
-        };
+        setCachedPosts(activeScope.type, activeScope.key, nextPosts, user?.id);
+        scheduleHistoryPersistence(nextPosts);
+        return { ...current, posts: nextPosts };
       });
+    };
+    const applyRoomEvent = (event: ForumRealtimeEvent) => {
+      pendingEvents.push(event);
+      if (flushFrame !== null || flushTimer !== null) return;
+      if (typeof requestAnimationFrame === "function") flushFrame = requestAnimationFrame(flushRoomEvents);
+      else flushTimer = setTimeout(flushRoomEvents, 16);
     };
     let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
     let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
     let fallbackStarted = false;
     let disposed = false;
+    const recoverMissedMessages = async () => {
+      if (disposed) return;
+      const current = queryClient.getQueryData<any>(roomQueryKey);
+      const latest = current?.posts?.[current.posts.length - 1];
+      if (!latest?.created_at) return;
+      const { data, error } = await supabase.from("posts")
+        .select(FORUM_POST_COLUMNS)
+        .eq("scope_type", activeScope.type)
+        .eq("scope_key", activeScope.key)
+        .is("reply_to_id", null)
+        .is("deleted_at", null)
+        .gt("created_at", latest.created_at)
+        .order("created_at", { ascending: false })
+        .limit(MAX_ROOM_HISTORY);
+      if (disposed || error || !data?.length) return;
+      const enriched = await enrichPosts(data as any[]);
+      enriched.forEach((post) => applyRoomEvent({ eventType: "INSERT", new: post }));
+      flushRoomEvents();
+    };
     const startPostgresFallback = () => {
       if (fallbackStarted || disposed) return;
       fallbackStarted = true;
@@ -1020,7 +1101,9 @@ const Forum = () => {
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts', filter }, (payload: any) => {
         applyRoomEvent({ eventType: "DELETE", old: payload.old || {} });
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") void recoverMissedMessages();
+      });
     };
 
     // Broadcast is Supabase's recommended scalable path. The capability RPC
@@ -1047,6 +1130,10 @@ const Forum = () => {
           applyRoomEvent({ eventType: "DELETE", old: payload.old || payload.payload?.old || {} });
         })
         .subscribe((status) => {
+          if (status === "SUBSCRIBED") {
+            void recoverMissedMessages();
+            return;
+          }
           if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
             startPostgresFallback();
           }
@@ -1055,10 +1142,17 @@ const Forum = () => {
 
     return () => {
       disposed = true;
+      if (flushFrame !== null) cancelAnimationFrame(flushFrame);
+      if (flushTimer !== null) clearTimeout(flushTimer);
+      flushRoomEvents();
+      if (historyPersistTimer !== null) clearTimeout(historyPersistTimer);
+      if (user?.id && latestHistorySnapshot.length > 0) {
+        void persistForumHistory(user.id, activeScope.type, activeScope.key, latestHistorySnapshot);
+      }
       if (broadcastChannel) supabase.removeChannel(broadcastChannel);
       if (fallbackChannel) supabase.removeChannel(fallbackChannel);
     };
-  }, [queryClient, activeScope.type, activeScope.key, profileMap]);
+  }, [queryClient, activeScope.type, activeScope.key, enrichPosts, profileMap, user?.id]);
 
 
   /* ─── Typing indicator ─── */
@@ -1136,6 +1230,7 @@ const Forum = () => {
     const el = scrollContainerRef.current;
     if (!el) return;
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    shouldFollowLiveRef.current = distFromBottom < 120;
     setShowScrollDown(distFromBottom > 100);
     if (distFromBottom < 50) setNewMsgCount(0);
 
@@ -1154,7 +1249,8 @@ const Forum = () => {
           setHasMoreOlder(false);
         } else {
           const enriched = (await enrichPosts(olderArr)).reverse();
-          setOlderPages(prev => [...enriched, ...prev]);
+          setOlderPages(prev => mergeForumHistoryPosts(enriched, prev));
+          if (user?.id) void persistForumHistory(user.id, activeScope.type, activeScope.key, enriched);
           if (olderArr.length < PAGE_SIZE) setHasMoreOlder(false);
           // Preserve scroll position
           requestAnimationFrame(() => {
@@ -1168,7 +1264,7 @@ const Forum = () => {
         setLoadingOlder(false);
       }
     }
-  }, [loadingOlder, hasMoreOlder, posts, activeScope.type, activeScope.key, enrichPosts]);
+  }, [loadingOlder, hasMoreOlder, posts, activeScope.type, activeScope.key, enrichPosts, user?.id]);
 
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -1313,14 +1409,15 @@ const Forum = () => {
       } as any).select("*").single();
       if (error) throw error;
       queryClient.setQueryData(
-        ["forum-posts", activeScope.type, activeScope.key],
+        ["forum-posts", user?.id, activeScope.type, activeScope.key],
         (current: any) => {
           const existing = current?.posts || [];
           if (!newPost) return current;
           const nextPosts = acknowledgeForumPost(existing, {
             ...newPost, profile, replyCount: 0, reactions: {}, myReactions: [],
-          }, PAGE_SIZE);
-          setCachedPosts(activeScope.type, activeScope.key, nextPosts);
+          }, MAX_ROOM_HISTORY);
+          setCachedPosts(activeScope.type, activeScope.key, nextPosts, user?.id);
+          if (user?.id) void persistForumHistory(user.id, activeScope.type, activeScope.key, nextPosts);
           return {
             ...current,
             posts: nextPosts,
@@ -1350,6 +1447,7 @@ const Forum = () => {
     if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); setHighlightedPostId(postId); setTimeout(() => setHighlightedPostId(null), 2000); }
   };
   const scrollToBottom = () => {
+    shouldFollowLiveRef.current = true;
     scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" });
     setNewMsgCount(0);
   };
@@ -2354,7 +2452,7 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
     <div
       ref={(el) => { messageRefs.current[post.id] = el; messageRef.current = el; }}
       className={`forum-message-row relative transition-colors duration-300 ${isHighlighted ? 'bg-primary/5' : ''} ${isGrouped ? '' : 'mt-[2px]'}`}
-      style={{ transform: `translateX(${swipeOffset}px)`, transition: swipeOffset === 0 ? 'transform 0.18s ease-out' : 'none', touchAction: 'pan-y pinch-zoom', WebkitTouchCallout: 'none' } as React.CSSProperties}
+      style={{ transform: `translateX(${swipeOffset}px)`, transition: swipeOffset === 0 ? 'transform 0.18s ease-out' : 'none', touchAction: 'pan-y pinch-zoom', WebkitTouchCallout: 'none', contentVisibility: 'auto', containIntrinsicSize: '0 76px' } as React.CSSProperties}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={(e) => finishPointerGesture(e)}
@@ -2559,14 +2657,10 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
 /* FIX 6: React.memo with custom comparator */
 const MemoizedDiscordMessage = React.memo(DiscordMessage, (prev, next) => {
   return (
-    prev.post.id === next.post.id &&
-    prev.post.reactions === next.post.reactions &&
-    prev.post.replyCount === next.post.replyCount &&
+    prev.post === next.post &&
     prev.isUserPinned === next.isUserPinned &&
     prev.highlightedPostId === next.highlightedPostId &&
-    prev.isGrouped === next.isGrouped &&
-    prev.post.edited_at === next.post.edited_at &&
-    prev.post.is_deleted_for_everyone === next.post.is_deleted_for_everyone
+    prev.isGrouped === next.isGrouped
   );
 });
 
