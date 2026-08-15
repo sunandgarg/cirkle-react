@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Mic, Square, Trash2, Send, Pause, Play } from "lucide-react";
+import { Trash2, Send, Pause, Play, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -38,9 +38,13 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRec
   const audioContextRef = useRef<AudioContext | null>(null);
   const mountedRef = useRef(true);
   const onCancelRef = useRef(onCancel);
+  const onSendRef = useRef(onSend);
+  const durationRef = useRef(0);
+  const sendAfterStopRef = useRef(false);
   const maxDuration = localOnly ? 120 : 300;
 
   useEffect(() => { onCancelRef.current = onCancel; }, [onCancel]);
+  useEffect(() => { onSendRef.current = onSend; }, [onSend]);
 
   const releaseMedia = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -54,6 +58,42 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRec
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = null;
   }, []);
+
+  const uploadVoice = useCallback(async (blob: Blob, seconds: number) => {
+    setIsUploading(true);
+    try {
+      if (blob.size === 0 || seconds < 1) throw new Error("Record at least one second before sending.");
+      if (localOnly) {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not prepare this recording."));
+          reader.onerror = () => reject(new Error("Could not prepare this recording."));
+          reader.readAsDataURL(blob);
+        });
+        await onSendRef.current(dataUrl, seconds);
+        return;
+      }
+      const ext = blob.type.includes("webm") ? "webm" : "m4a";
+      const path = `${userId}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+      const { error: uploadError } = await supabase.storage.from("voice-notes").upload(path, blob, {
+        contentType: blob.type || (ext === "webm" ? "audio/webm" : "audio/mp4"),
+        cacheControl: "31536000",
+        upsert: false,
+      });
+      if (uploadError) throw uploadError;
+      const { data: urlData } = supabase.storage.from("voice-notes").getPublicUrl(path);
+      try {
+        await onSendRef.current(urlData.publicUrl, seconds);
+      } catch (error) {
+        await supabase.storage.from("voice-notes").remove([path]);
+        throw error;
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Voice note could not be sent. Please try again.");
+    } finally {
+      if (mountedRef.current) setIsUploading(false);
+    }
+  }, [localOnly, userId]);
 
   const startRecording = useCallback(async () => {
     try {
@@ -88,9 +128,14 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRec
       mediaRecorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: mediaRecorder.mimeType || mimeType || "audio/mp4" });
         if (!mountedRef.current) return;
+        const recordedDuration = Math.max(1, durationRef.current);
         setAudioBlob(blob);
         setAudioUrl(URL.createObjectURL(blob));
         releaseMedia();
+        if (sendAfterStopRef.current) {
+          sendAfterStopRef.current = false;
+          void uploadVoice(blob, recordedDuration);
+        }
       };
       mediaRecorder.onerror = () => {
         releaseMedia();
@@ -101,11 +146,13 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRec
       mediaRecorder.start(250);
       setIsRecording(true);
       setDuration(0);
+      durationRef.current = 0;
       setWaveformData([]);
 
       timerRef.current = setInterval(() => {
         setDuration((current) => {
           const next = current + 1;
+          durationRef.current = Math.min(next, maxDuration);
           if (next >= maxDuration && mediaRecorder.state !== "inactive") {
             mediaRecorder.stop();
             setIsRecording(false);
@@ -133,7 +180,7 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRec
       toast.error(message);
       onCancelRef.current();
     }
-  }, [maxDuration, releaseMedia]);
+  }, [maxDuration, releaseMedia, uploadVoice]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
@@ -148,56 +195,45 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRec
     if (!mediaRecorderRef.current) return;
     if (isPaused) {
       mediaRecorderRef.current.resume();
-      timerRef.current = setInterval(() => setDuration((d) => d + 1), 1000);
+      timerRef.current = setInterval(() => setDuration((current) => {
+        const next = Math.min(current + 1, maxDuration);
+        durationRef.current = next;
+        return next;
+      }), 1000);
     } else {
       mediaRecorderRef.current.pause();
       if (timerRef.current) clearInterval(timerRef.current);
     }
     setIsPaused(!isPaused);
-  }, [isPaused]);
+  }, [isPaused, maxDuration]);
 
   const handleSend = useCallback(async () => {
     if (!audioBlob) return;
-    setIsUploading(true);
-    try {
-      if (audioBlob.size === 0 || duration < 1) throw new Error("Record at least one second before sending.");
-      if (localOnly) {
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not prepare this recording."));
-          reader.onerror = () => reject(new Error("Could not prepare this recording."));
-          reader.readAsDataURL(audioBlob);
-        });
-        await onSend(dataUrl, duration);
-        return;
-      }
-      const ext = audioBlob.type.includes("webm") ? "webm" : "m4a";
-      const path = `${userId}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
-      const { error: uploadError } = await supabase.storage.from("voice-notes").upload(path, audioBlob, {
-        contentType: audioBlob.type || (ext === "webm" ? "audio/webm" : "audio/mp4"),
-        cacheControl: "31536000",
-        upsert: false,
-      });
-      if (uploadError) throw uploadError;
-      const { data: urlData } = supabase.storage.from("voice-notes").getPublicUrl(path);
-      try {
-        await onSend(urlData.publicUrl, duration);
-      } catch (error) {
-        await supabase.storage.from("voice-notes").remove([path]);
-        throw error;
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Voice note could not be sent. Please try again.");
-    } finally {
-      setIsUploading(false);
+    await uploadVoice(audioBlob, duration);
+  }, [audioBlob, duration, uploadVoice]);
+
+  const sendCurrentRecording = useCallback(() => {
+    if (isUploading) return;
+    if (audioBlob) {
+      void handleSend();
+      return;
     }
-  }, [audioBlob, duration, localOnly, userId, onSend]);
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") return;
+    if (durationRef.current < 1) {
+      toast("Keep recording for a moment before sending.");
+      return;
+    }
+    sendAfterStopRef.current = true;
+    stopRecording();
+  }, [audioBlob, handleSend, isUploading, stopRecording]);
 
   const handleDiscard = useCallback(() => {
     stopRecording();
     setAudioBlob(null);
     setAudioUrl(null);
     setDuration(0);
+    durationRef.current = 0;
+    sendAfterStopRef.current = false;
     setWaveformData([]);
     onCancel();
   }, [stopRecording, onCancel]);
@@ -221,19 +257,24 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRec
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
 
   return (
-    <div className="flex items-center gap-2 w-full animate-fade-in">
+    <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-1.5 w-full min-w-0 animate-fade-in" data-testid="voice-recorder">
       {/* Discard */}
       <button onClick={handleDiscard} aria-label="Discard voice note" className="min-h-11 min-w-11 flex items-center justify-center text-destructive hover:bg-destructive/10 rounded-full transition-colors">
         <Trash2 className="w-5 h-5" />
       </button>
 
       {/* Waveform + timer */}
-      <div className="flex-1 flex items-center gap-2 bg-secondary rounded-full px-4 py-2">
-        <div className="flex items-center gap-1 flex-1 h-6">
+      <div className="min-w-0 flex items-center gap-1.5 bg-secondary rounded-full pl-2 pr-3 py-1.5 overflow-hidden">
+        {isRecording && !audioUrl && (
+          <button onClick={togglePause} aria-label={isPaused ? "Resume recording" : "Pause recording"} className="min-h-8 min-w-8 flex items-center justify-center text-muted-foreground hover:text-foreground rounded-full hover:bg-background/70 transition-colors">
+            {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+          </button>
+        )}
+        <div className="flex items-center gap-1 flex-1 min-w-0 h-7 overflow-hidden">
           {isRecording && !audioUrl ? (
             <>
               <div className="w-2 h-2 rounded-full bg-destructive animate-pulse" />
-              <div className="flex items-end gap-[2px] h-6 flex-1">
+              <div className="flex items-end gap-[2px] h-6 flex-1 min-w-0 overflow-hidden">
                 {waveformData.map((v, i) => (
                   <div
                     key={i}
@@ -252,26 +293,15 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRec
         </span>
       </div>
 
-      {/* Actions */}
-      {isRecording && !audioUrl ? (
-        <div className="flex items-center gap-1">
-          <button onClick={togglePause} aria-label={isPaused ? "Resume recording" : "Pause recording"} className="min-h-11 min-w-11 flex items-center justify-center text-muted-foreground hover:text-foreground rounded-full hover:bg-secondary transition-colors">
-            {isPaused ? <Play className="w-5 h-5" /> : <Pause className="w-5 h-5" />}
-          </button>
-          <button onClick={stopRecording} aria-label="Stop recording" className="min-h-11 min-w-11 flex items-center justify-center bg-destructive text-destructive-foreground rounded-full hover:opacity-90 transition-opacity">
-            <Square className="w-4 h-4" />
-          </button>
-        </div>
-      ) : audioUrl ? (
-        <button
-          onClick={handleSend}
-          disabled={isUploading}
-          aria-label={isUploading ? "Sending voice note" : "Send voice note"}
-          className="min-h-11 min-w-11 flex items-center justify-center bg-primary text-primary-foreground rounded-full hover:opacity-90 transition-opacity disabled:opacity-50"
-        >
-          <Send className="w-5 h-5" />
-        </button>
-      ) : null}
+      {/* A single primary action stays visible throughout recording and review. */}
+      <button
+        onClick={sendCurrentRecording}
+        disabled={isUploading || (!isRecording && !audioUrl)}
+        aria-label={isUploading ? "Sending voice note" : "Send voice note"}
+        className="min-h-11 min-w-11 flex items-center justify-center bg-primary text-primary-foreground rounded-full shadow-sm hover:opacity-90 active:scale-95 transition-all disabled:opacity-50"
+      >
+        {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+      </button>
     </div>
   );
 };

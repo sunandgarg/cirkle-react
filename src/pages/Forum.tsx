@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Send, Smile, Search, ImageIcon, X, BarChart3, Plus, Trash2, Reply,
-  ChevronDown, Menu, Hash, Bookmark, BookmarkPlus, Pin,
+  ChevronDown, Menu, Hash, Bookmark, Pin,
   MoreHorizontal, Check, Users, Megaphone, Copy, Forward,
   Clock, Pencil, AtSign, ArrowDown,
   Mic, Paperclip, MessageSquare, Bold, Italic, Code, Timer, Settings2, Eye,
@@ -39,12 +39,7 @@ import {
 } from "@/lib/forumScopes";
 import { hasMobileTestAcademicProfile, readMobileTestSession } from "@/lib/mobileVerification";
 import { applyForumRealtimeEvent, type ForumRealtimeEvent } from "@/lib/forumRealtime";
-
-/* ─── Types ─── */
-interface SavedView {
-  id: string; user_id: string; name: string; scope_type: string;
-  scope_key: string; filters_json: any; sort: string; pinned: boolean; created_at: string;
-}
+import { acknowledgeForumPost } from "@/lib/forumMessages";
 
 const EMOJIS = ["❤️", "🔥", "👍", "😂", "💯", "😮", "😢", "🎉"];
 const isDemoId = (id: string) => typeof id === "string" && (
@@ -335,8 +330,6 @@ const Forum = () => {
   const [showSearchFilters, setShowSearchFilters] = useState(false);
   const [searchFilter, setSearchFilter] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"feed" | "pinned">("feed");
-  const [savingView, setSavingView] = useState(false);
-  const [saveViewName, setSaveViewName] = useState("");
   const [scopeToggles, setScopeToggles] = useState<Record<string, number>>({});
   const [highlightedPostId, setHighlightedPostId] = useState<string | null>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -473,17 +466,6 @@ const Forum = () => {
     setTestRoomPosts(session ? getForumTestPosts(activeScope.type, activeScope.key) : []);
   }, [activeScope.type, activeScope.key]);
 
-  const { data: savedViews = [] } = useQuery({
-    queryKey: ["saved-views", user?.id],
-    queryFn: async () => {
-      if (!user?.id) return [];
-      const { data } = await supabase.from("saved_views").select("*").eq("user_id", user.id).order("pinned", { ascending: false }).order("created_at", { ascending: false });
-      return (data || []) as SavedView[];
-    },
-    enabled: !!user?.id,
-    staleTime: Infinity,
-  });
-
   const { data: userPinnedIds = [] } = useQuery({
     queryKey: ["user-pins", user?.id, activeScope.type, activeScope.key],
     queryFn: async () => {
@@ -530,8 +512,6 @@ const Forum = () => {
   }, [scopeMembers]);
 
   const activeScopeDef = useMemo(() => {
-    const saved = savedViews.find(v => v.scope_type === activeScope.type && v.scope_key === activeScope.key);
-    if (saved) return { label: saved.name, subtitle: `${saved.scope_type} · ${saved.scope_key}`, emoji: "📌" };
     for (const s of scopes) {
       if (s.hasToggle && s.toggleOptions) {
         const toggleIdx = scopeToggles[s.id] ?? 0;
@@ -543,7 +523,7 @@ const Forum = () => {
       if (s.type === activeScope.type && s.key === activeScope.key) return s;
     }
     return scopes[0] || { label: "Multiverse", subtitle: "Global", emoji: "🌐" };
-  }, [scopes, activeScope, savedViews, scopeToggles]);
+  }, [scopes, activeScope, scopeToggles]);
 
   useEffect(() => {
     if (scopes.length > 0) {
@@ -838,7 +818,7 @@ const Forum = () => {
     onMutate: () => {
       if (!user) return { pendingId: null };
       const pendingId = `outbox-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      setOutboxPosts((current) => [...current, {
+      setOutboxPosts((current) => [...current.filter((post) => !post.is_failed), {
         id: pendingId,
         community_id: "outbox", scope_type: activeScope.type, scope_key: activeScope.key,
         channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
@@ -866,8 +846,9 @@ const Forum = () => {
           ["forum-posts", result.scopeType, result.scopeKey],
           (current: any) => {
             const existing = current?.posts || [];
-            if (existing.some((post: any) => post.id === result.serverPost.id)) return current;
-            return { posts: [...existing, result.serverPost], isDemo: false, demos: [] };
+            const nextPosts = acknowledgeForumPost(existing, result.serverPost, PAGE_SIZE);
+            setCachedPosts(result.scopeType, result.scopeKey, nextPosts);
+            return { ...current, posts: nextPosts, isDemo: false, demos: [] };
           },
         );
       }
@@ -880,16 +861,13 @@ const Forum = () => {
       setAttachedFile(null); setShowAttachMenu(false); setShowFormatBar(false);
       setLastPostTime(Date.now());
       if (slowModeEnabled && !isAdmin) setSlowModeCooldown(slowModeSeconds);
-      if (result?.serverPost) {
-        setTimeout(() => void queryClient.invalidateQueries({
-          queryKey: ["forum-posts", result.scopeType, result.scopeKey],
-        }), 1500);
-      }
       setTimeout(() => scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" }), 300);
     },
     onError: (err: any, _variables, context) => {
       if (context?.pendingId) {
-        setOutboxPosts((current) => current.filter((post) => post.id !== context.pendingId));
+        setOutboxPosts((current) => current.map((post) => post.id === context.pendingId
+          ? { ...post, is_pending: false, is_failed: true }
+          : post));
       }
       if (err?.code === "42501" || /row-level security|permission denied/i.test(err?.message || "")) {
         toast.error("Your verified community access is still syncing. Refresh once, then try again.");
@@ -945,28 +923,6 @@ const Forum = () => {
       toast.success("Message removed");
     },
     onError: (err: any) => toast.error(err.message),
-  });
-
-  const saveView = useMutation({
-    mutationFn: async (name: string) => {
-      if (!user) return;
-      const { error } = await supabase.from("saved_views").insert({ user_id: user.id, name, scope_type: activeScope.type, scope_key: activeScope.key, filters_json: {}, sort: "newest", pinned: false });
-      if (error) throw new Error("Could not save view.");
-    },
-    onSuccess: () => { setSavingView(false); setSaveViewName(""); toast.success("View saved!"); queryClient.invalidateQueries({ queryKey: ["saved-views"] }); },
-    onError: (err: any) => toast.error(err.message),
-  });
-
-  const deleteView = useMutation({
-    mutationFn: async (viewId: string) => { await supabase.from("saved_views").delete().eq("id", viewId); },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["saved-views"] }); toast.success("View removed"); },
-  });
-
-  const togglePinView = useMutation({
-    mutationFn: async ({ viewId, pinned }: { viewId: string; pinned: boolean }) => {
-      await supabase.from("saved_views").update({ pinned: !pinned }).eq("id", viewId);
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["saved-views"] }),
   });
 
   const toggleReaction = useMutation({
@@ -1034,14 +990,16 @@ const Forum = () => {
             myReactions: [],
           },
         } : event;
+        const nextPosts = applyForumRealtimeEvent(
+          current.posts,
+          nextEvent,
+          { type: activeScope.type, key: activeScope.key },
+          PAGE_SIZE,
+        );
+        setCachedPosts(activeScope.type, activeScope.key, nextPosts);
         return {
           ...current,
-          posts: applyForumRealtimeEvent(
-            current.posts,
-            nextEvent,
-            { type: activeScope.type, key: activeScope.key },
-            PAGE_SIZE,
-          ),
+          posts: nextPosts,
         };
       });
     };
@@ -1358,9 +1316,14 @@ const Forum = () => {
         ["forum-posts", activeScope.type, activeScope.key],
         (current: any) => {
           const existing = current?.posts || [];
-          if (!newPost || existing.some((post: any) => post.id === newPost.id)) return current;
+          if (!newPost) return current;
+          const nextPosts = acknowledgeForumPost(existing, {
+            ...newPost, profile, replyCount: 0, reactions: {}, myReactions: [],
+          }, PAGE_SIZE);
+          setCachedPosts(activeScope.type, activeScope.key, nextPosts);
           return {
-            posts: [...existing, { ...newPost, profile, replyCount: 0, reactions: {}, myReactions: [] }],
+            ...current,
+            posts: nextPosts,
             isDemo: false,
             demos: [],
           };
@@ -1368,7 +1331,6 @@ const Forum = () => {
       );
       setIsRecordingVoice(false);
       setReplyTo(null);
-      setTimeout(() => void queryClient.invalidateQueries({ queryKey: ["forum-posts", activeScope.type, activeScope.key] }), 1200);
       setTimeout(() => scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" }), 300);
     } catch {
       throw new Error("The recording was saved, but the voice message could not be published.");
@@ -1487,12 +1449,10 @@ const Forum = () => {
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-hide">
           <ScopeList
-            scopes={scopes} savedViews={savedViews} activeScope={activeScope} scopeToggles={scopeToggles}
+            scopes={scopes} activeScope={activeScope} scopeToggles={scopeToggles}
             unreadDots={unreadDots}
             onSelect={selectScope}
             onToggle={(scopeId, idx) => { setScopeToggles(prev => ({ ...prev, [scopeId]: idx })); const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key); }}
-            onDeleteView={(id) => deleteView.mutate(id)}
-            onTogglePin={(id, pinned) => togglePinView.mutate({ viewId: id, pinned })}
           />
         </div>
         <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
@@ -1509,12 +1469,10 @@ const Forum = () => {
           </SheetTitle>
           <div className="flex-1 overflow-y-auto scrollbar-hide">
             <ScopeList
-              scopes={scopes} savedViews={savedViews} activeScope={activeScope} scopeToggles={scopeToggles}
+              scopes={scopes} activeScope={activeScope} scopeToggles={scopeToggles}
               unreadDots={unreadDots}
               onSelect={selectScope}
               onToggle={(scopeId, idx) => { setScopeToggles(prev => ({ ...prev, [scopeId]: idx })); const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key); }}
-              onDeleteView={(id) => deleteView.mutate(id)}
-              onTogglePin={(id, pinned) => togglePinView.mutate({ viewId: id, pinned })}
             />
           </div>
           <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
@@ -1571,26 +1529,12 @@ const Forum = () => {
               </button>
             )}
 
-            {savingView ? (
-              <div className="flex items-center gap-1 animate-fade-in">
-                <Input value={saveViewName} onChange={(e) => setSaveViewName(e.target.value)} placeholder="Name..." className="h-7 w-20 text-xs" autoFocus
-                  onKeyDown={(e) => { if (e.key === "Enter" && saveViewName.trim()) saveView.mutate(saveViewName.trim()); if (e.key === "Escape") setSavingView(false); }} />
-                <button onClick={() => saveViewName.trim() && saveView.mutate(saveViewName.trim())} className="w-7 h-7 flex items-center justify-center text-primary"><Check className="w-3.5 h-3.5" /></button>
-                <button onClick={() => setSavingView(false)} className="w-7 h-7 flex items-center justify-center text-muted-foreground"><X className="w-3.5 h-3.5" /></button>
-              </div>
-            ) : (
-              <>
-                <button onClick={() => setSavingView(true)} className="w-11 h-11 flex items-center justify-center rounded-2xl text-muted-foreground hover:text-foreground hover:bg-accent" title="Save view" aria-label="Save this channel view">
-                  <BookmarkPlus className="w-4 h-4" />
-                </button>
-                <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); setSearchTab("messages"); setSearchFilter(null); setShowSearchFilters(false); }} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${showSearch ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="Search messages">
-                  <Search className="w-4 h-4" />
-                </button>
-                <button onClick={() => setMemberPanelOpen(!memberPanelOpen)} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${memberPanelOpen ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="View channel members">
-                  <Users className="w-4 h-4" />
-                </button>
-              </>
-            )}
+            <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); setSearchTab("messages"); setSearchFilter(null); setShowSearchFilters(false); }} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${showSearch ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="Search messages">
+              <Search className="w-4 h-4" />
+            </button>
+            <button onClick={() => setMemberPanelOpen(!memberPanelOpen)} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${memberPanelOpen ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="View channel members">
+              <Users className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
@@ -2029,9 +1973,9 @@ const Forum = () => {
           <ThreadPanel parentPost={threadPost} onClose={() => setThreadPost(null)} activeScope={activeScope} profileMap={profileMap} navigate={navigate} />
         </aside>
       ) : memberPanelOpen ? (
-        <aside className="hidden lg:flex w-60 flex-col border-l border-border bg-secondary/20 flex-shrink-0 overflow-hidden">
+        <aside className="hidden lg:flex w-60 flex-col border-l border-border bg-card flex-shrink-0 overflow-hidden">
           <div className="h-12 flex items-center px-4 border-b border-border justify-between flex-shrink-0">
-            <h3 className="text-sm font-bold text-foreground">Members</h3>
+            <h3 className="text-sm font-bold text-foreground">Room members</h3>
             <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-bold">{scopeMembers?.length || 0}</span>
           </div>
           <div className="flex-1 overflow-y-auto p-2 scrollbar-hide">
@@ -2049,7 +1993,6 @@ const Forum = () => {
                       <span className="text-[10px] font-bold text-white">{getInitials(member.name)}</span>
                     </div>
                   )}
-                  <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card bg-success" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className={`text-[13px] font-medium truncate flex items-center gap-1 ${getUserColor(member.user_id).text} group-hover:text-foreground`}>
@@ -2060,18 +2003,23 @@ const Forum = () => {
                 </div>
               </button>
             ))}
+            {!scopeMembers?.length && (
+              <p className="px-3 py-8 text-center text-xs leading-relaxed text-muted-foreground">
+                No recent contributors yet. The first people to join this conversation will appear here.
+              </p>
+            )}
           </div>
         </aside>
       ) : null}
 
       {/* Mobile member panel sheet */}
       <Sheet open={memberPanelOpen && typeof window !== 'undefined' && window.innerWidth < 1024} onOpenChange={setMemberPanelOpen}>
-        <SheetContent side="right" className="w-[280px] p-0 bg-secondary/20">
-          <SheetTitle className="h-12 flex items-center px-4 border-b border-border text-sm font-bold text-foreground gap-2">
-            <Users className="w-4 h-4 text-muted-foreground" /> Members
+        <SheetContent side="right" className="w-[min(88vw,340px)] p-0 bg-card opacity-100 shadow-2xl supports-[backdrop-filter]:bg-card">
+          <SheetTitle className="h-14 flex items-center pl-4 pr-14 border-b border-border text-sm font-bold text-foreground gap-2 bg-card">
+            <Users className="w-4 h-4 text-primary" /> Room members
             <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-bold ml-auto">{scopeMembers?.length || 0}</span>
           </SheetTitle>
-          <div className="overflow-y-auto scrollbar-hide p-2" style={{ height: 'calc(100% - 48px)' }}>
+          <div className="overflow-y-auto scrollbar-hide p-2 bg-card" style={{ height: 'calc(100% - 56px)' }}>
             <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-2 py-2">
               Recent contributors - {scopeMembers?.length || 0}
             </p>
@@ -2086,7 +2034,6 @@ const Forum = () => {
                       <span className="text-[10px] font-bold text-white">{getInitials(member.name)}</span>
                     </div>
                   )}
-                  <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card bg-success" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className={`text-[13px] font-medium truncate ${getUserColor(member.user_id).text}`}>{member.name}</p>
@@ -2094,6 +2041,11 @@ const Forum = () => {
                 </div>
               </button>
             ))}
+            {!scopeMembers?.length && (
+              <p className="px-3 py-8 text-center text-xs leading-relaxed text-muted-foreground">
+                No recent contributors yet. The first people to join this conversation will appear here.
+              </p>
+            )}
           </div>
         </SheetContent>
       </Sheet>
@@ -2125,13 +2077,11 @@ const Forum = () => {
 /* ══════════════════════════════════════════════════ */
 /*              SCOPE LIST SIDEBAR                   */
 /* ══════════════════════════════════════════════════ */
-const ScopeList = ({ scopes, savedViews, activeScope, scopeToggles, unreadDots, onSelect, onToggle, onDeleteView, onTogglePin }: {
-  scopes: ScopeDef[]; savedViews: SavedView[]; activeScope: { type: string; key: string };
+const ScopeList = ({ scopes, activeScope, scopeToggles, unreadDots, onSelect, onToggle }: {
+  scopes: ScopeDef[]; activeScope: { type: string; key: string };
   scopeToggles: Record<string, number>; unreadDots: Record<string, boolean>;
   onSelect: (type: string, key: string) => void;
   onToggle: (scopeId: string, idx: number) => void;
-  onDeleteView: (id: string) => void;
-  onTogglePin: (id: string, pinned: boolean) => void;
 }) => {
   const recommended = scopes.filter(s => s.section === "recommended");
   const all = scopes.filter(s => s.section === "all");
@@ -2147,20 +2097,6 @@ const ScopeList = ({ scopes, savedViews, activeScope, scopeToggles, unreadDots, 
         <>
           <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-4 pt-5 pb-2">All Channels</p>
           {all.map(s => <ScopeItem key={s.id} scope={s} activeScope={activeScope} scopeToggles={scopeToggles} unreadDots={unreadDots} onSelect={onSelect} onToggle={onToggle} />)}
-        </>
-      )}
-      {savedViews.length > 0 && (
-        <>
-          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-4 pt-5 pb-2">Saved Views</p>
-          {savedViews.map((view) => (
-            <div key={view.id} className={`flex items-center gap-1 mx-2 px-3 py-2 text-[13px] rounded-md ${activeScope.type === view.scope_type && activeScope.key === view.scope_key ? "bg-primary/10 text-primary font-semibold" : "text-muted-foreground hover:text-foreground hover:bg-accent/60"}`}>
-              <button onClick={() => onSelect(view.scope_type, view.scope_key)} className="flex-1 text-left truncate flex items-center gap-2">
-                <Bookmark className={`w-3.5 h-3.5 flex-shrink-0 ${view.pinned ? "fill-primary text-primary" : ""}`} />{view.name}
-              </button>
-              <button onClick={() => onTogglePin(view.id, view.pinned)} className="p-1 hover:text-primary"><Pin className="w-3 h-3" /></button>
-              <button onClick={() => onDeleteView(view.id)} className="p-1 hover:text-destructive"><Trash2 className="w-3 h-3" /></button>
-            </div>
-          ))}
         </>
       )}
     </div>
@@ -2544,6 +2480,7 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
             {isEdited && isMine && <span className="text-[9px] text-muted-foreground">edited</span>}
             <span className="text-[10px] text-muted-foreground tabular-nums" title={fullTime}>{time}</span>
             {isMine && post.is_pending && <Clock className="w-3 h-3 text-muted-foreground" aria-label="Sending" />}
+            {isMine && post.is_failed && <span className="text-[9px] font-semibold text-destructive">Not sent · tap send to retry</span>}
           </div>
         </div>
       </div>

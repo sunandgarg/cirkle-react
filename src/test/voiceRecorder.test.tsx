@@ -52,11 +52,23 @@ describe("VoiceRecorder", () => {
     await act(async () => { await Promise.resolve(); });
     act(() => { vi.advanceTimersByTime(1100); });
 
-    fireEvent.click(screen.getByRole("button", { name: "Stop recording" }));
-    await act(async () => { await Promise.resolve(); });
     fireEvent.click(screen.getByRole("button", { name: "Send voice note" }));
     await act(async () => { await Promise.resolve(); });
 
     expect(onSend).toHaveBeenCalledWith("data:audio/mp4;base64,dm9pY2U=", 1);
+  });
+
+  it("keeps the primary send action visible while recording", async () => {
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }) },
+    });
+
+    render(<VoiceRecorder userId="test-user" localOnly onSend={vi.fn()} onCancel={vi.fn()} />);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(screen.getByRole("button", { name: "Send voice note" })).toBeVisible();
+    expect(screen.getByTestId("voice-recorder")).toBeVisible();
   });
 });
