@@ -79,27 +79,27 @@ const Auth = () => {
     <div className="relative min-h-[100dvh] overflow-hidden bg-[#f7f9fc] text-foreground" style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[43dvh] min-h-[330px] bg-[url('/auth-community-bg.jpg')] bg-[length:112%_auto] bg-top bg-no-repeat opacity-90 grayscale"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[52dvh] min-h-[430px] bg-[url('/auth-community-bg.jpg')] bg-[length:100%_auto] bg-top bg-no-repeat opacity-90 grayscale sm:h-[46dvh] sm:min-h-[360px] sm:bg-cover lg:h-[45dvh] lg:min-h-[430px]"
       />
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[58dvh] min-h-[480px] bg-gradient-to-b from-[#111827]/45 via-[#f7f9fc]/74 to-[#f7f9fc]"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[67dvh] min-h-[560px] bg-gradient-to-b from-[#111827]/50 via-[#f7f9fc]/76 to-[#f7f9fc] sm:h-[58dvh] sm:min-h-[500px] lg:h-[58dvh]"
       />
 
-      <main className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-[930px] flex-col justify-end px-5 pb-10 sm:px-8 lg:justify-center">
+      <main className="relative z-10 min-h-[100dvh] w-full px-8 pb-[max(18px,env(safe-area-inset-bottom))] pt-[50dvh] sm:px-8 sm:pt-[45dvh] lg:px-8">
         <section className="w-full" aria-labelledby="login-title">
-          <h1 id="login-title" className="text-[52px] font-black leading-[0.98] tracking-normal text-[#111827] sm:text-6xl lg:text-7xl">
+          <h1 id="login-title" className="text-[36px] font-black leading-none tracking-normal text-[#111827] sm:text-[38px] lg:text-[36px]">
             Welcome
           </h1>
-          <p className="mt-3 text-[22px] leading-8 tracking-normal text-slate-500 sm:text-2xl">
+          <p className="mt-2 text-[19px] leading-7 tracking-normal text-slate-500 sm:text-[20px] lg:text-[20px]">
             Sign up or login to your account
           </p>
 
-          <div className="mt-10 flex items-center gap-3 sm:gap-5">
+          <div className="mt-5 flex items-center gap-3 sm:mt-6 sm:gap-3">
             <CountryCodeSelect
               value={country}
               onChange={setCountry}
-              className="h-16 rounded-[24px] border-[#d5dbe4] bg-[#eaf0f5] px-5 shadow-sm hover:bg-[#e4ebf1] [&>span:first-child]:text-2xl [&>span:nth-child(2)]:text-xl [&>svg]:h-5 [&>svg]:w-5"
+              className="h-14 rounded-2xl border-[#d5dbe4] bg-[#eaf0f5] px-4 shadow-sm hover:bg-[#e4ebf1] sm:h-[68px] sm:rounded-[18px] sm:px-5 [&>span:first-child]:text-xl [&>span:nth-child(2)]:text-lg [&>svg]:h-4 [&>svg]:w-4"
             />
             <Input
               id="mobile-number"
@@ -109,26 +109,26 @@ const Auth = () => {
               placeholder="Enter 10-digit number"
               value={phone}
               onChange={(e) => handlePhoneChange(e.target.value)}
-              className="h-16 min-w-0 flex-1 rounded-[24px] border-[#d5dbe4] bg-[#eaf0f5] px-5 text-[22px] tracking-normal text-[#111827] shadow-sm placeholder:text-slate-500 focus:border-primary sm:text-2xl"
+              className="h-14 min-w-0 flex-1 rounded-2xl border-[#d5dbe4] bg-[#eaf0f5] px-4 text-[20px] tracking-normal text-[#111827] shadow-sm placeholder:text-slate-500 focus:border-primary sm:h-[68px] sm:rounded-[18px] sm:px-5 sm:text-[20px]"
               onKeyDown={(e) => e.key === "Enter" && handleContinue()}
               maxLength={10}
             />
           </div>
 
-          <div className={`mt-4 text-[18px] tracking-normal tabular-nums ${isValidPhone(phone) ? "text-[hsl(var(--success))]" : "text-slate-500"}`}>
+          <div className={`mt-3 text-[16px] tracking-normal tabular-nums sm:mt-4 sm:text-[18px] ${isValidPhone(phone) ? "text-[hsl(var(--success))]" : "text-slate-500"}`}>
             {phone.length}/10 digits
           </div>
 
           <Button
             size="lg"
-            className="mt-6 h-16 w-full rounded-[22px] bg-[#83b3df] text-[24px] font-bold tracking-normal text-white shadow-none hover:bg-[#6ca4d7] disabled:opacity-70 sm:text-2xl"
+            className="mt-3 h-14 w-full rounded-2xl bg-[#83b3df] text-[20px] font-bold tracking-normal text-white shadow-none hover:bg-[#6ca4d7] disabled:opacity-70 sm:mt-4 sm:h-[68px] sm:rounded-[18px] sm:text-[22px]"
             onClick={handleContinue}
             disabled={loading || !isValidPhone(phone)}
           >
             {loading ? "Sending code..." : "Continue"}
           </Button>
 
-          <div className="my-8 flex items-center gap-8 text-center text-[22px] tracking-normal text-slate-500">
+          <div className="my-4 flex items-center gap-7 text-center text-[18px] tracking-normal text-slate-500 sm:my-8 sm:text-[20px]">
             <span className="h-px flex-1 bg-slate-300" />
             <span>Or</span>
             <span className="h-px flex-1 bg-slate-300" />
@@ -138,15 +138,15 @@ const Auth = () => {
             type="button"
             variant="outline"
             size="lg"
-            className="h-16 w-full gap-5 rounded-[22px] border-[#d5dbe4] bg-[#eaf0f5] text-[22px] font-semibold tracking-normal text-[#111827] shadow-sm hover:bg-[#e4ebf1]"
+            className="h-14 w-full gap-4 rounded-2xl border-[#d5dbe4] bg-[#eaf0f5] text-[18px] font-semibold tracking-normal text-[#111827] shadow-sm hover:bg-[#e4ebf1] sm:h-[68px] sm:rounded-[18px] sm:text-[20px]"
             onClick={handleGoogleContinue}
             disabled={loading}
           >
-            <span className="text-[30px] font-black leading-none text-[#4285f4]">G</span>
+            <span className="text-[28px] font-black leading-none text-[#4285f4]">G</span>
             Google
           </Button>
 
-          <p className="mt-8 text-center text-[17px] leading-7 tracking-normal text-slate-500 sm:text-xl">
+          <p className="mt-4 text-center text-[15px] leading-6 tracking-normal text-slate-500 sm:mt-6 sm:text-[17px]">
             By continuing, you agree to our{" "}
             <button onClick={() => setShowTerms(true)} className="font-medium text-slate-600 underline underline-offset-4">T&C</button>
             {" "}&{" "}
