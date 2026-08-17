@@ -10,6 +10,10 @@ import { toast } from "sonner";
 import { renderFormattedMessage } from "./MessageFormatting";
 import { appendForumTestPost, getForumTestPosts } from "@/hooks/useForumCache";
 import { readMobileTestSession } from "@/lib/mobileVerification";
+import {
+  forumSendFingerprint, resolveForumSendIdentity,
+  type ForumSendIdentity, type ForumSendSnapshot,
+} from "@/lib/forumSend";
 
 const AVATAR_COLORS = [
   "bg-[hsl(0,55%,55%)]", "bg-[hsl(120,35%,45%)]", "bg-[hsl(210,55%,50%)]", "bg-[hsl(30,65%,50%)]",
@@ -27,6 +31,11 @@ const getInitials = (name?: string | null): string => {
   return parts[0][0].toUpperCase();
 };
 
+const sortThreadReplies = (replies: any[]) => [...replies].sort((left, right) => {
+  const byTime = new Date(left.created_at || 0).getTime() - new Date(right.created_at || 0).getTime();
+  return byTime || String(left.id || "").localeCompare(String(right.id || ""));
+});
+
 interface ThreadPanelProps {
   parentPost: any;
   onClose: () => void;
@@ -43,6 +52,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
   const [isAnonymous, setIsAnonymous] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sendIdentityRef = useRef<ForumSendIdentity | null>(null);
   const testSession = readMobileTestSession();
 
   // Fetch thread replies
@@ -66,7 +76,8 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
         .select("*")
         .eq("reply_to_id", parentPost.id)
         .is("deleted_at", null)
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true });
 
       if (!repliesData?.length) return [];
 
@@ -77,10 +88,10 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
 
       const pMap = new Map(profiles?.map((p) => [p.user_id, p]) ?? []);
 
-      return repliesData.map((r: any) => ({
+      return sortThreadReplies(repliesData.map((r: any) => ({
         ...r,
         profile: pMap.get(r.author_id) ?? null,
-      }));
+      })));
     },
     staleTime: 10000,
   });
@@ -88,18 +99,33 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
   const sendReply = useMutation({
     mutationFn: async () => {
       if (!user || !content.trim()) return;
+      const snapshot: ForumSendSnapshot = {
+        scopeType: activeScope.type,
+        scopeKey: activeScope.key,
+        content,
+        isAnonymous,
+        replyToId: parentPost.id,
+        imageFingerprint: null,
+        fileFingerprint: null,
+        pollQuestion: "",
+        pollOptions: [],
+      };
+      const sendIdentity = resolveForumSendIdentity(sendIdentityRef.current, snapshot);
+      sendIdentityRef.current = sendIdentity;
       if (testSession) {
-        appendForumTestPost(activeScope.type, activeScope.key, {
-          id: `test-thread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        const localReply = {
+          id: `test-thread-${sendIdentity.id}`,
           community_id: "test", scope_type: activeScope.type, scope_key: activeScope.key,
           channel: activeScope.type.toLowerCase().replace(/_/g, "-"), content: content.trim(),
           is_anonymous: isAnonymous, author_id: user.id, reply_to_id: parentPost.id,
           created_at: new Date().toISOString(), deleted_at: null,
-          profile: { name: testSession.name || profile?.name || "Test User", avatar_url: null, slug: null },
-        });
-        return;
+          profile: isAnonymous ? null : { name: testSession.name || profile?.name || "Test User", avatar_url: null, slug: null },
+        };
+        appendForumTestPost(activeScope.type, activeScope.key, localReply);
+        return { reply: localReply, sendIdentity };
       }
-      const { error } = await supabase.from("posts").insert({
+      let { data: reply, error } = await supabase.from("posts").insert({
+        id: sendIdentity.id,
         community_id: "default",
         scope_type: activeScope.type,
         scope_key: activeScope.key,
@@ -108,14 +134,46 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
         is_anonymous: isAnonymous,
         author_id: user.id,
         reply_to_id: parentPost.id,
-      });
-      if (error) throw error;
+      }).select("*").single();
+      if (error?.code === "23505") {
+        const existing = await supabase.from("posts").select("*").eq("id", sendIdentity.id).single();
+        reply = existing.data;
+        error = existing.error;
+      }
+      if (error || !reply) throw error || new Error("Reply could not be sent");
+      return {
+        reply: { ...reply, profile: isAnonymous ? null : profile },
+        sendIdentity,
+      };
     },
-    onSuccess: () => {
-      setContent("");
-      setIsAnonymous(false);
-      queryClient.invalidateQueries({ queryKey: ["thread-replies", parentPost.id] });
-      queryClient.invalidateQueries({ queryKey: ["forum-posts"] });
+    onSuccess: (result) => {
+      if (!result?.reply) return;
+      let added = false;
+      queryClient.setQueryData(["thread-replies", parentPost.id], (current: any[] = []) => {
+        added = !current.some((reply) => reply.id === result.reply.id);
+        return sortThreadReplies([
+          ...current.filter((reply) => reply.id !== result.reply.id),
+          result.reply,
+        ]);
+      });
+      if (added) {
+        queryClient.setQueriesData({ queryKey: ["forum-posts"] }, (current: any) => current?.posts ? {
+          ...current,
+          posts: current.posts.map((post: any) => post.id === parentPost.id
+            ? { ...post, replyCount: (post.replyCount || 0) + 1 }
+            : post),
+        } : current);
+      }
+      if (sendIdentityRef.current?.id === result.sendIdentity.id) sendIdentityRef.current = null;
+      const currentSnapshot: ForumSendSnapshot = {
+        scopeType: activeScope.type, scopeKey: activeScope.key, content, isAnonymous,
+        replyToId: parentPost.id, imageFingerprint: null, fileFingerprint: null,
+        pollQuestion: "", pollOptions: [],
+      };
+      if (forumSendFingerprint(currentSnapshot) === result.sendIdentity.fingerprint) {
+        setContent("");
+        setIsAnonymous(false);
+      }
       setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 200);
     },
     onError: (err: any) => toast.error(err.message),
@@ -127,13 +185,41 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
 
   useEffect(() => {
     if (testSession) return;
+    const updateParentReplyCount = (delta: number) => {
+      if (!delta) return;
+      queryClient.setQueriesData({ queryKey: ["forum-posts"] }, (current: any) => current?.posts ? {
+        ...current,
+        posts: current.posts.map((post: any) => post.id === parentPost.id
+          ? { ...post, replyCount: Math.max(0, (post.replyCount || 0) + delta) }
+          : post),
+      } : current);
+    };
+    const applyReplyEvent = (eventType: string, row: any) => {
+      if (!row?.id) return;
+      let replyCountDelta = 0;
+      queryClient.setQueryData(["thread-replies", parentPost.id], (current: any[] = []) => {
+        const existing = current.find((reply) => reply.id === row.id);
+        if (eventType === "DELETE" || row.deleted_at) {
+          if (existing) replyCountDelta = -1;
+          return current.filter((reply) => reply.id !== row.id);
+        }
+        if (!existing) replyCountDelta = 1;
+        const enriched = {
+          ...existing,
+          ...row,
+          profile: row.is_anonymous ? null : profileMap.get(row.author_id) ?? existing?.profile ?? null,
+        };
+        return sortThreadReplies([...current.filter((reply) => reply.id !== row.id), enriched]);
+      });
+      updateParentReplyCount(replyCountDelta);
+    };
     const channel = supabase.channel(`thread-${parentPost.id}-${crypto.randomUUID()}`)
       .on("postgres_changes", {
         event: "*", schema: "public", table: "posts", filter: `reply_to_id=eq.${parentPost.id}`,
-      }, () => queryClient.invalidateQueries({ queryKey: ["thread-replies", parentPost.id] }))
+      }, (payload: any) => applyReplyEvent(payload.eventType, payload.eventType === "DELETE" ? payload.old : payload.new))
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
-  }, [parentPost.id, queryClient, testSession]);
+  }, [parentPost.id, profileMap, queryClient, testSession]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey && content.trim()) {

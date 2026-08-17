@@ -41,6 +41,10 @@ import { hasMobileTestAcademicProfile, readMobileTestSession } from "@/lib/mobil
 import { applyForumRealtimeBatch, type ForumRealtimeEvent } from "@/lib/forumRealtime";
 import { acknowledgeForumPost } from "@/lib/forumMessages";
 import {
+  forumSendFingerprint, resolveForumSendIdentity,
+  type ForumSendIdentity, type ForumSendSnapshot,
+} from "@/lib/forumSend";
+import {
   MAX_ROOM_HISTORY, mergeForumHistoryPosts, persistForumHistory, readForumHistory,
 } from "@/lib/forumHistoryCache";
 
@@ -82,16 +86,22 @@ const getDateLabel = (dateStr: string): string => {
 };
 
 /* ─── Build query for a scope ─── */
-const buildScopeQuery = (scopeType: string, scopeKey: string, limit = 50, beforeDate?: string) => {
+type ForumCursor = { createdAt: string; id: string };
+
+const buildScopeQuery = (scopeType: string, scopeKey: string, limit = 50, before?: ForumCursor) => {
   let q = supabase.from("posts").select(FORUM_POST_COLUMNS)
     .is("reply_to_id", null)
     .is("deleted_at", null)
     .eq("scope_type", scopeType)
     .eq("scope_key", scopeKey)
-    .order("created_at", { ascending: false }).limit(limit) as any;
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(limit) as any;
   
-  if (beforeDate) {
-    q = q.lt("created_at", beforeDate);
+  if (before) {
+    // A timestamp-only cursor can skip rows created in the same transaction.
+    // The posts index uses this same (created_at, id) ordering.
+    q = q.or(`created_at.lt.${before.createdAt},and(created_at.eq.${before.createdAt},id.lt.${before.id})`);
   }
 
   return q;
@@ -373,6 +383,7 @@ const Forum = () => {
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const prevPostCountRef = useRef(0);
   const shouldFollowLiveRef = useRef(true);
+  const sendIdentityRef = useRef<ForumSendIdentity | null>(null);
 
   // Slow mode state
   const [slowModeEnabled, setSlowModeEnabled] = useState(false);
@@ -761,6 +772,28 @@ const Forum = () => {
   }, [postsData, olderPages, testRoomPosts, outboxPosts, activeScope.type, activeScope.key]);
   const isEmptyChannel = !!postsData && !postsData.isDemo && (posts?.length || 0) === 0;
 
+  const getCurrentSendSnapshot = (): ForumSendSnapshot => ({
+    scopeType: activeScope.type,
+    scopeKey: activeScope.key,
+    content,
+    isAnonymous,
+    replyToId: replyTo?.id || null,
+    imageFingerprint: imageFile
+      ? `${imageFile.name}:${imageFile.size}:${imageFile.lastModified}`
+      : null,
+    fileFingerprint: attachedFile
+      ? `${attachedFile.name}:${attachedFile.size}:${attachedFile.lastModified}`
+      : null,
+    pollQuestion,
+    pollOptions,
+  });
+
+  const resolveCurrentSendIdentity = () => {
+    const identity = resolveForumSendIdentity(sendIdentityRef.current, getCurrentSendSnapshot());
+    sendIdentityRef.current = identity;
+    return identity;
+  };
+
 
   // Track new message arrivals for pill
   useEffect(() => {
@@ -797,6 +830,8 @@ const Forum = () => {
       }
       if (!content.trim() && !imageFile && !showPollCreator && !attachedFile) throw new Error("Please type a message");
 
+      const sendIdentity = resolveCurrentSendIdentity();
+
       const testSession = readMobileTestSession();
       if (testSession) {
         const localPost = {
@@ -816,15 +851,15 @@ const Forum = () => {
           } : null,
           replyCount: 0, reactions: {}, myReactions: [],
         };
-        return { localPost, serverPost: null, scopeType: activeScope.type, scopeKey: activeScope.key };
+        return { localPost, serverPost: null, scopeType: activeScope.type, scopeKey: activeScope.key, sendIdentity };
       }
 
       let imageUrl: string | null = null;
       if (imageFile) {
         const { convertToWebP } = await import("@/lib/imageUtils");
         const optimized = await convertToWebP(imageFile, 0.75, 800);
-        const path = `${user.id}/${Date.now()}.webp`;
-        const { error: uploadError } = await supabase.storage.from("post-images").upload(path, optimized);
+        const path = `${user.id}/${sendIdentity.id}.webp`;
+        const { error: uploadError } = await supabase.storage.from("post-images").upload(path, optimized, { upsert: true });
         if (uploadError) throw new Error("Failed to upload image.");
         const { data: urlData } = supabase.storage.from("post-images").getPublicUrl(path);
         imageUrl = urlData.publicUrl;
@@ -835,8 +870,8 @@ const Forum = () => {
       let fileSize: number | null = null;
       let fileType: string | null = null;
       if (attachedFile) {
-        const path = `${user.id}/${Date.now()}-${attachedFile.name}`;
-        const { error: uploadError } = await supabase.storage.from("forum-files").upload(path, attachedFile);
+        const path = `${user.id}/${sendIdentity.id}-${attachedFile.name}`;
+        const { error: uploadError } = await supabase.storage.from("forum-files").upload(path, attachedFile, { upsert: true });
         if (uploadError) throw new Error("Failed to upload file.");
         const { data: urlData } = supabase.storage.from("forum-files").getPublicUrl(path);
         fileUrl = urlData.publicUrl;
@@ -846,6 +881,7 @@ const Forum = () => {
       }
 
       const postData: any = {
+        id: sendIdentity.id,
         community_id: "default", scope_type: activeScope.type, scope_key: activeScope.key,
         channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
         content: content || (imageUrl ? "📷" : fileUrl ? `📎 ${fileName}` : showPollCreator ? `📊 ${pollQuestion}` : ""),
@@ -854,17 +890,26 @@ const Forum = () => {
         file_url: fileUrl, file_name: fileName, file_size: fileSize, file_type: fileType,
       };
 
-      const { data: newPost, error } = await supabase.from("posts").insert(postData).select("*").single();
-      if (error) {
-        const insertError = new Error(error.message || "Failed to send message.") as Error & { code?: string };
-        insertError.code = error.code;
+      let { data: newPost, error } = await supabase.from("posts").insert(postData).select("*").single();
+      if (error?.code === "23505") {
+        const existing = await supabase.from("posts").select("*").eq("id", sendIdentity.id).single();
+        newPost = existing.data;
+        error = existing.error;
+      }
+      if (error || !newPost) {
+        const insertError = new Error(error?.message || "Failed to send message.") as Error & { code?: string };
+        insertError.code = error?.code;
         throw insertError;
       }
 
       if (showPollCreator && pollQuestion.trim() && newPost) {
         const validOptions = pollOptions.filter(o => o.trim());
         if (validOptions.length >= 2) {
-          await supabase.from("polls").insert({ post_id: newPost.id, question: pollQuestion.trim(), options: validOptions });
+          const { error: pollError } = await supabase.from("polls").upsert(
+            { post_id: newPost.id, question: pollQuestion.trim(), options: validOptions },
+            { onConflict: "post_id" },
+          );
+          if (pollError) throw pollError;
         }
       }
       const optimisticPost = {
@@ -876,13 +921,15 @@ const Forum = () => {
         } : null,
         replyCount: 0, reactions: {}, myReactions: [],
       };
-      return { localPost: null, serverPost: optimisticPost, scopeType: activeScope.type, scopeKey: activeScope.key };
+      return { localPost: null, serverPost: optimisticPost, scopeType: activeScope.type, scopeKey: activeScope.key, sendIdentity };
     },
     onMutate: () => {
       if (!user) return { pendingId: null };
-      const pendingId = `outbox-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      setOutboxPosts((current) => [...current.filter((post) => !post.is_failed), {
+      const sendIdentity = resolveCurrentSendIdentity();
+      const pendingId = `outbox-${sendIdentity.id}`;
+      setOutboxPosts((current) => [...current.filter((post) => post.send_identity_id !== sendIdentity.id), {
         id: pendingId,
+        send_identity_id: sendIdentity.id,
         community_id: "outbox", scope_type: activeScope.type, scope_key: activeScope.key,
         channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
         content: content.trim() || (imageFile ? "📷 Sending image…" : attachedFile ? `📎 ${attachedFile.name}` : `📊 ${pollQuestion}`),
@@ -897,7 +944,7 @@ const Forum = () => {
         top: scrollContainerRef.current.scrollHeight,
         behavior: "smooth",
       }));
-      return { pendingId };
+      return { pendingId, sendIdentity };
     },
     onSuccess: (result, _variables, context) => {
       if (result?.localPost) {
@@ -919,10 +966,17 @@ const Forum = () => {
       if (context?.pendingId) {
         setOutboxPosts((current) => current.filter((post) => post.id !== context.pendingId));
       }
-      setContent(""); setIsAnonymous(false); setImageFile(null); setImagePreview(null);
-      setForumDraft(activeScope.type, activeScope.key, "");
-      setShowPollCreator(false); setPollQuestion(""); setPollOptions(["", ""]); setReplyTo(null);
-      setAttachedFile(null); setShowAttachMenu(false); setShowFormatBar(false);
+      if (result?.sendIdentity && sendIdentityRef.current?.id === result.sendIdentity.id) {
+        sendIdentityRef.current = null;
+      }
+      // Do not erase a second message the user typed while the first send was
+      // awaiting its server acknowledgement.
+      if (!result?.sendIdentity || forumSendFingerprint(getCurrentSendSnapshot()) === result.sendIdentity.fingerprint) {
+        setContent(""); setIsAnonymous(false); setImageFile(null); setImagePreview(null);
+        setForumDraft(activeScope.type, activeScope.key, "");
+        setShowPollCreator(false); setPollQuestion(""); setPollOptions(["", ""]); setReplyTo(null);
+        setAttachedFile(null); setShowAttachMenu(false); setShowFormatBar(false);
+      }
       setLastPostTime(Date.now());
       if (slowModeEnabled && !isAdmin) setSlowModeCooldown(slowModeSeconds);
       setTimeout(() => scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" }), 300);
@@ -1104,8 +1158,9 @@ const Forum = () => {
         .eq("scope_key", activeScope.key)
         .is("reply_to_id", null)
         .is("deleted_at", null)
-        .gt("created_at", latest.created_at)
+        .gte("created_at", latest.created_at)
         .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
         .limit(MAX_ROOM_HISTORY);
       if (disposed || error || !data?.length) return;
       const enriched = await enrichPosts(data as any[]);
@@ -1265,7 +1320,10 @@ const Forum = () => {
       setLoadingOlder(true);
       const prevHeight = el.scrollHeight;
       try {
-        const q = buildScopeQuery(activeScope.type, activeScope.key, PAGE_SIZE, oldestReal.created_at);
+        const q = buildScopeQuery(activeScope.type, activeScope.key, PAGE_SIZE, {
+          createdAt: oldestReal.created_at,
+          id: oldestReal.id,
+        });
         const { data: older, error } = await q;
         if (error) throw error;
         const olderArr = (older as any[]) || [];
@@ -1375,7 +1433,7 @@ const Forum = () => {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 25 * 1024 * 1024) { toast.error("File must be under 25MB"); return; }
+    if (file.size > 20 * 1024 * 1024) { toast.error("File must be under 20MB"); return; }
     setAttachedFile(file);
     setShowAttachMenu(false);
   };
@@ -1386,15 +1444,30 @@ const Forum = () => {
     if (!user) return;
     setShowGifPicker(false);
     try {
-      const { error } = await supabase.from("posts").insert({
+      const { data: newPost, error } = await supabase.from("posts").insert({
+        id: crypto.randomUUID(),
         community_id: "default", scope_type: activeScope.type, scope_key: activeScope.key,
         channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
-        content: "GIF", is_anonymous: false, author_id: user.id,
+        content: "GIF", is_anonymous: isAnonymous, author_id: user.id,
         image_url: gifUrl, reply_to_id: replyTo?.id || null,
-      });
-      if (error) throw error;
-      setReplyTo(null);
-      queryClient.invalidateQueries({ queryKey: ["forum-posts"] });
+      }).select("*").single();
+      if (error || !newPost) throw error;
+      queryClient.setQueryData(
+        ["forum-posts", user.id, activeScope.type, activeScope.key],
+        (current: any) => {
+          const nextPosts = acknowledgeForumPost(current?.posts || [], {
+            ...newPost,
+            profile: isAnonymous ? null : profile,
+            replyCount: 0,
+            reactions: {},
+            myReactions: [],
+          }, MAX_ROOM_HISTORY);
+          setCachedPosts(activeScope.type, activeScope.key, nextPosts, user.id);
+          void persistForumHistory(user.id, activeScope.type, activeScope.key, nextPosts);
+          return { ...current, posts: nextPosts, isDemo: false, demos: [] };
+        },
+      );
+      setReplyTo(null); setIsAnonymous(false);
       setTimeout(() => scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" }), 300);
     } catch {
       toast.error("Failed to send GIF");
@@ -1409,25 +1482,26 @@ const Forum = () => {
         id: `test-voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         community_id: "test", scope_type: activeScope.type, scope_key: activeScope.key,
         channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
-        content: "🎤 Voice message", is_anonymous: false, author_id: user.id,
+        content: "🎤 Voice message", is_anonymous: isAnonymous, author_id: user.id,
         created_at: new Date().toISOString(), voice_url: voiceUrl, voice_duration: duration,
         image_url: null, file_url: null, reply_to_id: replyTo?.id || null,
         deleted_at: null, is_deleted_for_everyone: false, seen_by: [], edited_at: null, pinned_at: null,
-        profile: { name: testSession.name || profile?.name || "Test User", avatar_url: null, slug: null },
+        profile: isAnonymous ? null : { name: testSession.name || profile?.name || "Test User", avatar_url: null, slug: null },
         poll: null, replyCount: 0, reactions: {}, myReactions: [],
       };
       setTestRoomPosts(appendForumTestPost(activeScope.type, activeScope.key, localPost));
       setIsRecordingVoice(false);
-      setReplyTo(null);
+      setReplyTo(null); setIsAnonymous(false);
       requestAnimationFrame(() => scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" }));
       return;
     }
 
     try {
       const { data: newPost, error } = await supabase.from("posts").insert({
+        id: crypto.randomUUID(),
         community_id: "default", scope_type: activeScope.type, scope_key: activeScope.key,
         channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
-        content: "🎤 Voice message", is_anonymous: false, author_id: user.id,
+        content: "🎤 Voice message", is_anonymous: isAnonymous, author_id: user.id,
         voice_url: voiceUrl, voice_duration: duration,
         reply_to_id: replyTo?.id || null,
       } as any).select("*").single();
@@ -1438,7 +1512,7 @@ const Forum = () => {
           const existing = current?.posts || [];
           if (!newPost) return current;
           const nextPosts = acknowledgeForumPost(existing, {
-            ...newPost, profile, replyCount: 0, reactions: {}, myReactions: [],
+            ...newPost, profile: isAnonymous ? null : profile, replyCount: 0, reactions: {}, myReactions: [],
           }, MAX_ROOM_HISTORY);
           setCachedPosts(activeScope.type, activeScope.key, nextPosts, user?.id);
           if (user?.id) void persistForumHistory(user.id, activeScope.type, activeScope.key, nextPosts);
@@ -1451,7 +1525,7 @@ const Forum = () => {
         },
       );
       setIsRecordingVoice(false);
-      setReplyTo(null);
+      setReplyTo(null); setIsAnonymous(false);
       setTimeout(() => scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" }), 300);
     } catch {
       throw new Error("The recording was saved, but the voice message could not be published.");
