@@ -2,13 +2,12 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
+import { lovable } from "@/integrations/lovable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
-import cirkleLogo from "@/assets/cirkle-logo.png";
-import { ArrowRight, LockKeyhole, ShieldCheck, Sparkles, Users } from "lucide-react";
 import { readResumeRoute } from "@/lib/sessionResume";
 
 
@@ -60,83 +59,100 @@ const Auth = () => {
     }
   };
 
+  const handleGoogleContinue = async () => {
+    setLoading(true);
+    try {
+      const redirect_uri = `${window.location.origin}/phone-verify`;
+      const result = await lovable.auth.signInWithOAuth("google", { redirect_uri });
+      if (result.error) throw result.error;
+      if (!result.redirected) {
+        navigate("/phone-verify", { replace: true });
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Could not continue with Google. Please try again.");
+      setLoading(false);
+    }
+  };
+
 
   return (
-    <div className="onboarding-shell">
-      <main className="onboarding-scroll flex items-center py-5 sm:py-8">
-        <div className="mx-auto grid w-full max-w-4xl items-center gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-          <section className="px-1 text-center lg:px-6 lg:text-left">
-            <div className="inline-flex items-center gap-2 rounded-full border border-primary/15 bg-card/80 px-3 py-1.5 text-xs font-bold text-primary shadow-sm backdrop-blur">
-              <Sparkles className="h-3.5 w-3.5" /> The verified IIT network
-            </div>
-            <div className="mt-5 flex items-center justify-center gap-3 lg:justify-start">
-              <img src={cirkleLogo} alt="Cirkle" className="h-14 w-14 rounded-[18px] shadow-[0_14px_35px_-16px_hsl(var(--primary))]" />
-              <div className="text-left">
-                <p className="text-2xl font-black tracking-[-0.04em] text-foreground">Cirkle</p>
-                <p className="text-xs font-semibold tracking-[0.16em] text-muted-foreground">IIT COMMUNITY</p>
-              </div>
-            </div>
-            <h1 className="mt-5 text-[34px] font-black leading-[1.04] tracking-[-0.045em] text-foreground sm:text-5xl">
-              Your campus network,<br className="hidden sm:block" /> without the noise.
-            </h1>
-            <p className="mx-auto mt-3 max-w-md text-[15px] leading-6 text-muted-foreground lg:mx-0">
-              Verified conversations, the right batch groups, and alumni access—ready the moment your profile is complete.
-            </p>
-            <div className="mt-5 hidden grid-cols-3 gap-2.5 sm:grid lg:max-w-md">
-              {[
-                { icon: ShieldCheck, label: "Verified" },
-                { icon: Users, label: "23 IITs" },
-                { icon: LockKeyhole, label: "Private" },
-              ].map(({ icon: Icon, label }) => (
-                <div key={label} className="flex items-center justify-center gap-1.5 rounded-2xl border border-border/70 bg-card/70 px-3 py-2.5 text-xs font-semibold text-foreground shadow-sm">
-                  <Icon className="h-4 w-4 text-primary" /> {label}
-                </div>
-              ))}
-            </div>
-          </section>
+    <div className="relative min-h-[100dvh] overflow-hidden bg-[#f7f9fc] text-foreground" style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[43dvh] min-h-[330px] bg-[url('/auth-community-bg.jpg')] bg-[length:112%_auto] bg-top bg-no-repeat opacity-90 grayscale"
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[58dvh] min-h-[480px] bg-gradient-to-b from-[#111827]/45 via-[#f7f9fc]/74 to-[#f7f9fc]"
+      />
 
-          <section className="onboarding-stage !max-w-md !p-5 sm:!p-7" aria-labelledby="login-title">
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Welcome back</p>
-            <h2 id="login-title" className="mt-1 text-2xl font-black tracking-tight text-foreground">Continue with mobile</h2>
-            <p className="mt-1.5 text-sm leading-5 text-muted-foreground">We’ll remember verified members on this device.</p>
+      <main className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-[930px] flex-col justify-end px-5 pb-10 sm:px-8 lg:justify-center">
+        <section className="w-full" aria-labelledby="login-title">
+          <h1 id="login-title" className="text-[52px] font-black leading-[0.98] tracking-normal text-[#111827] sm:text-6xl lg:text-7xl">
+            Welcome
+          </h1>
+          <p className="mt-3 text-[22px] leading-8 tracking-normal text-slate-500 sm:text-2xl">
+            Sign up or login to your account
+          </p>
 
-            <label htmlFor="mobile-number" className="mt-6 block text-sm font-bold text-foreground">Mobile number</label>
-            <div className="mt-2 flex items-center gap-2">
-              <CountryCodeSelect value={country} onChange={setCountry} />
-              <div className="relative min-w-0 flex-1">
-                <Input
-                  id="mobile-number"
-                  type="tel"
-                  inputMode="numeric"
-                  autoComplete="tel-national"
-                  placeholder="10-digit number"
-                  value={phone}
-                  onChange={(e) => handlePhoneChange(e.target.value)}
-                  className="h-12 rounded-xl border-border bg-secondary pr-14 text-[16px] text-foreground placeholder:text-muted-foreground focus:border-primary"
-                  onKeyDown={(e) => e.key === "Enter" && handleContinue()}
-                  maxLength={10}
-                />
-                <span className={`absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-bold tabular-nums ${isValidPhone(phone) ? "text-[hsl(var(--success))]" : "text-muted-foreground"}`}>
-                  {phone.length}/10
-                </span>
-              </div>
-            </div>
+          <div className="mt-10 flex items-center gap-3 sm:gap-5">
+            <CountryCodeSelect
+              value={country}
+              onChange={setCountry}
+              className="h-16 rounded-[24px] border-[#d5dbe4] bg-[#eaf0f5] px-5 shadow-sm hover:bg-[#e4ebf1] [&>span:first-child]:text-2xl [&>span:nth-child(2)]:text-xl [&>svg]:h-5 [&>svg]:w-5"
+            />
+            <Input
+              id="mobile-number"
+              type="tel"
+              inputMode="numeric"
+              autoComplete="tel-national"
+              placeholder="Enter 10-digit number"
+              value={phone}
+              onChange={(e) => handlePhoneChange(e.target.value)}
+              className="h-16 min-w-0 flex-1 rounded-[24px] border-[#d5dbe4] bg-[#eaf0f5] px-5 text-[22px] tracking-normal text-[#111827] shadow-sm placeholder:text-slate-500 focus:border-primary sm:text-2xl"
+              onKeyDown={(e) => e.key === "Enter" && handleContinue()}
+              maxLength={10}
+            />
+          </div>
 
-            <Button size="lg" className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-bold shadow-[0_14px_30px_-16px_hsl(var(--primary))]" onClick={handleContinue} disabled={loading || !isValidPhone(phone)}>
-              {loading ? "Sending secure code..." : "Continue securely"}
-              {!loading && <ArrowRight className="h-4 w-4" />}
-            </Button>
+          <div className={`mt-4 text-[18px] tracking-normal tabular-nums ${isValidPhone(phone) ? "text-[hsl(var(--success))]" : "text-slate-500"}`}>
+            {phone.length}/10 digits
+          </div>
 
-            <div className="mt-4 flex items-center justify-center gap-2 text-[11px] text-muted-foreground">
-              <LockKeyhole className="h-3.5 w-3.5" /> Your number is never shown publicly
-            </div>
-            <p className="mt-5 text-center text-[11px] leading-5 text-muted-foreground">
-              By continuing, you agree to our{" "}
-              <button onClick={() => setShowTerms(true)} className="font-semibold text-foreground underline underline-offset-2">Terms</button>{" "}and{" "}
-              <button onClick={() => setShowPrivacy(true)} className="font-semibold text-foreground underline underline-offset-2">Privacy Policy</button>.
-            </p>
-          </section>
-        </div>
+          <Button
+            size="lg"
+            className="mt-6 h-16 w-full rounded-[22px] bg-[#83b3df] text-[24px] font-bold tracking-normal text-white shadow-none hover:bg-[#6ca4d7] disabled:opacity-70 sm:text-2xl"
+            onClick={handleContinue}
+            disabled={loading || !isValidPhone(phone)}
+          >
+            {loading ? "Sending code..." : "Continue"}
+          </Button>
+
+          <div className="my-8 flex items-center gap-8 text-center text-[22px] tracking-normal text-slate-500">
+            <span className="h-px flex-1 bg-slate-300" />
+            <span>Or</span>
+            <span className="h-px flex-1 bg-slate-300" />
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            className="h-16 w-full gap-5 rounded-[22px] border-[#d5dbe4] bg-[#eaf0f5] text-[22px] font-semibold tracking-normal text-[#111827] shadow-sm hover:bg-[#e4ebf1]"
+            onClick={handleGoogleContinue}
+            disabled={loading}
+          >
+            <span className="text-[30px] font-black leading-none text-[#4285f4]">G</span>
+            Google
+          </Button>
+
+          <p className="mt-8 text-center text-[17px] leading-7 tracking-normal text-slate-500 sm:text-xl">
+            By continuing, you agree to our{" "}
+            <button onClick={() => setShowTerms(true)} className="font-medium text-slate-600 underline underline-offset-4">T&C</button>
+            {" "}&{" "}
+            <button onClick={() => setShowPrivacy(true)} className="font-medium text-slate-600 underline underline-offset-4">Privacy policy</button>
+          </p>
+        </section>
       </main>
 
 

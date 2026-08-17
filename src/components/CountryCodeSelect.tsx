@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export type CountryOption = { code: string; flag: string; name: string };
 
@@ -32,9 +33,10 @@ export const COUNTRY_CODES: CountryOption[] = [
 interface Props {
   value: CountryOption;
   onChange: (c: CountryOption) => void;
+  className?: string;
 }
 
-const CountryCodeSelect = ({ value, onChange }: Props) => {
+const CountryCodeSelect = ({ value, onChange, className }: Props) => {
   const [open, setOpen] = useState(false);
   const [showCustom, setShowCustom] = useState(false);
   const [custom, setCustom] = useState("");
@@ -54,7 +56,10 @@ const CountryCodeSelect = ({ value, onChange }: Props) => {
         type="button"
         aria-label={`Country code ${value.code}`}
         onClick={() => setOpen(true)}
-        className="h-12 px-3 rounded-xl bg-secondary border border-border flex items-center gap-1.5 flex-shrink-0 hover:bg-accent transition-colors"
+        className={cn(
+          "h-12 px-3 rounded-xl bg-secondary border border-border flex items-center gap-1.5 flex-shrink-0 hover:bg-accent transition-colors",
+          className
+        )}
       >
         <span className="text-lg">{value.flag}</span>
         <span className="text-foreground text-sm font-medium">{value.code}</span>
