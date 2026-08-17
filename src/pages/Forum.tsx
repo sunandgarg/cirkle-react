@@ -197,6 +197,11 @@ const generateTestMessages = (): any[] => {
 };
 
 const DEMO_MESSAGES = generateTestMessages();
+const comparePostsChronologically = (left: any, right: any) => {
+  const byTime = new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime();
+  return byTime || String(left?.id || "").localeCompare(String(right?.id || ""));
+};
+const sortPostsChronologically = (items: any[] = []) => [...items].sort(comparePostsChronologically);
 
 /* ─── Scope-specific demo messages (so each channel feels unique) ─── */
 const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any): any[] => {
@@ -733,7 +738,7 @@ const Forum = () => {
     const roomOutbox = outboxPosts.filter((post) =>
       post.scope_type === activeScope.type && post.scope_key === activeScope.key
     );
-    return [...persisted, ...roomOutbox];
+    return sortPostsChronologically([...persisted, ...roomOutbox]);
   }, [postsData, olderPages, testRoomPosts, outboxPosts, activeScope.type, activeScope.key]);
   const isEmptyChannel = !!postsData && !postsData.isDemo && (posts?.length || 0) === 0;
 
@@ -1471,7 +1476,7 @@ const Forum = () => {
   };
 
   const filteredPosts = useMemo(() => {
-    let filtered = posts || [];
+    let filtered = sortPostsChronologically(posts || []);
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       switch (searchTab) {
@@ -1490,7 +1495,7 @@ const Forum = () => {
     if (activeTab === "pinned") filtered = filtered.filter((p: any) => userPinnedIds.includes(p.id) || p.pinned_at);
     // Cap at MAX_RENDERED
     if (filtered.length > MAX_RENDERED) filtered = filtered.slice(filtered.length - MAX_RENDERED);
-    return filtered;
+    return sortPostsChronologically(filtered);
   }, [posts, searchQuery, searchTab, showSearch, activeTab, userPinnedIds]);
 
   const searchCounts = useMemo(() => {
