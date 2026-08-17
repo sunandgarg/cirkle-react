@@ -8,6 +8,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 
 const getInitials = (name?: string | null): string => {
   if (!name) return "?";
@@ -21,6 +23,8 @@ type TabType = "explore" | "discover" | "pending" | "connected";
 const Network = () => {
   const { user, profile, isVerified } = useAuth();
   const [search, setSearch] = useState("");
+  const [invitee, setInvitee] = useState<any>(null);
+  const [inviteNote, setInviteNote] = useState("");
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = (searchParams.get("tab") as TabType) || "explore";
   const queryClient = useQueryClient();
@@ -62,26 +66,50 @@ const Network = () => {
     );
     if (!conn) return "none";
     if ((conn as any).status === "accepted") return "connected";
+    if ((conn as any).status !== "pending") return "none";
     if ((conn as any).requester_id === user?.id) return "pending_sent";
     return "pending_received";
   };
 
+  const getConnection = (memberId: string) => connections?.find((c: any) =>
+    (c.requester_id === user?.id && c.receiver_id === memberId) ||
+    (c.receiver_id === user?.id && c.requester_id === memberId)
+  );
+
   const sendRequest = useMutation({
-    mutationFn: async (receiverId: string) => {
-      const { error } = await supabase.from("connections").insert({
-        requester_id: user!.id, receiver_id: receiverId, community_id: "default", status: "pending",
+    mutationFn: async ({ receiverId, note }: { receiverId: string; note: string }) => {
+      const { error } = await (supabase as any).rpc("send_connection_request", {
+        p_receiver_id: receiverId, p_note: note.trim() || null,
       });
       if (error) throw error;
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connections"] }); toast.success("Request sent!"); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connections"] }); setInvitee(null); setInviteNote(""); toast.success("Invitation sent"); },
+    onError: (error: any) => toast.error(error.message || "Could not send invitation"),
   });
 
   const respondRequest = useMutation({
     mutationFn: async ({ memberId, status }: { memberId: string; status: string }) => {
-      await supabase.from("connections").update({ status }).eq("requester_id", memberId).eq("receiver_id", user!.id);
+      const connection = getConnection(memberId) as any;
+      if (!connection?.id) throw new Error("Invitation not found");
+      const { error } = await (supabase as any).rpc("respond_connection_request", { p_request_id: connection.id, p_accept: status === "accepted" });
+      if (error) throw error;
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connections"] }); toast.success("Updated!"); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connections"] }); toast.success("Invitation updated"); },
+    onError: (error: any) => toast.error(error.message || "Could not update invitation"),
   });
+
+  const withdrawRequest = useMutation({
+    mutationFn: async (memberId: string) => {
+      const connection = getConnection(memberId) as any;
+      if (!connection?.id) throw new Error("Invitation not found");
+      const { error } = await (supabase as any).rpc("withdraw_connection_request", { p_request_id: connection.id });
+      if (error) throw error;
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connections"] }); toast.success("Invitation withdrawn"); },
+    onError: (error: any) => toast.error(error.message || "Could not withdraw invitation"),
+  });
+
+  const openInvite = (member: any) => { setInvitee(member); setInviteNote(""); };
 
   const shuffled = (arr: any[]) => {
     const seed = new Date().toDateString();
@@ -197,7 +225,7 @@ const Network = () => {
         {filteredMembers ? (
           <div className="space-y-2">
             {filteredMembers.length ? filteredMembers.map((m: any) => (
-              <PersonRow key={m.user_id} m={m} status={getConnectionStatus(m.user_id)} onConnect={() => sendRequest.mutate(m.user_id)} onRespond={respondRequest.mutate} navigate={navigate} />
+              <PersonRow key={m.user_id} m={m} status={getConnectionStatus(m.user_id)} connection={getConnection(m.user_id)} onConnect={() => openInvite(m)} onRespond={respondRequest.mutate} onWithdraw={withdrawRequest.mutate} navigate={navigate} />
             )) : <EmptyState icon={Users} title="No members found" />}
           </div>
         ) : (
@@ -214,40 +242,55 @@ const Network = () => {
                 </div>
                 {userIit && userYear && (
                   <PeopleSection title={`Same Cohort ${userYear}`} subtitle={`${userIit} · ${userStudentStatus}`} members={cohortMembers}
-                    onViewAll={() => { setActiveTab("discover"); setSearch(`${userIit} ${userYear}`); }} onConnect={(id) => sendRequest.mutate(id)} navigate={navigate} getConnectionStatus={getConnectionStatus} />
+                    onViewAll={() => { setActiveTab("discover"); setSearch(`${userIit} ${userYear}`); }} onConnect={openInvite} navigate={navigate} getConnectionStatus={getConnectionStatus} />
                 )}
                 {userIit && (
                   <PeopleSection title={userIit} subtitle="All students & alumni" members={campusMembers}
-                    onViewAll={() => { setActiveTab("discover"); setSearch(userIit); }} onConnect={(id) => sendRequest.mutate(id)} navigate={navigate} getConnectionStatus={getConnectionStatus} />
+                    onViewAll={() => { setActiveTab("discover"); setSearch(userIit); }} onConnect={openInvite} navigate={navigate} getConnectionStatus={getConnectionStatus} />
                 )}
                 <PeopleSection title="Global" subtitle="All community members" members={globalMembers}
-                  onViewAll={() => setActiveTab("discover")} onConnect={(id) => sendRequest.mutate(id)} navigate={navigate} getConnectionStatus={getConnectionStatus} />
+                  onViewAll={() => setActiveTab("discover")} onConnect={openInvite} navigate={navigate} getConnectionStatus={getConnectionStatus} />
               </div>
             )}
             {activeTab === "discover" && (
               <div className="space-y-2">
                 {discoverMembers.length ? discoverMembers.map((m: any) => (
-                  <PersonRow key={m.user_id} m={m} status="none" onConnect={() => sendRequest.mutate(m.user_id)} onRespond={respondRequest.mutate} navigate={navigate} />
+                  <PersonRow key={m.user_id} m={m} status="none" onConnect={() => openInvite(m)} onRespond={respondRequest.mutate} onWithdraw={withdrawRequest.mutate} navigate={navigate} />
                 )) : <p className="text-sm text-muted-foreground text-center py-8">No new people to discover</p>}
               </div>
             )}
             {activeTab === "pending" && (
               <div className="space-y-2">
                 {pendingMembers.length ? pendingMembers.map((m: any) => (
-                  <PersonRow key={m.user_id} m={m} status={getConnectionStatus(m.user_id)} onConnect={() => sendRequest.mutate(m.user_id)} onRespond={respondRequest.mutate} navigate={navigate} />
+                  <PersonRow key={m.user_id} m={m} status={getConnectionStatus(m.user_id)} connection={getConnection(m.user_id)} onConnect={() => openInvite(m)} onRespond={respondRequest.mutate} onWithdraw={withdrawRequest.mutate} navigate={navigate} />
                 )) : <p className="text-sm text-muted-foreground text-center py-8">No pending requests</p>}
               </div>
             )}
             {activeTab === "connected" && (
               <div className="space-y-2">
                 {connectedMembers.length ? connectedMembers.map((m: any) => (
-                  <PersonRow key={m.user_id} m={m} status="connected" onConnect={() => {}} onRespond={respondRequest.mutate} navigate={navigate} />
+                  <PersonRow key={m.user_id} m={m} status="connected" onConnect={() => {}} onRespond={respondRequest.mutate} onWithdraw={withdrawRequest.mutate} navigate={navigate} />
                 )) : <p className="text-sm text-muted-foreground text-center py-8">No connections yet</p>}
               </div>
             )}
           </>
         )}
       </div>
+      <Dialog open={!!invitee} onOpenChange={(open) => { if (!open) { setInvitee(null); setInviteNote(""); } }}>
+        <DialogContent className="max-w-sm rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>Connect with {invitee?.name || "member"}</DialogTitle>
+            <DialogDescription>Add brief context so the invitation feels relevant and trustworthy.</DialogDescription>
+          </DialogHeader>
+          <Textarea value={inviteNote} onChange={(event) => setInviteNote(event.target.value.slice(0, 200))}
+            placeholder="We studied at the same campus…" rows={4} className="resize-none" />
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground"><span>Optional note</span><span>{inviteNote.length}/200</span></div>
+          <Button className="w-full rounded-xl" disabled={sendRequest.isPending || !invitee}
+            onClick={() => sendRequest.mutate({ receiverId: invitee.user_id, note: inviteNote })}>
+            {sendRequest.isPending ? "Sending…" : "Send invitation"}
+          </Button>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
@@ -265,7 +308,7 @@ const PeopleSection = ({ title, subtitle, members, onViewAll, onConnect, navigat
         {members.length > 4 && <button onClick={onViewAll} className="text-xs font-semibold text-primary hover:underline">View all</button>}
       </div>
       <div className="grid grid-cols-2 gap-2">
-        {display.map((m: any) => <PersonCard key={m.user_id} m={m} onConnect={() => onConnect(m.user_id)} navigate={navigate} />)}
+        {display.map((m: any) => <PersonCard key={m.user_id} m={m} onConnect={() => onConnect(m)} navigate={navigate} />)}
       </div>
     </div>
   );
@@ -287,7 +330,7 @@ const PersonCard = ({ m, onConnect, navigate }: any) => (
   </div>
 );
 
-const PersonRow = ({ m, status, onConnect, onRespond, navigate }: any) => (
+const PersonRow = ({ m, status, connection, onConnect, onRespond, onWithdraw, navigate }: any) => (
   <div className="bg-card border border-border rounded-xl p-3.5 flex items-center gap-3 cursor-pointer active:scale-[0.98] transition-transform" onClick={() => navigate(m.slug ? `/u/${m.slug}` : `/profile/${m.user_id}`)}>
     {m.avatar_url ? <img src={m.avatar_url} alt={m.name || ""} className="w-12 h-12 rounded-full object-cover flex-shrink-0" loading="lazy" />
       : <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center flex-shrink-0"><span className="text-sm font-bold text-primary">{getInitials(m.name)}</span></div>}
@@ -305,16 +348,19 @@ const PersonRow = ({ m, status, onConnect, onRespond, navigate }: any) => (
           <UserPlus className="w-3.5 h-3.5" /> Connect
         </Button>
       )}
-      {status === "pending_sent" && <span className="text-xs text-muted-foreground">✓ Pending</span>}
+      {status === "pending_sent" && <Button size="sm" variant="ghost" className="rounded-full text-xs h-8 px-3" onClick={() => onWithdraw(m.user_id)}>Withdraw</Button>}
       {status === "connected" && (
-        <Button size="sm" variant="outline" className="rounded-full text-xs h-8 gap-1" onClick={() => navigate("/chats")}>
+        <Button size="sm" variant="outline" className="rounded-full text-xs h-8 gap-1" onClick={() => navigate(`/chats?peer=${m.user_id}`)}>
           <MessageSquare className="w-3 h-3" /> Chat
         </Button>
       )}
       {status === "pending_received" && (
-        <div className="flex gap-1">
+        <div className="flex flex-col items-end gap-1">
+          {connection?.note && <p className="max-w-40 truncate text-[10px] text-muted-foreground" title={connection.note}>{connection.note}</p>}
+          <div className="flex gap-1">
           <Button size="sm" className="text-xs h-7 rounded-full px-3" onClick={() => onRespond({ memberId: m.user_id, status: "accepted" })}>Accept</Button>
-          <Button size="sm" variant="outline" className="text-xs h-7 rounded-full px-2" onClick={() => onRespond({ memberId: m.user_id, status: "declined" })}>✕</Button>
+          <Button size="sm" variant="outline" className="text-xs h-7 rounded-full px-2" onClick={() => onRespond({ memberId: m.user_id, status: "declined" })}>Ignore</Button>
+          </div>
         </div>
       )}
     </div>

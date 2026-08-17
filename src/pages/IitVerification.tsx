@@ -12,6 +12,7 @@ import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, expectedIitEmailDomain, IIT_LIST, iitLogoSettingKey, isMatchingIitEmail, type IitInstitute, type IitMemberStatus } from "@/data/iitInstitutes";
 import { clearMobileTestDocumentSubmission, clearMobileTestSession, isEmailTestMode, MOBILE_TEST_OTP, readMobileTestSession, saveMobileTestDocumentSubmission, updateMobileTestSession, withdrawMobileTestDocumentSubmission } from "@/lib/mobileVerification";
+import { readResumeRoute } from "@/lib/sessionResume";
 
 const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
   const [failed, setFailed] = useState(false);
@@ -101,6 +102,10 @@ const IitVerification = () => {
   });
 
   useEffect(() => {
+    if (profile?.is_verified && profile?.onboarding_completed && user?.id) {
+      navigate(readResumeRoute(user.id), { replace: true });
+      return;
+    }
     if (latestDocumentSubmission?.iit_name) {
       const restoredIit = IIT_LIST.find((iit) => iit.name === latestDocumentSubmission.iit_name);
       if (restoredIit) setSelectedIit(restoredIit);
@@ -113,7 +118,7 @@ const IitVerification = () => {
     if (profile?.is_verified && !profile.onboarding_completed) {
       setStep("onboarding");
     }
-  }, [latestDocumentSubmission, profile?.is_verified, profile?.onboarding_completed]);
+  }, [latestDocumentSubmission, navigate, profile?.is_verified, profile?.onboarding_completed, user?.id]);
 
   const filteredIits = IIT_LIST.filter((iit) =>
     iit.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -432,7 +437,7 @@ const IitVerification = () => {
         onComplete={async () => {
           // Ensure profile is fresh before navigating
           await refetchProfile();
-          navigate("/cirkle-forum", { replace: true });
+          navigate(readResumeRoute(user?.id), { replace: true });
         }}
       />
     );

@@ -231,56 +231,19 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
         onComplete();
         return;
       }
-      // 1. Education first - so we have an ID for primary_education_id
-      let primaryEduId: string | null = null;
-      const { data: existingEdu } = await supabase
-        .from("education")
-        .select("id")
-        .eq("user_id", user.id)
-        .eq("institution", iit)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (existingEdu) {
-        await supabase.from("education").update({
-          degree, branch_area: specialisation, passing_year: year,
-        }).eq("id", existingEdu.id);
-        primaryEduId = existingEdu.id;
-      } else {
-        const { data: newEdu, error: eduErr } = await supabase.from("education").insert({
-          user_id: user.id, institution: iit, degree, branch_area: specialisation, passing_year: year,
-        }).select("id").single();
-        if (eduErr) throw eduErr;
-        primaryEduId = newEdu?.id ?? null;
-      }
-
-      // 2. Profile update - single atomic write including primary_education_id and linkedin
-      const socialLinks: Record<string, string> = {};
-      if (linkedin.trim()) socialLinks.linkedin = linkedin.trim();
-
-      const profileUpdate: any = {
-        name: name.trim(),
-        iit_name: iit,
-        is_verified: true,
-        location: location || null,
-        onboarding_completed: true,
-      };
-      if (primaryEduId) profileUpdate.primary_education_id = primaryEduId;
-      if (Object.keys(socialLinks).length > 0) profileUpdate.social_links = socialLinks;
-
-      const { error: profileError } = await supabase
-        .from("profiles").update(profileUpdate).eq("user_id", user.id);
-      if (profileError) throw profileError;
-
-      // 3. Optional company
-      if (company.trim()) {
-        await supabase.from("professional_experience").insert({
-          user_id: user.id,
-          company_name: company.trim(),
-          is_current: true,
-        });
-      }
+      // One database transaction owns education, primary profile linkage and
+      // optional details. A refresh can no longer observe a half-saved profile.
+      const { error: onboardingError } = await (supabase as any).rpc("complete_member_onboarding", {
+        p_name: name.trim(),
+        p_iit_name: iit,
+        p_degree: degree,
+        p_specialisation: specialisation,
+        p_passing_year: year,
+        p_location: location || null,
+        p_linkedin: linkedin.trim() || null,
+        p_company: company.trim() || null,
+      });
+      if (onboardingError) throw onboardingError;
 
       await refetchProfile();
       toast.success("Profile complete! Welcome to Cirkle 🎉");

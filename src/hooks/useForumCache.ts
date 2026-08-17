@@ -101,6 +101,21 @@ const UNREAD_KEY = "forum_unread_dots";
 const DRAFT_PREFIX = "forum_draft_";
 const SCROLL_PREFIX = "forum_scroll_";
 const TEST_POSTS_PREFIX = "forum_test_posts_";
+const LAST_ROOM_PREFIX = "forum_last_room_";
+
+export type LastForumRoom = { type: string; key: string };
+
+export const getLastForumRoom = (viewerId?: string | null): LastForumRoom | null => {
+  if (!viewerId) return null;
+  try {
+    const value = JSON.parse(localStorage.getItem(`${LAST_ROOM_PREFIX}${viewerId}`) || "null");
+    return value?.type && value?.key ? value : null;
+  } catch { return null; }
+};
+
+export const setLastForumRoom = (viewerId: string, room: LastForumRoom) => {
+  try { localStorage.setItem(`${LAST_ROOM_PREFIX}${viewerId}`, JSON.stringify(room)); } catch {}
+};
 
 const roomStateKey = (prefix: string, scopeType: string, scopeKey: string) =>
   `${prefix}${scopeType}_${scopeKey}`;

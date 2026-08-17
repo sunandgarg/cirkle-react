@@ -126,7 +126,7 @@ const AdminEvents = () => {
   const [form, setForm] = useState<EventForm>(emptyEvent());
   const [statusFilter, setStatusFilter] = useState("all");
   const [provider, setProvider] = useState<keyof typeof MODEL_DEFAULTS>("gemini");
-  const [model, setModel] = useState(MODEL_DEFAULTS.gemini);
+  const [model, setModel] = useState<string>(MODEL_DEFAULTS.gemini);
   const [sourceUrls, setSourceUrls] = useState("");
   const [instructions, setInstructions] = useState("");
   const [scanAudience, setScanAudience] = useState<Audience>(emptyAudience());
@@ -230,7 +230,7 @@ const AdminEvents = () => {
     setForm({
       id: event.id, title: event.title, description: event.description || "", start_time: localDate(event.start_time), end_time: localDate(event.end_time),
       location: event.location || "", organizer: event.organizer || "", registration_url: event.registration_url || "", status: event.status as EventForm["status"],
-      mode: event.audience_mode || "everyone", iits: event.target_iits || [], courses: event.target_courses || [], specialisations: event.target_specialisations || [],
+      mode: event.audience_mode === "targeted" ? "targeted" : "everyone", iits: event.target_iits || [], courses: event.target_courses || [], specialisations: event.target_specialisations || [],
     });
     setShowEditor(true);
   };

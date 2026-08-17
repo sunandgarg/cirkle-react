@@ -41,6 +41,7 @@ const Admin = () => {
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [reviewingDocument, setReviewingDocument] = useState<string | null>(null);
   const [reviewingCourse, setReviewingCourse] = useState<string | null>(null);
+  const [testDataAction, setTestDataAction] = useState<"seed" | "purge" | null>(null);
   const [jobForm, setJobForm] = useState({ title: "", company: "", location: "", description: "", job_type: "Full-time", experience_level: "", category: "", easy_apply: true, apply_url: "" });
 
   const { data: navConfig } = useQuery({
@@ -286,6 +287,27 @@ const Admin = () => {
     queryClient.invalidateQueries({ queryKey: ["admin-app-settings"] });
     queryClient.invalidateQueries({ queryKey: ["app-setting-test-mode"] });
     toast.success(`${key} updated!`);
+  };
+
+  const manageTestData = async (action: "seed" | "purge") => {
+    if (action === "purge" && !window.confirm("Remove every tracked dummy user, message, thread, connection and chat? Real user data will not be touched.")) return;
+    setTestDataAction(action);
+    try {
+      const { data, error } = await supabase.functions.invoke("seed-data", { body: { action } });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-app-settings"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-users"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-posts"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-stats"] }),
+      ]);
+      toast.success(action === "seed" ? `${data.messagesCreated || 0} cohort messages created` : `${data.deletedUsers || 0} dummy users removed`);
+    } catch (error: any) {
+      toast.error(error.message || "Test-data operation failed");
+    } finally {
+      setTestDataAction(null);
+    }
   };
 
   const handleIconUpload = async (tabKey: string, file: File) => {
@@ -827,6 +849,25 @@ const Admin = () => {
                   queryClient.invalidateQueries({ queryKey: ["app-settings"] });
                 }} />
               </div>
+            </div>
+            <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><Users className="w-5 h-5 text-primary" /></div>
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-foreground">Launch test data</p>
+                  <p className="text-xs text-muted-foreground">24 dummy IIT Delhi · MBA · General · 2026 members and 1,500 forum messages/threads.</p>
+                </div>
+              </div>
+              {appSettings?.test_seed_summary && <p className="rounded-lg bg-secondary px-3 py-2 text-[11px] text-muted-foreground">Dummy cohort is currently installed and tracked for safe removal.</p>}
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="outline" className="rounded-xl" disabled={!!testDataAction || !!appSettings?.test_seed_summary} onClick={() => void manageTestData("seed")}>
+                  <Plus className="w-4 h-4 mr-1.5" /> {testDataAction === "seed" ? "Adding…" : "Add test data"}
+                </Button>
+                <Button variant="destructive" className="rounded-xl" disabled={!!testDataAction || !appSettings?.test_seed_summary} onClick={() => void manageTestData("purge")}>
+                  <Trash2 className="w-4 h-4 mr-1.5" /> {testDataAction === "purge" ? "Removing…" : "Remove dummy data"}
+                </Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground">Requires the seed-data Edge Function with SEED_DATA_ENABLED=true. Purge only uses tracked dummy user IDs.</p>
             </div>
 
             <div className="bg-card border border-border rounded-xl p-4">

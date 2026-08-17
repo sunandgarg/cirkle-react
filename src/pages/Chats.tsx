@@ -1,8 +1,8 @@
 import {
-  ArrowLeft, Search, Plus, Send, Check, CheckCheck, Smile, Reply, Users as UsersIcon,
+  ArrowLeft, Search, Plus, Send, Check, CheckCheck, Smile, Reply,
   X, Phone, Video, MoreVertical, Mic, Paperclip, Lock, Loader2, RotateCcw,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -12,7 +12,6 @@ import { Button } from "@/components/ui/button";
 import { formatDistanceToNow, format, isToday, isYesterday } from "date-fns";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Checkbox } from "@/components/ui/checkbox";
 import { cacheMessages, getCachedMessages } from "@/lib/chatCache";
 import { convertToWebP } from "@/lib/imageUtils";
 
@@ -93,6 +92,7 @@ const uniqueMessages = (items: ChatMessage[]) => {
 
 const Chats = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
@@ -103,9 +103,6 @@ const Chats = () => {
   const [sendingImage, setSendingImage] = useState(false);
   const [tab, setTab] = useState<"messages" | "groups">("messages");
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
-  const [showCreateGroup, setShowCreateGroup] = useState(false);
-  const [groupName, setGroupName] = useState("");
-  const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [callMode, setCallMode] = useState<"audio" | "video" | null>(null);
@@ -357,23 +354,6 @@ const Chats = () => {
     }
   };
 
-  const canCreateGroup = useMemo(() => selectedMembers.length > 0 && selectedMembers.every((id) => friendIds.includes(id)), [friendIds, selectedMembers]);
-
-  const createGroup = async () => {
-    if (!user || !groupName.trim() || !canCreateGroup) return;
-    const { data: roomId, error } = await supabase.rpc("create_chat_group", {
-      p_name: groupName.trim(), p_member_ids: selectedMembers,
-    });
-    if (error) { toast.error(error.message); return; }
-    setShowCreateGroup(false);
-    setGroupName("");
-    setSelectedMembers([]);
-    await queryClient.invalidateQueries({ queryKey: ["chat-rooms", user.id] });
-    const room = queryClient.getQueryData<ChatRoom[]>(["chat-rooms", user.id])?.find((item) => item.id === roomId);
-    if (room) setActiveRoom(room);
-    toast.success("Group created");
-  };
-
   const startDM = async (peerId: string) => {
     if (!user || !friendIds.includes(peerId)) return;
     const { data: roomId, error } = await supabase.rpc("get_or_create_direct_chat", { p_peer_id: peerId });
@@ -389,6 +369,16 @@ const Chats = () => {
     });
     void queryClient.invalidateQueries({ queryKey: ["chat-rooms", user.id] });
   };
+
+  useEffect(() => {
+    const peerId = searchParams.get("peer");
+    if (!peerId || !friendIds.includes(peerId)) return;
+    void startDM(peerId).finally(() => {
+      const next = new URLSearchParams(searchParams);
+      next.delete("peer");
+      setSearchParams(next, { replace: true });
+    });
+  }, [friendIds, searchParams, setSearchParams]);
 
   const groupedMessages = messages.reduce<{ date: string; items: ChatMessage[] }[]>((groups, message) => {
     const date = formatMessageDate(message.created_at);
@@ -470,7 +460,6 @@ const Chats = () => {
             <Dialog>
               <DialogTrigger asChild><button className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center"><Plus className="w-5 h-5 text-primary-foreground" /></button></DialogTrigger>
               <DialogContent className="max-w-sm"><DialogHeader><DialogTitle>New Conversation</DialogTitle></DialogHeader><div className="space-y-2 max-h-[50vh] overflow-y-auto">
-                <Button variant="outline" className="w-full justify-start gap-2" onClick={() => setShowCreateGroup(true)}><UsersIcon className="w-4 h-4" />Create Group</Button>
                 <p className="text-xs text-muted-foreground pt-2 px-1 flex items-center gap-1"><Lock className="w-3 h-3" />Only your connections</p>
                 {friendProfiles.length ? friendProfiles.map((profile) => <button key={profile.user_id} onClick={() => void startDM(profile.user_id)} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-muted/50">{profile.avatar_url ? <img src={profile.avatar_url} className="w-9 h-9 rounded-full object-cover" alt="" /> : <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center"><span className="text-xs font-bold text-primary">{getInitials(profile.name)}</span></div>}<span className="text-sm font-medium">{profile.name || "User"}</span></button>) : <p className="text-xs text-muted-foreground text-center py-4">Connect with people to start messaging.</p>}
               </div></DialogContent>
@@ -480,8 +469,6 @@ const Chats = () => {
         </div>
         <div className="max-w-lg mx-auto flex"><button onClick={() => setTab("messages")} className={`flex-1 text-sm font-semibold py-3 border-b-2 ${tab === "messages" ? "border-white text-primary-foreground" : "border-transparent text-primary-foreground/50"}`}>Chats</button><button onClick={() => setTab("groups")} className={`flex-1 text-sm font-semibold py-3 border-b-2 ${tab === "groups" ? "border-white text-primary-foreground" : "border-transparent text-primary-foreground/50"}`}>Groups</button></div>
       </header>
-
-      {showCreateGroup && <div className="fixed inset-0 z-[100] bg-background/95 backdrop-blur-sm flex flex-col"><div className="flex items-center gap-3 px-4 py-4 border-b"><button onClick={() => setShowCreateGroup(false)}><ArrowLeft className="w-5 h-5" /></button><h2 className="text-lg font-bold flex-1">New Group</h2><Button size="sm" disabled={!groupName.trim() || !canCreateGroup} onClick={() => void createGroup()} className="rounded-full">Create</Button></div><div className="px-4 py-3"><Input placeholder="Group subject" value={groupName} onChange={(event) => setGroupName(event.target.value)} className="h-11 rounded-xl bg-secondary border-0 mb-3" /><p className="text-xs text-muted-foreground">Add connections ({selectedMembers.length} selected)</p></div><div className="flex-1 overflow-y-auto px-4 space-y-1">{friendProfiles.map((profile) => { const selected = selectedMembers.includes(profile.user_id); return <button key={profile.user_id} onClick={() => setSelectedMembers((current) => selected ? current.filter((id) => id !== profile.user_id) : [...current, profile.user_id])} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl ${selected ? "bg-primary/10" : "hover:bg-muted/50"}`}><Checkbox checked={selected} className="pointer-events-none" /><span className="text-sm font-medium">{profile.name || "User"}</span></button>; })}</div></div>}
 
       <main className="max-w-lg mx-auto">
         {roomsLoading && !rooms.length ? <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div> : roomsError && !rooms.length ? <div className="text-center py-20 px-6"><p className="text-sm font-medium">Chat database setup is not complete.</p><p className="text-xs text-muted-foreground mt-2">Apply the included Supabase migration, then refresh.</p></div> : filteredRooms.length ? filteredRooms.map((room) => <button key={room.id} onClick={() => setActiveRoom(room)} className="w-full text-left flex items-center gap-3 px-4 py-3.5 border-b border-border/50 hover:bg-muted/30"><div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center overflow-hidden flex-shrink-0">{room.displayAvatar ? <img src={room.displayAvatar} className="w-full h-full object-cover" alt="" loading="lazy" decoding="async" /> : <span className="text-lg font-bold text-primary">{getInitials(room.displayName)}</span>}</div><div className="flex-1 min-w-0"><div className="flex items-center justify-between"><p className="font-semibold text-sm truncate">{room.displayName}</p><span className={`text-[11px] ${room.unreadCount ? "text-primary font-semibold" : "text-muted-foreground"}`}>{room.lastMessage ? formatDistanceToNow(new Date(room.lastMessage.created_at), { addSuffix: false }) : ""}</span></div><div className="flex items-center justify-between mt-0.5"><p className="text-xs text-muted-foreground truncate pr-2">{room.lastMessage?.message_type === "image" || room.lastMessage?.content?.startsWith("📷") ? "📷 Photo" : room.lastMessage?.content || "No messages yet"}</p>{room.unreadCount > 0 && <span className="min-w-[22px] h-[22px] rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center px-1.5">{room.unreadCount > 99 ? "99+" : room.unreadCount}</span>}</div></div></button>) : <div className="flex flex-col items-center justify-center py-20 text-center"><p className="text-muted-foreground text-sm">No conversations yet</p><p className="text-xs text-muted-foreground mt-1">Tap + to message a connection</p></div>}

@@ -7,11 +7,11 @@ import { Input } from "@/components/ui/input";
 import {
   Send, Smile, Search, ImageIcon, X, BarChart3, Plus, Trash2, Reply,
   ChevronDown, Menu, Hash, Bookmark, Pin,
-  MoreHorizontal, Check, Users, Megaphone, Copy, Forward,
-  Clock, Pencil, AtSign, ArrowDown,
+  MoreHorizontal, Check, Users, Megaphone, Copy,
+  Clock, Pencil, AtSign, ArrowDown, ArrowLeft,
   Mic, Paperclip, MessageSquare, Bold, Italic, Code, Timer, Settings2, Eye,
   Filter, Calendar, User, Link2, Image as ImageLucide, ChevronRight, Camera,
-  Volume2, EyeOff, Flag, Sticker, Keyboard
+  Volume2, EyeOff, Flag, Keyboard
 } from "lucide-react";
 import BottomNav from "@/components/BottomNav";
 import { supabase } from "@/integrations/supabase/client";
@@ -30,7 +30,7 @@ import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import {
   getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead,
   getForumDraft, setForumDraft, getForumScroll, setForumScroll,
-  getForumTestPosts, appendForumTestPost,
+  getForumTestPosts, appendForumTestPost, getLastForumRoom, setLastForumRoom,
 } from "@/hooks/useForumCache";
 import { useScrollBehavior } from "@/hooks/useScrollBehavior";
 import {
@@ -44,7 +44,6 @@ import {
   MAX_ROOM_HISTORY, mergeForumHistoryPosts, persistForumHistory, readForumHistory,
 } from "@/lib/forumHistoryCache";
 
-const EMOJIS = ["❤️", "🔥", "👍", "😂", "💯", "😮", "😢", "🎉"];
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
 );
@@ -346,7 +345,6 @@ const Forum = () => {
   const [mentionQuery, setMentionQuery] = useState("");
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [showGifPicker, setShowGifPicker] = useState(false);
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [threadPost, setThreadPost] = useState<any>(null);
@@ -536,11 +534,31 @@ const Forum = () => {
   }, [scopes, activeScope, scopeToggles]);
 
   useEffect(() => {
-    if (scopes.length > 0) {
-      const campus = scopes.find(s => s.type === "CAMPUS");
-      if (campus) setActiveScope({ type: campus.type, key: campus.key });
-    }
-  }, [scopes.length]);
+    if (!scopes.length || !user?.id) return;
+    const availableRooms = scopes.flatMap((scope) => [
+      { type: scope.type, key: scope.key },
+      ...(scope.toggleOptions || []).map((option) => ({ type: option.type, key: option.key })),
+    ]);
+    const isAvailable = (room: { type: string; key: string } | null) =>
+      !!room && availableRooms.some((candidate) => candidate.type === room.type && candidate.key === room.key);
+    const local = getLastForumRoom(user.id);
+    const fallback = scopes.find((scope) => scope.type === "GLOBAL") || scopes[0];
+    if (isAvailable(local)) setActiveScope(local!);
+    else setActiveScope({ type: fallback.type, key: fallback.key });
+
+    if (readMobileTestSession()) return;
+    let cancelled = false;
+    void (supabase as any).rpc("get_last_forum_room").then(({ data, error }: any) => {
+      if (cancelled || error) return;
+      const row = Array.isArray(data) ? data[0] : data;
+      const remote = row ? { type: row.scope_type, key: row.scope_key } : null;
+      if (isAvailable(remote)) {
+        setActiveScope(remote!);
+        setLastForumRoom(user.id, remote!);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [scopes, user?.id]);
 
   // Smart scroll hide/show
   const { showInput, showNavBar, showHeader, restoreAll } = useScrollBehavior(scrollContainerRef);
@@ -734,7 +752,7 @@ const Forum = () => {
   const posts = useMemo(() => {
     if (!postsData) return undefined;
     const base = postsData.isDemo ? postsData.demos : [...olderPages, ...(postsData.posts || [])];
-    const persisted = readMobileTestSession() ? [...base, ...testRoomPosts] : base;
+    const persisted = readMobileTestSession() ? [...base, ...testRoomPosts.filter((post) => !post.reply_to_id)] : base;
     const roomOutbox = outboxPosts.filter((post) =>
       post.scope_type === activeScope.type && post.scope_key === activeScope.key
     );
@@ -1226,7 +1244,6 @@ const Forum = () => {
     dismissKeyboard();
     setShowAttachMenu(false);
     setShowGifPicker(false);
-    setShowEmojiPicker(false);
     setShowFormatBar(false);
     setShowMentionSuggestions(false);
   }, [dismissKeyboard]);
@@ -1318,7 +1335,7 @@ const Forum = () => {
     const next = content.slice(0, start) + emoji + content.slice(end);
     setContent(next);
     setForumDraft(activeScope.type, activeScope.key, next);
-    setShowEmojiPicker(false);
+    setShowGifPicker(false);
     requestAnimationFrame(() => {
       ta?.focus();
       ta?.setSelectionRange(start + emoji.length, start + emoji.length);
@@ -1361,7 +1378,7 @@ const Forum = () => {
     setShowAttachMenu(false);
   };
 
-  const handleReply = (post: any) => { setReplyTo(post); setShowGifPicker(false); textareaRef.current?.focus(); };
+  const handleReply = (post: any) => { setThreadPost(post); setShowGifPicker(false); };
 
   const handleGifSelect = async (gifUrl: string) => {
     if (!user) return;
@@ -1441,10 +1458,6 @@ const Forum = () => {
 
   const handleEdit = (post: any) => { setEditingPost(post); setEditContent(post.content); };
   const handleCopy = (text: string) => { navigator.clipboard.writeText(text); toast.success("Copied!"); };
-  const handleForward = (post: any) => {
-    if (isDemoId(post.id)) { toast("This is a demo message"); return; }
-    setContent(`↩️ Forwarded: ${post.content}`); textareaRef.current?.focus(); toast("Message ready to forward");
-  };
   const handleThread = (post: any) => { setThreadPost(post); };
 
   const scrollToMessage = (postId: string) => {
@@ -1470,6 +1483,7 @@ const Forum = () => {
     }
     setContent(getForumDraft(type, key));
     setActiveScope({ type, key });
+    if (user?.id) setLastForumRoom(user.id, { type, key });
     setSidebarOpen(false);
     setActiveTab("feed");
     setThreadPost(null);
@@ -1589,11 +1603,11 @@ const Forum = () => {
         {/* ── Compact, touch-safe group header ── */}
         <div className={`h-16 flex items-center gap-2.5 px-2.5 sm:px-3 border-b border-border/55 bg-card/[0.88] backdrop-blur-2xl flex-shrink-0 z-10 shadow-[0_8px_28px_-22px_hsl(var(--foreground)/0.55)] transition-transform duration-200 ease-in-out ${showHeader ? 'translate-y-0' : '-translate-y-full'}`}>
           <button onClick={() => setSidebarOpen(true)} className="lg:hidden w-11 h-11 flex items-center justify-center rounded-2xl hover:bg-accent active:scale-95 transition-all" aria-label="Open channels">
-            <img src="/cirkle-logo.png" alt="Cirkle" className="w-8 h-8 rounded-xl shadow-sm" />
+            <ArrowLeft className="w-5 h-5" />
           </button>
 
-          <div className="relative w-10 h-10 rounded-2xl bg-gradient-to-br from-primary/20 to-[hsl(152,68%,42%)]/10 text-primary flex items-center justify-center flex-shrink-0 shadow-sm ring-1 ring-primary/10">
-            <Users className="w-5 h-5" />
+          <div className="relative w-10 h-10 rounded-2xl bg-card flex items-center justify-center flex-shrink-0 shadow-sm ring-1 ring-primary/10 overflow-hidden">
+            <img src="/cirkle-logo.png" alt="" className="w-9 h-9 rounded-xl" />
             <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-[hsl(142,68%,42%)] border-2 border-card" aria-label="Community active" />
           </div>
           <div className="flex-1 min-w-0">
@@ -1750,7 +1764,7 @@ const Forum = () => {
                   adMessages={adMessages} activeScopeDef={activeScopeDef}
                   isEmptyChannel={isEmptyChannel} onStartFirst={() => textareaRef.current?.focus()}
                   onEdit={handleEdit} onDelete={(id, forAll) => deletePost.mutate({ postId: id, forEveryone: forAll })}
-                  onCopy={handleCopy} onForward={handleForward} profileMap={profileMap}
+                  onCopy={handleCopy} profileMap={profileMap}
                   onImageClick={setLightboxImage} onThread={handleThread} />
               </MaskedContent>
             ) : (
@@ -1764,7 +1778,7 @@ const Forum = () => {
                 adMessages={adMessages} activeScopeDef={activeScopeDef}
                 isEmptyChannel={isEmptyChannel} onStartFirst={() => textareaRef.current?.focus()}
                 onEdit={handleEdit} onDelete={(id, forAll) => deletePost.mutate({ postId: id, forEveryone: forAll })}
-                onCopy={handleCopy} onForward={handleForward} profileMap={profileMap}
+                onCopy={handleCopy} profileMap={profileMap}
                 onImageClick={setLightboxImage} onThread={handleThread} />
             )}
           </div>
@@ -1876,25 +1890,7 @@ const Forum = () => {
 
             {/* GIF picker */}
             {showGifPicker && (
-              <div className="mb-2 animate-fade-in"><GifPicker onSelect={handleGifSelect} onClose={() => setShowGifPicker(false)} /></div>
-            )}
-
-            {/* Local-first emoji tray: instant, offline and zero egress */}
-            {showEmojiPicker && (
-              <div className="mb-2 flex items-center gap-1 overflow-x-auto scrollbar-hide rounded-2xl border border-border bg-card p-2 shadow-lg animate-fade-in">
-                {EMOJIS.map((emoji) => (
-                  <button key={emoji} type="button" onClick={() => insertEmoji(emoji)}
-                    className="w-10 h-10 flex-shrink-0 rounded-xl text-xl hover:bg-accent active:scale-90 transition-all"
-                    aria-label={`Insert ${emoji}`}>
-                    {emoji}
-                  </button>
-                ))}
-                <button type="button" onClick={() => { setShowEmojiPicker(false); setShowFormatBar(true); }}
-                  className="w-10 h-10 flex-shrink-0 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent"
-                  aria-label="Open formatting">
-                  <Bold className="w-4 h-4" />
-                </button>
-              </div>
+              <div className="mb-2 animate-fade-in"><GifPicker onSelect={handleGifSelect} onEmojiSelect={insertEmoji} onClose={() => setShowGifPicker(false)} /></div>
             )}
 
             {/* Mention suggestions */}
@@ -1957,7 +1953,7 @@ const Forum = () => {
             {/* Input row - buttery smooth */}
             {!isRecordingVoice && (
               <div className="flex items-end gap-1.5">
-                <button onClick={() => { setShowAttachMenu(!showAttachMenu); setShowGifPicker(false); setShowEmojiPicker(false); setShowFormatBar(false); dismissKeyboard(); }}
+                <button onClick={() => { setShowAttachMenu(!showAttachMenu); setShowGifPicker(false); setShowFormatBar(false); dismissKeyboard(); }}
                   type="button"
                   aria-label={showAttachMenu ? "Close attachments" : "Open attachments"}
                   className={`w-11 h-11 flex items-center justify-center rounded-full flex-shrink-0 transition-all active:scale-95 ${showAttachMenu ? "text-primary bg-primary/10 rotate-45" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}>
@@ -1972,7 +1968,7 @@ const Forum = () => {
                     value={content}
                     onChange={(e) => handleContentChange(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    onFocus={() => { setShowAttachMenu(false); setShowGifPicker(false); setShowEmojiPicker(false); restoreAll(); }}
+                    onFocus={() => { setShowAttachMenu(false); setShowGifPicker(false); restoreAll(); }}
                     placeholder={(activeScopeDef as any)?.label || "Forum"}
                     rows={1}
                     style={{ transition: 'height 100ms ease' }}
@@ -1980,35 +1976,17 @@ const Forum = () => {
                   />
                   <div className="absolute right-1 bottom-1 flex items-center gap-0">
                     <button
-                      onClick={() => {
-                        if (showGifPicker) {
-                          setShowGifPicker(false);
-                          requestAnimationFrame(() => textareaRef.current?.focus());
-                        } else {
-                          setShowGifPicker(true);
-                          setShowAttachMenu(false);
-                          setShowEmojiPicker(false);
-                          setShowFormatBar(false);
-                          dismissKeyboard();
-                        }
-                      }}
-                      aria-label={showGifPicker ? "Show keyboard" : "Open stickers"}
-                      className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${showGifPicker ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}>
-                      {showGifPicker ? <Keyboard className="w-[18px] h-[18px]" /> : <Sticker className="w-[18px] h-[18px]" />}
-                    </button>
-                    <button
                       type="button"
                       onClick={() => {
-                        const opening = !showEmojiPicker;
-                        setShowEmojiPicker(opening);
-                        setShowGifPicker(false);
+                        const opening = !showGifPicker;
+                        setShowGifPicker(opening);
                         setShowAttachMenu(false);
                         setShowFormatBar(false);
                         if (opening) dismissKeyboard();
                       }}
-                      aria-label={showEmojiPicker ? "Close emojis" : "Open emojis"}
-                      className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${showEmojiPicker ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground"}`}>
-                      <Smile className="w-[18px] h-[18px]" />
+                      aria-label={showGifPicker ? "Show keyboard" : "Open emoji and GIF picker"}
+                      className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${showGifPicker ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground"}`}>
+                      {showGifPicker ? <Keyboard className="w-[18px] h-[18px]" /> : <Smile className="w-[18px] h-[18px]" />}
                     </button>
                     <button
                       type="button"
@@ -2051,7 +2029,7 @@ const Forum = () => {
                     }
                   </button>
                 ) : (
-                  <button type="button" aria-label="Record voice message" onClick={() => { dismissKeyboard(); setShowAttachMenu(false); setShowEmojiPicker(false); setShowGifPicker(false); setIsRecordingVoice(true); }}
+                  <button type="button" aria-label="Record voice message" onClick={() => { dismissKeyboard(); setShowAttachMenu(false); setShowGifPicker(false); setIsRecordingVoice(true); }}
                     className="w-11 h-11 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-accent flex-shrink-0 active:scale-95 transition-all duration-150">
                     <Mic className="w-4 h-4" />
                   </button>
@@ -2073,7 +2051,7 @@ const Forum = () => {
       {/* ═══ RIGHT PANEL: Thread / Members ═══ */}
       {threadPost ? (
         <aside className="hidden lg:flex w-80 flex-shrink-0">
-          <ThreadPanel parentPost={threadPost} onClose={() => setThreadPost(null)} activeScope={activeScope} profileMap={profileMap} navigate={navigate} />
+          <ThreadPanel parentPost={threadPost} onClose={() => setThreadPost(null)} onJumpToParent={() => { const id = threadPost.id; setThreadPost(null); requestAnimationFrame(() => scrollToMessage(id)); }} activeScope={activeScope} profileMap={profileMap} navigate={navigate} />
         </aside>
       ) : memberPanelOpen ? (
         <aside className="hidden lg:flex w-60 flex-col border-l border-border bg-card flex-shrink-0 overflow-hidden">
@@ -2161,7 +2139,7 @@ const Forum = () => {
         <Sheet open={!!threadPost} onOpenChange={(open) => { if (!open) setThreadPost(null); }}>
           <SheetContent side="right" className="w-full sm:w-96 p-0">
             <SheetTitle className="sr-only">Thread</SheetTitle>
-            <ThreadPanel parentPost={threadPost} onClose={() => setThreadPost(null)} activeScope={activeScope} profileMap={profileMap} navigate={navigate} />
+            <ThreadPanel parentPost={threadPost} onClose={() => setThreadPost(null)} onJumpToParent={() => { const id = threadPost.id; setThreadPost(null); requestAnimationFrame(() => scrollToMessage(id)); }} activeScope={activeScope} profileMap={profileMap} navigate={navigate} />
           </SheetContent>
         </Sheet>
       )}
@@ -2251,7 +2229,7 @@ const ScopeItem = ({ scope, activeScope, scopeToggles, unreadDots, onSelect, onT
 /* ══════════════════════════════════════════════════ */
 /*              MESSAGES VIEW                        */
 /* ══════════════════════════════════════════════════ */
-const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, onReply, onReact, userId, isAdmin, onAdminPin, onUserPin, userPinnedIds, navigate, messageRefs, highlightedPostId, onScrollToMessage, findParentPost, adMessages, activeScopeDef, isEmptyChannel, onStartFirst, onEdit, onDelete, onCopy, onForward, profileMap, onImageClick, onThread }: {
+const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, onReply, onReact, userId, isAdmin, onAdminPin, onUserPin, userPinnedIds, navigate, messageRefs, highlightedPostId, onScrollToMessage, findParentPost, adMessages, activeScopeDef, isEmptyChannel, onStartFirst, onEdit, onDelete, onCopy, profileMap, onImageClick, onThread }: {
   isLoading: boolean; groupedByDate: Record<string, any[]>; messagesEndRef: React.RefObject<HTMLDivElement>;
   onReply: (post: any) => void; onReact: (postId: string, emoji: string) => void; userId?: string;
   isAdmin: boolean; onAdminPin: (id: string) => void; onUserPin: (id: string) => void;
@@ -2262,7 +2240,7 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, onReply, onRea
   activeScopeDef?: any;
   isEmptyChannel?: boolean; onStartFirst?: () => void;
   onEdit: (post: any) => void; onDelete: (id: string, forAll: boolean) => void;
-  onCopy: (text: string) => void; onForward: (post: any) => void;
+  onCopy: (text: string) => void;
   profileMap: Map<string, any>;
   onImageClick: (src: string) => void; onThread: (post: any) => void;
 }) => (
@@ -2319,7 +2297,7 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, onReply, onRea
                   onUserPin={onUserPin} isUserPinned={userPinnedIds.includes(post.id)}
                   navigate={navigate} messageRefs={messageRefs} highlightedPostId={highlightedPostId}
                   onScrollToMessage={onScrollToMessage} findParentPost={findParentPost}
-                  onEdit={onEdit} onDelete={onDelete} onCopy={onCopy} onForward={onForward}
+                  onEdit={onEdit} onDelete={onDelete} onCopy={onCopy}
                   profileMap={profileMap} onImageClick={onImageClick} onThread={onThread}
                   isGrouped={isGrouped} />
               );
@@ -2364,13 +2342,13 @@ interface DiscordMessageProps {
   highlightedPostId: string | null; onScrollToMessage: (postId: string) => void;
   findParentPost: (replyToId: string | null) => any;
   onEdit: (post: any) => void; onDelete: (id: string, forAll: boolean) => void;
-  onCopy: (text: string) => void; onForward: (post: any) => void;
+  onCopy: (text: string) => void;
   profileMap: Map<string, any>;
   onImageClick: (src: string) => void; onThread: (post: any) => void;
   isGrouped?: boolean;
 }
 
-const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, onUserPin, isUserPinned, navigate, messageRefs, highlightedPostId, onScrollToMessage, findParentPost, onEdit, onDelete, onCopy, onForward, profileMap, onImageClick, onThread, isGrouped }: DiscordMessageProps) => {
+const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, onUserPin, isUserPinned, navigate, messageRefs, highlightedPostId, onScrollToMessage, findParentPost, onEdit, onDelete, onCopy, profileMap, onImageClick, onThread, isGrouped }: DiscordMessageProps) => {
   const [showActions, setShowActions] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2378,7 +2356,8 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
   const [swipeOffset, setSwipeOffset] = useState(0);
   const swipeThreshold = 60;
 
-  const displayName = post.is_anonymous ? "Anonymous" : (post.profile?.name || "User");
+  const isMine = post.author_id === userId;
+  const displayName = post.is_anonymous ? (isMine ? "You · Anonymous" : "Anonymous") : (post.profile?.name || "User");
   const avatar = post.is_anonymous ? null : post.profile?.avatar_url;
   const colors = getUserColor(post.is_anonymous ? "anon" : post.author_id);
   const time = format(new Date(post.created_at), "h:mm a");
@@ -2386,7 +2365,6 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
   const poll = post.poll;
   const reactions: Record<string, number> = post.reactions || {};
   const myReactions: string[] = post.myReactions || [];
-  const isMine = post.author_id === userId;
   const profileSlug = post.profile?.slug;
   const isHighlighted = highlightedPostId === post.id;
   const isDeleted = !!post.deleted_at || !!post.is_deleted_for_everyone;
@@ -2456,7 +2434,7 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
   return (
     <div
       ref={(el) => { messageRefs.current[post.id] = el; messageRef.current = el; }}
-      className={`forum-message-row relative transition-colors duration-300 ${isHighlighted ? 'bg-primary/5' : ''} ${isGrouped ? '' : 'mt-[2px]'}`}
+      className={`forum-message-row relative transition-colors duration-300 ${isHighlighted ? 'bg-primary/5' : ''} ${isMine && post.is_anonymous ? 'bg-primary/[0.035]' : ''} ${isGrouped ? '' : 'mt-[2px]'}`}
       style={{ transform: `translateX(${swipeOffset}px)`, transition: swipeOffset === 0 ? 'transform 0.18s ease-out' : 'none', touchAction: 'pan-y pinch-zoom', WebkitTouchCallout: 'none', contentVisibility: 'auto', containIntrinsicSize: '0 76px' } as React.CSSProperties}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -2523,12 +2501,12 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
             ? "bg-gradient-to-br from-[hsl(142,54%,91%)] to-[hsl(142,48%,87%)] dark:from-[hsl(152,50%,22%)] dark:to-[hsl(152,48%,18%)] rounded-2xl rounded-br-[5px]"
             : "bg-card/95 rounded-2xl rounded-bl-[5px]"
         }`}>
-          {!isGrouped && !isMine && (
+          {!isGrouped && (!isMine || post.is_anonymous) && (
             <div className="flex items-baseline gap-1.5 mb-0.5">
               <button onClick={goToProfile} className={`text-[15px] font-semibold hover:underline ${post.is_anonymous ? "text-muted-foreground italic" : colors.text}`}>
                 {displayName}
               </button>
-              {post.is_anonymous && <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded font-medium">ANON</span>}
+              {post.is_anonymous && <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${isMine ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>{isMine ? "ANONYMOUS TO OTHERS" : "ANON"}</span>}
               {isEdited && <span className="text-[10px] text-muted-foreground italic">(edited)</span>}
             </div>
           )}
@@ -2617,14 +2595,12 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
             ))}
           </div>
           <div className="grid grid-cols-2 gap-1 rounded-2xl bg-background/45 p-1">
-                <ActionButton icon={Reply} label="Reply" onClick={() => { onReply(post); setShowActions(false); }} />
+                <ActionButton icon={Reply} label="Reply in thread" onClick={() => { onReply(post); setShowActions(false); }} />
                 <ActionButton icon={Copy} label="Copy" onClick={() => { onCopy(post.content); setShowActions(false); }} />
-                <ActionButton icon={Bookmark} label={isUserPinned ? "Unsave" : "Save"} onClick={() => { onUserPin(post.id); setShowActions(false); }} active={isUserPinned} />
-                <ActionButton icon={MessageSquare} label="Thread" onClick={() => { onThread(post); setShowActions(false); }} />
-                <ActionButton icon={Forward} label="Forward" onClick={() => { onForward(post); setShowActions(false); }} />
+                <ActionButton icon={Bookmark} label={isUserPinned ? "Remove saved pin" : "Save for me"} onClick={() => { onUserPin(post.id); setShowActions(false); }} active={isUserPinned} />
                 {isMine && !isDeleted && <ActionButton icon={Pencil} label="Edit" onClick={() => { onEdit(post); setShowActions(false); }} />}
                 {isAdmin && (
-                  <ActionButton icon={Pin} label={post.pinned_at ? "Unpin" : "Pin"} onClick={() => { onAdminPin(post.id); setShowActions(false); }} />
+                  <ActionButton icon={Pin} label={post.pinned_at ? "Unpin from room" : "Pin for room"} onClick={() => { onAdminPin(post.id); setShowActions(false); }} />
                 )}
                 {!isMine && !isDeleted && <ActionButton icon={Trash2} label="Delete for me" onClick={() => { onDelete(post.id, false); setShowActions(false); }} muted />}
                 {!isMine && !isDeleted && <ActionButton icon={Flag} label="Report" onClick={async () => {

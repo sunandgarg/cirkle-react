@@ -44,7 +44,7 @@ export const applyForumRealtimeEvent = <T extends Record<string, any>>(
 
   const row = event.new as T | undefined;
   if (!row?.id) return currentPosts;
-  const belongsToRoom = row.scope_type === scope.type && row.scope_key === scope.key;
+  const belongsToRoom = row.scope_type === scope.type && row.scope_key === scope.key && !row.reply_to_id && !row.deleted_at;
   const existingIndex = currentPosts.findIndex((post) => post.id === row.id);
 
   if (event.eventType === "UPDATE") {
@@ -84,7 +84,9 @@ export const applyForumRealtimeBatch = <T extends Record<string, any>>(
 
     const row = event.new as T | undefined;
     if (!row?.id) continue;
-    const belongsToRoom = row.scope_type === scope.type && row.scope_key === scope.key;
+    // The room timeline contains root messages only. Thread replies have their
+    // own subscription/cache and must never leak above the parent message.
+    const belongsToRoom = row.scope_type === scope.type && row.scope_key === scope.key && !row.reply_to_id && !row.deleted_at;
     if (!belongsToRoom) {
       if (event.eventType === "UPDATE") postsById.delete(row.id);
       continue;

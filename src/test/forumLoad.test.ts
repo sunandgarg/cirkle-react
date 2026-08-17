@@ -83,4 +83,32 @@ describe("forum burst and isolation simulation", () => {
     expect(leaked).toHaveLength(1);
     expect(deleted).toEqual([]);
   });
+
+  it("keeps a 1,500-message IIT Delhi MBA General 2026 conversation ordered and threads isolated", () => {
+    const scope = { type: "COHORT", key: "IIT_DELHI|MBA|GENERAL|2026" };
+    const rootEvents = Array.from({ length: 1_200 }, (_, sequence) => ({
+      eventType: "INSERT" as const,
+      new: {
+        id: `mba-root-${sequence}`, ...scope, scope_type: scope.type, scope_key: scope.key,
+        author_id: `mba-member-${sequence % 24}`, content: `MBA cohort message ${sequence}`,
+        created_at: new Date(1_800_100_000_000 + sequence).toISOString(), reply_to_id: null,
+      },
+    }));
+    const threadEvents = Array.from({ length: 300 }, (_, sequence) => ({
+      eventType: "INSERT" as const,
+      new: {
+        id: `mba-reply-${sequence}`, scope_type: scope.type, scope_key: scope.key,
+        author_id: `mba-member-${(sequence + 1) % 24}`, content: `Thread reply ${sequence}`,
+        created_at: new Date(1_800_100_010_000 + sequence).toISOString(),
+        reply_to_id: `mba-root-${sequence % 40}`,
+      },
+    }));
+
+    const timeline = applyForumRealtimeBatch([], [...rootEvents, ...threadEvents].reverse(), scope, 1_200);
+    expect(timeline).toHaveLength(1_200);
+    expect(timeline.every((message) => !message.reply_to_id)).toBe(true);
+    expect(timeline[0].id).toBe("mba-root-0");
+    expect(timeline[1_199].id).toBe("mba-root-1199");
+    expect(new Set(timeline.map((message) => message.id)).size).toBe(1_200);
+  });
 });

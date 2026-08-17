@@ -10,6 +10,7 @@ import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/componen
 import { hasMobileTestMode, isMobileTestPhone, MOBILE_TEST_OTP } from "@/lib/mobileVerification";
 import cirkleLogo from "@/assets/cirkle-logo.png";
 import { ArrowRight, LockKeyhole, ShieldCheck, Sparkles, Users } from "lucide-react";
+import { readResumeRoute } from "@/lib/sessionResume";
 
 
 const isValidPhone = (digits: string) => digits.length === 10;
@@ -31,7 +32,7 @@ const Auth = () => {
       } else if (!profile?.is_verified || !profile?.onboarding_completed) {
         navigate("/iit-verify", { replace: true });
       } else {
-        navigate("/cirkle-forum", { replace: true });
+        navigate(readResumeRoute(user.id), { replace: true });
       }
     }
   }, [user, profile?.is_verified, profile?.onboarding_completed, authLoading, navigate]);
