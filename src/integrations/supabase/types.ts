@@ -1536,28 +1536,34 @@ export type Database = {
       }
       verification_codes: {
         Row: {
+          attempts: number
           code: string
           created_at: string
           email: string
           expires_at: string
           id: string
           used: boolean
+          user_id: string | null
         }
         Insert: {
+          attempts?: number
           code: string
           created_at?: string
           email: string
           expires_at?: string
           id?: string
           used?: boolean
+          user_id?: string | null
         }
         Update: {
+          attempts?: number
           code?: string
           created_at?: string
           email?: string
           expires_at?: string
           id?: string
           used?: boolean
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -1605,11 +1611,22 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      complete_iit_email_verification: {
+        Args: {
+          p_code_id: string
+          p_display_name: string
+          p_email: string
+          p_iit_name: string
+          p_locked_phone: string
+          p_student_status: string
+          p_user_id: string
+        }
+        Returns: undefined
+      }
       create_chat_group: {
         Args: { p_member_ids: string[]; p_name: string }
         Returns: string
       }
-      ensure_super_admin: { Args: { p_user_id: string }; Returns: undefined }
       get_chat_inbox: {
         Args: Record<PropertyKey, never>
         Returns: {
@@ -1646,6 +1663,7 @@ export type Database = {
         Args: { p_room_id: string; p_user_id?: string }
         Returns: boolean
       }
+      is_platform_owner: { Args: Record<PropertyKey, never>; Returns: boolean }
       mark_chat_read: { Args: { p_room_id: string }; Returns: undefined }
       mark_forum_post_seen: {
         Args: { p_post_id: string }
@@ -1653,6 +1671,10 @@ export type Database = {
       }
       revoke_admin_role: {
         Args: { p_target_user_id: string }
+        Returns: undefined
+      }
+      set_member_verification: {
+        Args: { p_target_user_id: string; p_verified: boolean }
         Returns: undefined
       }
     }

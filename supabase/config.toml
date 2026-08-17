@@ -1,1 +1,10 @@
 project_id = "bugwubrwvlqayxwcazfd"
+
+[functions.send-verification-email]
+verify_jwt = true
+
+[functions.verify-iit-email]
+verify_jwt = true
+
+[functions.seed-data]
+verify_jwt = true

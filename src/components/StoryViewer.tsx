@@ -33,21 +33,6 @@ const StoryViewer = ({ groups, initialGroupIndex, onClose }: StoryViewerProps) =
   const story = group?.stories[storyIdx];
   const DURATION = 5000;
 
-  useEffect(() => {
-    setProgress(0);
-    const interval = setInterval(() => {
-      if (isPaused) return;
-      setProgress((p) => {
-        if (p >= 100) {
-          goNext();
-          return 0;
-        }
-        return p + 100 / (DURATION / 50);
-      });
-    }, 50);
-    return () => clearInterval(interval);
-  }, [groupIdx, storyIdx, isPaused]);
-
   const goNext = useCallback(() => {
     if (storyIdx < group.stories.length - 1) {
       setStoryIdx((i) => i + 1);
@@ -67,6 +52,21 @@ const StoryViewer = ({ groups, initialGroupIndex, onClose }: StoryViewerProps) =
       setStoryIdx(0);
     }
   }, [storyIdx, groupIdx]);
+
+  useEffect(() => {
+    setProgress(0);
+    const interval = setInterval(() => {
+      if (isPaused) return;
+      setProgress((p) => {
+        if (p >= 100) {
+          goNext();
+          return 0;
+        }
+        return p + 100 / (DURATION / 50);
+      });
+    }, 50);
+    return () => clearInterval(interval);
+  }, [goNext, isPaused]);
 
   if (!group || !story) return null;
 

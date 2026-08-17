@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import EmptyState from "@/components/EmptyState";
 import { Users, Search, BadgeCheck, MessageSquare, UserPlus, ShieldCheck } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -59,7 +59,7 @@ const Network = () => {
     staleTime: Infinity,
   });
 
-  const getConnectionStatus = (memberId: string) => {
+  const getConnectionStatus = useCallback((memberId: string) => {
     const conn = connections?.find((c: any) =>
       (c.requester_id === user?.id && c.receiver_id === memberId) ||
       (c.receiver_id === user?.id && c.requester_id === memberId)
@@ -69,7 +69,7 @@ const Network = () => {
     if ((conn as any).status !== "pending") return "none";
     if ((conn as any).requester_id === user?.id) return "pending_sent";
     return "pending_received";
-  };
+  }, [connections, user?.id]);
 
   const getConnection = (memberId: string) => connections?.find((c: any) =>
     (c.requester_id === user?.id && c.receiver_id === memberId) ||
@@ -129,24 +129,24 @@ const Network = () => {
     return shuffled(members.filter((m: any) =>
       m.iit_name === userIit && m.student_status?.includes(userYear) && getConnectionStatus(m.user_id) === "none"
     ));
-  }, [members, connections, userIit, userYear]);
+  }, [members, userIit, userYear, getConnectionStatus]);
 
   const campusMembers = useMemo(() => {
     if (!members || !userIit) return [];
     return shuffled(members.filter((m: any) =>
       m.iit_name === userIit && getConnectionStatus(m.user_id) === "none"
     ));
-  }, [members, connections, userIit]);
+  }, [members, userIit, getConnectionStatus]);
 
   const globalMembers = useMemo(() => {
     if (!members) return [];
     return shuffled(members.filter((m: any) => getConnectionStatus(m.user_id) === "none"));
-  }, [members, connections]);
+  }, [members, getConnectionStatus]);
 
   const discoverMembers = useMemo(() => {
     if (!members) return [];
     return shuffled(members.filter((m: any) => getConnectionStatus(m.user_id) === "none"));
-  }, [members, connections]);
+  }, [members, getConnectionStatus]);
 
   const pendingMembers = useMemo(() => {
     if (!members || !connections) return [];
@@ -154,12 +154,12 @@ const Network = () => {
       const status = getConnectionStatus(m.user_id);
       return status === "pending_sent" || status === "pending_received";
     });
-  }, [members, connections]);
+  }, [members, connections, getConnectionStatus]);
 
   const connectedMembers = useMemo(() => {
     if (!members || !connections) return [];
     return members.filter((m: any) => getConnectionStatus(m.user_id) === "connected");
-  }, [members, connections]);
+  }, [members, connections, getConnectionStatus]);
 
   const filteredMembers = useMemo(() => {
     if (!search || !members) return null;

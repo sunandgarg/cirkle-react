@@ -74,7 +74,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
     if (profile?.name && step === "name") {
       setName(profile.name);
     }
-  }, [profile]);
+  }, [profile, step]);
 
   useEffect(() => {
     if (mobileTestSession?.courseApprovalStatus === "pending" && mobileTestSession.customCourseName) {

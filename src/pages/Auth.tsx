@@ -7,7 +7,6 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
-import { hasMobileTestMode, isMobileTestPhone, MOBILE_TEST_OTP } from "@/lib/mobileVerification";
 import cirkleLogo from "@/assets/cirkle-logo.png";
 import { ArrowRight, LockKeyhole, ShieldCheck, Sparkles, Users } from "lucide-react";
 import { readResumeRoute } from "@/lib/sessionResume";
@@ -46,18 +45,13 @@ const Auth = () => {
       toast.error("Please enter a valid 10-digit mobile number");
       return;
     }
-    if (!isMobileTestPhone(country.code, phone)) {
-      toast.error("SMS verification is not available right now. Please try again later.");
-      return;
-    }
-
     setLoading(true);
     try {
-      if (isMobileTestPhone(country.code, phone)) {
-        navigate("/otp-verify", { state: { phone, countryCode: country.code } });
-        return;
-      }
-      const { error } = await supabase.auth.signInWithOtp({ phone: `${country.code}${phone}` });
+      const fullPhone = `${country.code}${phone}`;
+      const { error } = await supabase.auth.signInWithOtp({
+        phone: fullPhone,
+        options: { shouldCreateUser: true },
+      });
       if (error) throw error;
       navigate("/otp-verify", { state: { phone, countryCode: country.code } });
     } catch (error: any) {
@@ -127,12 +121,6 @@ const Auth = () => {
                 </span>
               </div>
             </div>
-
-            {hasMobileTestMode() && (
-              <div className="mt-3 rounded-xl border border-primary/15 bg-primary/[0.06] px-3 py-2.5 text-[11px] leading-4 text-muted-foreground">
-                <span className="font-bold text-primary">Test mode:</span> 99999 99999 or 88888 88888 · code {MOBILE_TEST_OTP}
-              </div>
-            )}
 
             <Button size="lg" className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-bold shadow-[0_14px_30px_-16px_hsl(var(--primary))]" onClick={handleContinue} disabled={loading || !isValidPhone(phone)}>
               {loading ? "Sending secure code..." : "Continue securely"}

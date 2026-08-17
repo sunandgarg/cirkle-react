@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, Smartphone, Key, ToggleLeft, Briefcase, Plus, X, Pencil, Zap, ExternalLink, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, ToggleLeft, Briefcase, Plus, X, Pencil, Zap, ExternalLink, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -154,10 +154,16 @@ const Admin = () => {
     enabled: !!isAdmin,
   });
 
-  const isSuperAdmin = !!user && (
-    ((user.phone || "").includes("8700602524")) ||
-    user.email === "admin@cirkle.world"
-  );
+  const { data: isPlatformOwner = false } = useQuery({
+    queryKey: ["platform-owner", user?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("is_platform_owner");
+      if (error) throw error;
+      return data === true;
+    },
+    enabled: !!user && isAdmin,
+    staleTime: 5 * 60_000,
+  });
 
   const grantAdmin = async (uid: string) => {
     const { error } = await supabase.rpc("grant_admin_role" as any, { p_target_user_id: uid });
@@ -372,7 +378,11 @@ const Admin = () => {
   };
 
   const toggleVerify = async (userId: string, current: boolean) => {
-    await supabase.from("profiles").update({ is_verified: !current }).eq("user_id", userId);
+    const { error } = await supabase.rpc("set_member_verification", {
+      p_target_user_id: userId,
+      p_verified: !current,
+    });
+    if (error) { toast.error(error.message); return; }
     queryClient.invalidateQueries({ queryKey: ["admin-users"] });
     toast.success(current ? "Unverified" : "Verified!");
   };
@@ -505,7 +515,7 @@ const Admin = () => {
         <div className="flex items-center gap-3 max-w-4xl mx-auto">
           <button onClick={() => navigate(-1)} className="p-1 text-foreground hover-scale"><ArrowLeft className="w-5 h-5" /></button>
           <div>
-            <h1 className="text-xl font-bold text-foreground">Super Admin</h1>
+            <h1 className="text-xl font-bold text-foreground">Admin</h1>
             <p className="text-[10px] text-muted-foreground">Manage users, content & settings</p>
           </div>
         </div>
@@ -870,62 +880,6 @@ const Admin = () => {
               <p className="text-[10px] text-muted-foreground">Requires the seed-data Edge Function with SEED_DATA_ENABLED=true. Purge only uses tracked dummy user IDs.</p>
             </div>
 
-            <div className="bg-card border border-border rounded-xl p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-[hsl(var(--warning))]/10 flex items-center justify-center"><ToggleLeft className="w-5 h-5 text-[hsl(var(--warning))]" /></div>
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">Test Mode (OTP)</p>
-                    <p className="text-xs text-muted-foreground">When ON, OTP 123456 works for all logins</p>
-                  </div>
-                </div>
-                <Switch checked={appSettings?.test_mode === "true"} onCheckedChange={(checked) => updateSetting("test_mode", checked ? "true" : "false")} />
-              </div>
-            </div>
-            <div className="bg-card border border-border rounded-xl p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><Shield className="w-5 h-5 text-primary" /></div>
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">Verification Test Mode</p>
-                    <p className="text-xs text-muted-foreground">OTP 123456 works for IIT verification</p>
-                  </div>
-                </div>
-                <Switch checked={appSettings?.verification_test_mode === "true"} onCheckedChange={(checked) => updateSetting("verification_test_mode", checked ? "true" : "false")} />
-              </div>
-            </div>
-            <div className="bg-card border border-border rounded-xl p-4 space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><Smartphone className="w-5 h-5 text-primary" /></div>
-                <div><p className="text-sm font-semibold text-foreground">SMS Provider</p><p className="text-xs text-muted-foreground">Configure real SMS for OTP delivery</p></div>
-              </div>
-              <div className="space-y-3 pl-[52px]">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Provider</Label>
-                  <select value={appSettings?.sms_provider || "none"} onChange={(e) => updateSetting("sms_provider", e.target.value)}
-                    className="w-full h-9 rounded-lg bg-secondary border-0 text-sm text-foreground px-3 mt-1">
-                    <option value="none">None (Test Mode Only)</option>
-                    <option value="twilio">Twilio</option>
-                    <option value="msg91">MSG91</option>
-                    <option value="2factor">2Factor</option>
-                    <option value="textlocal">TextLocal</option>
-                  </select>
-                </div>
-                {appSettings?.sms_provider && appSettings.sms_provider !== "none" && (
-                  <div>
-                    <Label className="text-xs text-muted-foreground">API Key</Label>
-                    <div className="flex gap-2 mt-1">
-                      <Input type="password" placeholder="Enter API key..." defaultValue={appSettings?.sms_api_key || ""} className="h-9 bg-secondary border-0 text-sm" id="sms-api-key" />
-                      <Button size="sm" className="h-9 text-xs" onClick={() => {
-                        const input = document.getElementById("sms-api-key") as HTMLInputElement;
-                        if (input?.value) updateSetting("sms_api_key", input.value);
-                      }}><Key className="w-3.5 h-3.5 mr-1" /> Save</Button>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground mt-1">⚠️ Turn off Test Mode after configuring SMS</p>
-                  </div>
-                )}
-              </div>
-            </div>
 
             {/* Terms & Conditions editor */}
             <div className="bg-card border border-border rounded-xl p-4 space-y-3">
@@ -943,14 +897,14 @@ const Admin = () => {
               }}>Save terms</Button>
             </div>
 
-            {/* Admin role manager (super admin only) */}
-            {isSuperAdmin && (
+            {/* Admin role manager (database-authorized platform owners only) */}
+            {isPlatformOwner && (
               <div className="bg-card border border-border rounded-xl p-4 space-y-3">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><Shield className="w-5 h-5 text-primary" /></div>
                   <div>
                     <p className="text-sm font-semibold text-foreground">Admin users</p>
-                    <p className="text-xs text-muted-foreground">Promote any user to admin (super admin only)</p>
+                    <p className="text-xs text-muted-foreground">Promote users to admin (platform owners only)</p>
                   </div>
                 </div>
                 <div className="space-y-1">

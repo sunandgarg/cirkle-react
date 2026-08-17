@@ -33,7 +33,7 @@ const NotificationBell = () => {
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [user?.id, queryClient]);
+  }, [user, queryClient]);
 
   const markAllRead = async () => {
     if (!user) return;

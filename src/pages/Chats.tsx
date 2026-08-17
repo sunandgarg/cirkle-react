@@ -354,7 +354,7 @@ const Chats = () => {
     }
   };
 
-  const startDM = async (peerId: string) => {
+  const startDM = useCallback(async (peerId: string) => {
     if (!user || !friendIds.includes(peerId)) return;
     const { data: roomId, error } = await supabase.rpc("get_or_create_direct_chat", { p_peer_id: peerId });
     if (error) { toast.error(error.message); return; }
@@ -368,7 +368,7 @@ const Chats = () => {
       unreadCount: 0,
     });
     void queryClient.invalidateQueries({ queryKey: ["chat-rooms", user.id] });
-  };
+  }, [friendIds, friendProfiles, queryClient, user]);
 
   useEffect(() => {
     const peerId = searchParams.get("peer");
@@ -378,7 +378,7 @@ const Chats = () => {
       next.delete("peer");
       setSearchParams(next, { replace: true });
     });
-  }, [friendIds, searchParams, setSearchParams]);
+  }, [friendIds, searchParams, setSearchParams, startDM]);
 
   const groupedMessages = messages.reduce<{ date: string; items: ChatMessage[] }[]>((groups, message) => {
     const date = formatMessageDate(message.created_at);

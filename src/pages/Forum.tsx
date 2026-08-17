@@ -564,9 +564,10 @@ const Forum = () => {
   const { showInput, showNavBar, showHeader, restoreAll } = useScrollBehavior(scrollContainerRef);
 
   useEffect(() => {
+    const scrollContainer = scrollContainerRef.current;
     setContent(getForumDraft(activeScope.type, activeScope.key));
     return () => {
-      const offset = scrollContainerRef.current?.scrollTop || 0;
+      const offset = scrollContainer?.scrollTop || 0;
       setForumScroll(activeScope.type, activeScope.key, offset);
     };
   }, [activeScope.type, activeScope.key]);
@@ -1184,6 +1185,7 @@ const Forum = () => {
     // rooms where thousands of people may be active simultaneously.
     const typingEnabled = activeScope.type === "COHORT" || activeScope.type === "COHORT_GLOBAL";
     if (!user?.id || readMobileTestSession() || !typingEnabled) return;
+    const typingTimers = remoteTypingTimersRef.current;
     const presenceChannel = supabase.channel(`typing-${activeScope.type}-${activeScope.key}`, {
       config: { broadcast: { self: false } },
     });
@@ -1194,18 +1196,18 @@ const Forum = () => {
         const name = payload?.name;
         if (!remoteUserId || remoteUserId === user.id || !name) return;
         setTypingUsers((current) => [...new Set([...current, name])].slice(0, 3));
-        const previousTimer = remoteTypingTimersRef.current.get(remoteUserId);
+        const previousTimer = typingTimers.get(remoteUserId);
         if (previousTimer) clearTimeout(previousTimer);
-        remoteTypingTimersRef.current.set(remoteUserId, setTimeout(() => {
+        typingTimers.set(remoteUserId, setTimeout(() => {
           setTypingUsers((current) => current.filter((item) => item !== name));
-          remoteTypingTimersRef.current.delete(remoteUserId);
+          typingTimers.delete(remoteUserId);
         }, 2500));
       })
       .subscribe();
     return () => {
       if (presenceChannelRef.current === presenceChannel) presenceChannelRef.current = null;
-      remoteTypingTimersRef.current.forEach(clearTimeout);
-      remoteTypingTimersRef.current.clear();
+      typingTimers.forEach(clearTimeout);
+      typingTimers.clear();
       setTypingUsers([]);
       supabase.removeChannel(presenceChannel);
     };

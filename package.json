@@ -12,10 +12,12 @@
     "dev": "vite",
     "build": "vite build",
     "build:dev": "vite build --mode development",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc -b --pretty false",
     "preview": "vite preview",
     "test": "vitest run",
     "test:chat-load": "vitest run src/test/forumLoad.test.ts --reporter verbose",
+    "test:chat-load:live": "k6 run load/k6-chat.js",
     "test:watch": "vitest"
   },
   "dependencies": {

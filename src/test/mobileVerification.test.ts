@@ -1,128 +1,30 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  clearMobileTestDocumentSubmission,
-  clearMobileTestSession,
-  getMobileTestUserId,
-  hasMobileTestAcademicProfile,
+  hasMobileTestMode,
+  isEmailTestMode,
   readMobileTestSession,
-  saveMobileTestCourseRequest,
-  saveMobileTestDocumentSubmission,
   startMobileTestSession,
-  updateMobileTestSession,
-  withdrawMobileTestDocumentSubmission,
-  withdrawMobileTestCourseRequest,
-  isMobileTestUserId,
 } from "@/lib/mobileVerification";
 
-describe("mobile test document verification lifecycle", () => {
+describe("production authentication safeguards", () => {
   beforeEach(() => {
     localStorage.clear();
   });
 
-  it("restores a pending request after returning to login", () => {
-    expect(startMobileTestSession("+91", "9999999999")).toBe(true);
-    expect(saveMobileTestDocumentSubmission("IIT Bombay", "current_student")).toBe(true);
-
-    clearMobileTestSession();
-    expect(startMobileTestSession("+91", "9999999999")).toBe(true);
-
-    expect(readMobileTestSession()).toMatchObject({
-      iitName: "IIT Bombay",
-      studentStatus: "current_student",
-      documentVerificationStatus: "pending",
-    });
+  it("ships with the local phone sandbox disabled", () => {
+    expect(hasMobileTestMode()).toBe(false);
+    expect(startMobileTestSession("+91", "9999999999")).toBe(false);
+    expect(readMobileTestSession()).toBeNull();
   });
 
-  it("accepts the second configured test number", () => {
-    expect(startMobileTestSession("+91", "8888888888")).toBe(true);
-    expect(readMobileTestSession()).toMatchObject({ phone: "8888888888", countryCode: "+91" });
-  });
-
-  it("gives each test participant a stable distinct identity", () => {
-    const first = getMobileTestUserId("9999999999");
-    const second = getMobileTestUserId("8888888888");
-    expect(first).not.toBe(second);
-    expect(getMobileTestUserId("9999999999")).toBe(first);
-    expect(isMobileTestUserId(first)).toBe(true);
-    expect(isMobileTestUserId(second)).toBe(true);
-  });
-
-  it("keeps onboarding fields used to build automatic forum groups", () => {
-    startMobileTestSession("+91", "9999999999");
-    expect(updateMobileTestSession({
-      iitName: "IIT Delhi",
-      degree: "MBA",
-      specialisation: "General",
-      passingYear: "2026",
-    })).toBe(true);
-    expect(readMobileTestSession()).toMatchObject({
-      iitName: "IIT Delhi",
-      degree: "MBA",
-      specialisation: "General",
-      passingYear: "2026",
-    });
-    expect(hasMobileTestAcademicProfile(readMobileTestSession())).toBe(true);
-  });
-
-  it("does not ask a verified test member to verify or onboard again on the next login", () => {
-    startMobileTestSession("+91", "9999999999");
-    updateMobileTestSession({
-      name: "Returning Member",
-      iitName: "IIT Delhi",
-      iitEmail: "returning@iitd.ac.in",
-      studentStatus: "current_student",
-      degree: "BTech",
-      specialisation: "General",
-      passingYear: "2026",
+  it("cannot be activated by injecting browser storage", () => {
+    localStorage.setItem("cirkle:mobile-test-session", JSON.stringify({
+      phone: "9999999999",
+      countryCode: "+91",
       isVerified: true,
       onboardingCompleted: true,
-    });
-
-    clearMobileTestSession();
-    startMobileTestSession("+91", "9999999999");
-
-    expect(readMobileTestSession()).toMatchObject({
-      name: "Returning Member",
-      iitName: "IIT Delhi",
-      isVerified: true,
-      onboardingCompleted: true,
-      degree: "BTech",
-      specialisation: "General",
-      passingYear: "2026",
-    });
-  });
-
-  it("marks legacy test sessions without academic details as incomplete", () => {
-    startMobileTestSession("+91", "9999999999");
-    updateMobileTestSession({ onboardingCompleted: true, iitName: "IIT Delhi" });
-    expect(hasMobileTestAcademicProfile(readMobileTestSession())).toBe(false);
-  });
-
-  it("does not restore a request after it is withdrawn", () => {
-    startMobileTestSession("+91", "9999999999");
-    saveMobileTestDocumentSubmission("IIT Delhi", "alumni");
-    expect(withdrawMobileTestDocumentSubmission()).toBe(true);
-
-    clearMobileTestSession();
-    startMobileTestSession("+91", "9999999999");
-
-    expect(readMobileTestSession()?.documentVerificationStatus).toBeUndefined();
-    clearMobileTestDocumentSubmission();
-  });
-
-  it("holds a custom course request across test logins until it is changed", () => {
-    startMobileTestSession("+91", "9999999999");
-    expect(saveMobileTestCourseRequest("Master of Urban Systems")).toBe(true);
-    clearMobileTestSession();
-    startMobileTestSession("+91", "9999999999");
-    expect(readMobileTestSession()).toMatchObject({
-      customCourseName: "Master of Urban Systems",
-      courseApprovalStatus: "pending",
-    });
-
-    expect(withdrawMobileTestCourseRequest()).toBe(true);
-    clearMobileTestSession();
-    startMobileTestSession("+91", "9999999999");
-    expect(readMobileTestSession()?.courseApprovalStatus).toBeUndefined();
+    }));
+    expect(readMobileTestSession()).toBeNull();
+    expect(isEmailTestMode()).toBe(false);
   });
 });

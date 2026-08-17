@@ -202,12 +202,6 @@ const HomePage = () => {
   const [replyingTo, setReplyingTo] = useState<{ commentId: string; authorName: string } | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
-  useEffect(() => {
-    if (searchParams.get("wizard") === "true" && user && profile) {
-      openWizardWithData();
-    }
-  }, [searchParams, user, profile]);
-
   const { data: customOptions } = useQuery({
     queryKey: ["custom-options"],
     queryFn: async () => {
@@ -662,6 +656,37 @@ const HomePage = () => {
     onError: (err: any) => toast.error(err.message),
   });
 
+  const openWizardWithData = useCallback(() => {
+    const status = profile?.student_status || "";
+    const statusParts = status.split(" ");
+    setWizardForm({
+      name: profile?.name || "",
+      headline: profile?.headline || "",
+      bio: profile?.bio || "",
+      location: profile?.location || "",
+      skills: (profile?.skills || []).join(", "),
+      institute: profile?.iit_name || "",
+      course: statusParts[1] || "",
+      branch: statusParts.slice(2).join(" ") || "",
+      passing_year: statusParts[0] || "",
+      is_mentor: profile?.is_mentor ? "true" : profile?.is_mentor === false ? "false" : "",
+      mentor_category: profile?.mentor_category || "",
+      mentor_price_chat: profile?.mentor_price_chat?.toString() || "",
+      mentor_price_audio: profile?.mentor_price_audio?.toString() || "",
+      mentor_price_video: profile?.mentor_price_video?.toString() || "",
+      avatar_url: profile?.avatar_url || "",
+      cover_photo_url: profile?.cover_photo_url || "",
+    });
+    setWizardStep(0);
+    setShowProfileWizard(true);
+  }, [profile]);
+
+  useEffect(() => {
+    if (searchParams.get("wizard") === "true" && user && profile) {
+      openWizardWithData();
+    }
+  }, [openWizardWithData, profile, searchParams, user]);
+
   if (!user) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] px-6 text-center">
@@ -707,31 +732,6 @@ const HomePage = () => {
   const extraBranches = customOptions?.filter((o: any) => o.category === "branch").map((o: any) => o.value) || [];
   const extraCities = customOptions?.filter((o: any) => o.category === "city").map((o: any) => o.value) || [];
   const extraInstitutes = customOptions?.filter((o: any) => o.category === "institute").map((o: any) => o.value) || [];
-
-  const openWizardWithData = () => {
-    const status = profile?.student_status || "";
-    const statusParts = status.split(" ");
-    setWizardForm({
-      name: profile?.name || "",
-      headline: profile?.headline || "",
-      bio: profile?.bio || "",
-      location: profile?.location || "",
-      skills: (profile?.skills || []).join(", "),
-      institute: profile?.iit_name || "",
-      course: statusParts[1] || "",
-      branch: statusParts.slice(2).join(" ") || "",
-      passing_year: statusParts[0] || "",
-      is_mentor: profile?.is_mentor ? "true" : profile?.is_mentor === false ? "false" : "",
-      mentor_category: profile?.mentor_category || "",
-      mentor_price_chat: profile?.mentor_price_chat?.toString() || "",
-      mentor_price_audio: profile?.mentor_price_audio?.toString() || "",
-      mentor_price_video: profile?.mentor_price_video?.toString() || "",
-      avatar_url: profile?.avatar_url || "",
-      cover_photo_url: profile?.cover_photo_url || "",
-    });
-    setWizardStep(0);
-    setShowProfileWizard(true);
-  };
 
   const renderWizardField = () => {
     const step = WIZARD_STEPS[wizardStep];

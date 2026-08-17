@@ -11,7 +11,6 @@ import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle,
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, expectedIitEmailDomain, IIT_LIST, iitLogoSettingKey, isMatchingIitEmail, type IitInstitute, type IitMemberStatus } from "@/data/iitInstitutes";
-import { clearMobileTestDocumentSubmission, clearMobileTestSession, isEmailTestMode, MOBILE_TEST_OTP, readMobileTestSession, saveMobileTestDocumentSubmission, updateMobileTestSession, withdrawMobileTestDocumentSubmission } from "@/lib/mobileVerification";
 import { readResumeRoute } from "@/lib/sessionResume";
 
 const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
@@ -57,12 +56,9 @@ type Step = "select_iit" | "select_status" | "verify_email" | "verify_otp" | "up
 const IitVerification = () => {
   const navigate = useNavigate();
   const { user, profile, refetchProfile } = useAuth();
-  const [step, setStep] = useState<Step>(() => readMobileTestSession()?.documentVerificationStatus === "pending" ? "documents_pending" : "select_iit");
-  const [selectedIit, setSelectedIit] = useState<IitInstitute | null>(() => {
-    const session = readMobileTestSession();
-    return IIT_LIST.find((iit) => iit.name === session?.iitName) || null;
-  });
-  const [studentStatus, setStudentStatus] = useState<string>(() => readMobileTestSession()?.studentStatus || "");
+  const [step, setStep] = useState<Step>("select_iit");
+  const [selectedIit, setSelectedIit] = useState<IitInstitute | null>(null);
+  const [studentStatus, setStudentStatus] = useState<string>("");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
@@ -70,7 +66,6 @@ const IitVerification = () => {
   const [existingRecordMessage, setExistingRecordMessage] = useState("");
   const [documentType, setDocumentType] = useState("student_id");
   const [documentFile, setDocumentFile] = useState<File | null>(null);
-  const emailTestMode = isEmailTestMode();
 
   const { data: iitLogos = {} } = useQuery({
     queryKey: ["iit-logos"],
@@ -96,7 +91,7 @@ const IitVerification = () => {
       if (error) throw error;
       return data as { id: string; status: "pending" | "approved" | "rejected" | "withdrawn"; iit_name: string; student_status: string; review_notes?: string } | null;
     },
-    enabled: !!user && !readMobileTestSession(),
+    enabled: !!user,
     staleTime: 60_000,
     refetchOnWindowFocus: true,
   });
@@ -139,50 +134,8 @@ const IitVerification = () => {
     return expectedIitEmailDomain(selectedIit, studentStatus);
   };
 
-  const completeEmailVerification = async (normalizedEmail: string) => {
-    const mobileTestSession = readMobileTestSession();
-    if (mobileTestSession) {
-      clearMobileTestDocumentSubmission();
-      updateMobileTestSession({
-        iitName: selectedIit?.name,
-        iitEmail: normalizedEmail,
-        studentStatus,
-        isVerified: true,
-        onboardingCompleted: false,
-        documentVerificationStatus: undefined,
-      });
-      await refetchProfile();
-    } else if (user) {
-      const userPhone = (user as any).phone || (user as any).user_metadata?.phone || "";
-      const { data: existingVerif } = await supabase.from("verifications").select("id").eq("user_id", user.id).maybeSingle();
-      const verificationPayload = {
-        iit_email: normalizedEmail,
-        iit_email_normalized: normalizedEmail,
-        iit_domain: normalizedEmail.split("@")[1],
-        email_verified_at: new Date().toISOString(),
-        verified_status: "VERIFIED",
-        locked_to_phone: userPhone,
-        updated_at: new Date().toISOString(),
-      };
-      const verificationResult = existingVerif
-        ? await supabase.from("verifications").update(verificationPayload).eq("id", existingVerif.id)
-        : await supabase.from("verifications").insert({ ...verificationPayload, user_id: user.id });
-      if (verificationResult.error) throw verificationResult.error;
-
-      const { error: profileError } = await supabase.from("profiles").upsert({
-        user_id: user.id,
-        name: (user.user_metadata?.name as string) || user.email || "Cirkle Member",
-        iit_name: selectedIit?.name,
-        student_status: studentStatus,
-        iit_email: normalizedEmail,
-        is_verified: true,
-        onboarding_completed: false,
-      } as any, { onConflict: "user_id" });
-      if (profileError) throw profileError;
-      await refetchProfile();
-    } else {
-      throw new Error("Your session expired. Please sign in again.");
-    }
+  const completeEmailVerification = async () => {
+    await refetchProfile();
     toast.success("Email verified. Let’s complete your profile 🎉");
     setStep("onboarding");
   };
@@ -202,12 +155,8 @@ const IitVerification = () => {
     }
     setLoading(true);
     try {
-      if (emailTestMode) {
-        await completeEmailVerification(normalizedEmail);
-        return;
-      }
       const res = await supabase.functions.invoke("send-verification-email", {
-        body: { email: normalizedEmail, iit_name: selectedIit.name, student_status: studentStatus, user_id: user?.id },
+        body: { email: normalizedEmail, iit_name: selectedIit.name, student_status: studentStatus },
       });
       
       const data = res.data as any;
@@ -217,6 +166,7 @@ const IitVerification = () => {
         const errMsg = data?.error || "Failed to send code";
         // If user already verified with same email, just go to onboarding
         if (data?.already_verified) {
+          await refetchProfile();
           toast.success("Already verified! Let's complete your profile.");
           setStep("onboarding");
           setLoading(false);
@@ -243,6 +193,7 @@ const IitVerification = () => {
       }
       // If already verified with same email, skip to onboarding
       if (data?.already_verified) {
+        await refetchProfile();
         toast.success("Already verified! Let's complete your profile.");
         setStep("onboarding");
         setLoading(false);
@@ -259,45 +210,24 @@ const IitVerification = () => {
 
   const handleVerifyOtp = async () => {
     if (otp.length !== 6) { toast.error("Please enter the 6-digit code"); return; }
+    if (!selectedIit || (studentStatus !== "current_student" && studentStatus !== "alumni")) {
+      toast.error("Restart verification and choose your IIT again");
+      setStep("select_iit");
+      return;
+    }
     setLoading(true);
     try {
-      const { data: testModeSetting } = await supabase
-        .from("app_settings")
-        .select("value")
-        .eq("key", "verification_test_mode")
-        .maybeSingle();
-      const isTestMode = emailTestMode || testModeSetting?.value === "true";
-
-      let isValidCode = false;
       const normalizedEmail = email.trim().toLowerCase();
-
-      if (isTestMode && otp === MOBILE_TEST_OTP) {
-        isValidCode = true;
-      } else {
-        const { data: codeData } = await supabase
-          .from("verification_codes")
-          .select("*")
-          .eq("email", normalizedEmail)
-          .eq("code", otp)
-          .eq("used", false)
-          .gte("expires_at", new Date().toISOString())
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        if (codeData) {
-          isValidCode = true;
-          await supabase.from("verification_codes").update({ used: true } as any).eq("id", codeData.id);
-        }
-      }
-
-      if (!isValidCode) {
-        toast.error("Invalid or expired code. Please try again.");
-        setLoading(false);
-        return;
-      }
-
-      await completeEmailVerification(normalizedEmail);
+      const { data, error } = await supabase.functions.invoke("verify-iit-email", {
+        body: {
+          email: normalizedEmail,
+          iit_name: selectedIit.name,
+          student_status: studentStatus,
+          code: otp,
+        },
+      });
+      if (error || data?.error) throw new Error(data?.error || error?.message || "Verification failed");
+      await completeEmailVerification();
     } catch (err: any) {
       toast.error(err.message || "Verification failed");
     } finally {
@@ -321,13 +251,6 @@ const IitVerification = () => {
     }
     setLoading(true);
     try {
-      const mobileTestSession = readMobileTestSession();
-      if (mobileTestSession) {
-        saveMobileTestDocumentSubmission(selectedIit.name, studentStatus);
-        setStep("documents_pending");
-        toast.success("Test submission recorded locally");
-        return;
-      }
       if (!user) throw new Error("Your session expired. Please sign in again.");
       const extension = documentFile.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
       const path = `${user.id}/${crypto.randomUUID()}.${extension}`;
@@ -361,10 +284,6 @@ const IitVerification = () => {
   };
 
   const handleCheckDocumentStatus = async () => {
-    if (readMobileTestSession()) {
-      toast.info("Your test submission is still pending");
-      return;
-    }
     try {
       const result = await refetchDocumentSubmission();
       const submission = result.data;
@@ -388,11 +307,6 @@ const IitVerification = () => {
     if (loading) return;
     setLoading(true);
     try {
-      if (readMobileTestSession()) {
-        clearMobileTestSession();
-        window.location.replace("/auth");
-        return;
-      }
       const { error } = await supabase.auth.signOut({ scope: "local" });
       if (error) throw error;
       navigate("/auth", { replace: true });
@@ -406,18 +320,14 @@ const IitVerification = () => {
     if (loading) return;
     setLoading(true);
     try {
-      if (readMobileTestSession()) {
-        withdrawMobileTestDocumentSubmission();
-      } else {
-        if (!latestDocumentSubmission?.id || latestDocumentSubmission.status !== "pending") {
-          throw new Error("No pending verification request was found");
-        }
-        const { error } = await (supabase as any).rpc("withdraw_document_verification", {
-          p_submission_id: latestDocumentSubmission.id,
-        });
-        if (error) throw error;
-        await refetchDocumentSubmission();
+      if (!latestDocumentSubmission?.id || latestDocumentSubmission.status !== "pending") {
+        throw new Error("No pending verification request was found");
       }
+      const { error } = await (supabase as any).rpc("withdraw_document_verification", {
+        p_submission_id: latestDocumentSubmission.id,
+      });
+      if (error) throw error;
+      await refetchDocumentSubmission();
       setEmail("");
       setOtp("");
       setStep("verify_email");
@@ -558,9 +468,9 @@ const IitVerification = () => {
             </p>
             <Input type="email" placeholder={`yourname@${getExpectedDomain()}`} value={email} onChange={(e) => setEmail(e.target.value)} className="bg-secondary border-border h-12 rounded-xl mb-4" onKeyDown={(e) => e.key === "Enter" && handleSendCode()} />
             <Button size="lg" className="w-full h-12 text-base font-semibold rounded-xl" onClick={handleSendCode} disabled={loading}>
-              {loading ? "Verifying..." : emailTestMode ? "Verify & Continue" : "Send Verification Code"}
+              {loading ? "Sending..." : "Send Verification Code"}
             </Button>
-            <p className="text-xs text-muted-foreground mt-4 text-center">{emailTestMode ? "Test mode skips the code step, but the official IIT domain is still required." : "We'll send a 6-digit code to verify that you own this email."}</p>
+            <p className="text-xs text-muted-foreground mt-4 text-center">We'll send a 6-digit code to verify that you own this email.</p>
             <div className="flex items-center gap-3 my-6" aria-hidden="true">
               <div className="h-px bg-border flex-1" />
               <span className="text-xs font-medium text-muted-foreground">or</span>
@@ -665,9 +575,6 @@ const IitVerification = () => {
                 </InputOTPGroup>
               </InputOTP>
             </div>
-            {emailTestMode && (
-              <button onClick={() => setOtp(MOBILE_TEST_OTP)} className="text-xs text-primary font-semibold mb-4 block mx-auto hover:underline">Tap to use test code {MOBILE_TEST_OTP}</button>
-            )}
             <Button size="lg" className="w-full h-12 text-base font-semibold rounded-xl" onClick={handleVerifyOtp} disabled={loading}>
               {loading ? "Verifying..." : "Verify & Continue"}
             </Button>

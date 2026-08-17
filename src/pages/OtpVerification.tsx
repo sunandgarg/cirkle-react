@@ -6,9 +6,7 @@ import { Button } from "@/components/ui/button";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { toast } from "sonner";
 import { ArrowLeft, Check, Clock3, ShieldCheck } from "lucide-react";
-import { isMobileTestPhone, MOBILE_TEST_OTP, startMobileTestSession } from "@/lib/mobileVerification";
-
-const SUPER_ADMIN_PHONE = "8700602524";
+import { readResumeRoute } from "@/lib/sessionResume";
 
 const OtpVerification = () => {
   const [otp, setOtp] = useState("");
@@ -27,17 +25,13 @@ const OtpVerification = () => {
     if (!authComplete || !user) return;
     // If profile not loaded yet, wait for it
     if (profile === undefined) return;
-    if (!profile?.is_verified) {
+    if (!profile?.is_verified || !profile?.onboarding_completed) {
       navigate("/iit-verify", { replace: true });
-    } else if (!profile?.onboarding_completed) {
-      // AppLayout will render the onboarding wizard
-      navigate("/cirkle-forum", { replace: true });
     } else {
-      navigate("/cirkle-forum", { replace: true });
+      navigate(readResumeRoute(user.id), { replace: true });
     }
   }, [authComplete, user, profile, navigate]);
 
-  const isTestMode = isMobileTestPhone(countryCode, phone);
   const maskedPhone = phone.length >= 4 ? `••••••${phone.slice(-4)}` : phone;
 
   useEffect(() => {
@@ -60,25 +54,10 @@ const OtpVerification = () => {
   const handleVerify = async () => {
     if (otp.length !== 6) { toast.error("Please enter the full 6-digit OTP"); return; }
 
-    if (!isTestMode) {
-      // Production guard: hardcoded-password auth path is dev-only.
-      toast.error("SMS verification is not available right now. Please try again later.");
-      return;
-    }
-    if (otp !== MOBILE_TEST_OTP) { toast.error(`Invalid OTP. Use test code: ${MOBILE_TEST_OTP}`); return; }
-
     setLoading(true);
     try {
       const cleanPhone = phone.replace(/\D/g, "");
-      const isSuperAdmin = cleanPhone === SUPER_ADMIN_PHONE;
       const fullPhone = `${countryCode}${cleanPhone}`;
-
-      if (isTestMode) {
-        startMobileTestSession(countryCode, cleanPhone);
-        toast.success("Test account verified");
-        window.location.assign("/iit-verify");
-        return;
-      }
 
       const { data, error } = await supabase.auth.verifyOtp({
         phone: fullPhone,
@@ -93,12 +72,6 @@ const OtpVerification = () => {
         await supabase.auth.updateUser({ data: { phone: cleanPhone, phone_country_code: countryCode, phone_full: fullPhone } });
       }
 
-      // If super admin, use ensure_super_admin RPC (non-blocking, runs with service role)
-      if (isSuperAdmin && session?.user?.id) {
-        supabase.rpc("ensure_super_admin", { p_user_id: session.user.id }).then(() => {});
-      }
-
-
       toast.success("Verified successfully!");
       // Don't navigate directly - set flag and let useEffect handle it
       // once auth state propagates
@@ -112,10 +85,6 @@ const OtpVerification = () => {
 
   const handleResend = async () => {
     if (resendIn > 0 || resending) return;
-    if (!isTestMode) {
-      toast.error("SMS verification is not available right now. Please try again later.");
-      return;
-    }
     setResending(true);
     try {
       const { error } = await supabase.auth.signInWithOtp({ phone: `${countryCode}${phone}` });
@@ -156,12 +125,6 @@ const OtpVerification = () => {
           <span className="text-foreground font-semibold">{countryCode} {maskedPhone}</span>
           <button onClick={() => navigate("/auth")} className="ml-2 text-primary font-semibold hover:underline">Change</button>
         </p>
-        {isTestMode && (
-          <button onClick={() => setOtp(MOBILE_TEST_OTP)} className="mt-5 w-full max-w-sm rounded-2xl border border-primary/20 bg-primary/[0.07] px-4 py-3 text-center transition-all hover:bg-primary/15 active:scale-[0.99]">
-            <span className="block text-[11px] uppercase tracking-[0.14em] text-primary font-bold">Test mode · tap to use code</span>
-            <span className="block text-xl font-mono font-bold text-foreground tracking-[0.35em] mt-1 pl-[0.35em]">{MOBILE_TEST_OTP}</span>
-          </button>
-        )}
         <div className="mt-6 flex w-full justify-center overflow-hidden">
           <InputOTP autoFocus maxLength={6} value={otp} onChange={setOtp}>
             <InputOTPGroup className="gap-1 sm:gap-3">

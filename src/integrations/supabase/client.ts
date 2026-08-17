@@ -5,9 +5,15 @@ import type { Database } from './types';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
+if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+  throw new Error('Supabase public configuration is missing');
+}
+if (SUPABASE_PUBLISHABLE_KEY.startsWith('sb_secret_')) {
+  throw new Error('Refusing to expose a Supabase secret key in a browser build');
+}
 
 function isNewSupabaseApiKey(value: string): boolean {
-  return value.startsWith('sb_publishable_') || value.startsWith('sb_secret_');
+  return value.startsWith('sb_publishable_');
 }
 
 function createSupabaseFetch(supabaseKey: string): typeof fetch {

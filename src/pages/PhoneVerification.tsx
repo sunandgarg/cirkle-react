@@ -8,7 +8,6 @@ import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp
 import { toast } from "sonner";
 import { Smartphone, ShieldCheck, ArrowLeft } from "lucide-react";
 import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
-import { isMobileTestPhone, MOBILE_TEST_OTP } from "@/lib/mobileVerification";
 
 const isValidPhone = (digits: string) => digits.length === 10;
 
@@ -22,8 +21,6 @@ const PhoneVerification = () => {
   const [otp, setOtp] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const isTestMode = isMobileTestPhone(country.code, phone);
-
   useEffect(() => {
     if (loading) return;
     if (!user) { navigate("/auth", { replace: true }); return; }
@@ -35,10 +32,6 @@ const PhoneVerification = () => {
   const sendCode = async () => {
     if (!isValidPhone(phone)) {
       toast.error("Enter a valid 10-digit mobile number");
-      return;
-    }
-    if (!isTestMode) {
-      toast.error("SMS verification is not available right now. Please try again later.");
       return;
     }
     setSaving(true);
@@ -56,7 +49,6 @@ const PhoneVerification = () => {
 
   const verify = async () => {
     if (otp.length !== 6) { toast.error("Enter the full 6-digit code"); return; }
-    if (otp !== MOBILE_TEST_OTP) { toast.error(`Invalid code. Use test code: ${MOBILE_TEST_OTP}`); return; }
     setSaving(true);
     try {
       const { error } = await supabase.auth.verifyOtp({
@@ -121,12 +113,6 @@ const PhoneVerification = () => {
             <p className="text-sm text-muted-foreground mt-2 text-center">
               Enter the 6-digit code sent to <span className="text-foreground font-medium">{country.code} {phone}</span>
             </p>
-            {isTestMode && (
-              <div className="mt-6 bg-primary/10 border border-primary/20 rounded-xl px-4 py-3 w-full max-w-xs text-center">
-                <p className="text-xs text-primary font-semibold">🧪 TEST MODE</p>
-                <p className="text-2xl font-mono font-bold text-foreground tracking-[0.5em] mt-1">{MOBILE_TEST_OTP}</p>
-              </div>
-            )}
             <div className="mt-8">
               <InputOTP maxLength={6} value={otp} onChange={setOtp}>
                 <InputOTPGroup>

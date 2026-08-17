@@ -43,7 +43,7 @@ const AppLayout = () => {
       setProfileReady(true);
     }
     return () => { cancelled = true; };
-  }, [user?.id]);
+  }, [user, refetchProfile]);
 
   // If verified but onboarding not completed, show onboarding wizard
   const needsOnboarding = profileReady && user && isVerified && profile && !profile.onboarding_completed;
