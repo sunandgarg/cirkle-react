@@ -34,28 +34,42 @@ create trigger broadcast_forum_post_changes
 after insert or update or delete on public.posts
 for each row execute function public.broadcast_forum_post_changes();
 
+-- Some hosted projects reserve ownership of realtime.messages for the Realtime
+-- service role. In that case policy DDL cannot run through the migration pooler;
+-- keep the trigger installed and let the client use its Postgres Changes fallback.
+do $$
+begin
+  alter table realtime.messages enable row level security;
+  drop policy if exists forum_members_receive_room_broadcasts on realtime.messages;
+  create policy forum_members_receive_room_broadcasts
+  on realtime.messages
+  for select
+  to authenticated
+  using (
+    realtime.topic() like 'forum:%'
+    and public.forum_can_access_scope(
+      split_part(realtime.topic(), ':', 2),
+      split_part(realtime.topic(), ':', 3)
+    )
+  );
+exception when insufficient_privilege then
+  raise notice 'Skipping realtime.messages policy: managed table ownership does not permit migration DDL';
+end $$;
+
 create or replace function public.forum_broadcast_ready()
 returns boolean
 language sql
 stable
 security definer
 set search_path = public
-as $$ select true $$;
+as $$
+  select exists (
+    select 1 from pg_policies
+    where schemaname = 'realtime'
+      and tablename = 'messages'
+      and policyname = 'forum_members_receive_room_broadcasts'
+  )
+$$;
 
 revoke all on function public.forum_broadcast_ready() from public;
 grant execute on function public.forum_broadcast_ready() to authenticated;
-
-alter table realtime.messages enable row level security;
-
-drop policy if exists forum_members_receive_room_broadcasts on realtime.messages;
-create policy forum_members_receive_room_broadcasts
-on realtime.messages
-for select
-to authenticated
-using (
-  realtime.topic() like 'forum:%'
-  and public.forum_can_access_scope(
-    split_part(realtime.topic(), ':', 2),
-    split_part(realtime.topic(), ':', 3)
-  )
-);
