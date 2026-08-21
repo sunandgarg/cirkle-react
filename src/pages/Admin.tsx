@@ -1,9 +1,9 @@
 import { useState, useRef } from "react";
-import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, ToggleLeft, Briefcase, Plus, X, Pencil, Zap, ExternalLink, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,13 +14,7 @@ import { toast } from "sonner";
 import { convertToWebP } from "@/lib/imageUtils";
 import { defaultIitLogo, IIT_LIST, iitLogoSettingKey } from "@/data/iitInstitutes";
 import AdminEvents from "@/components/admin/AdminEvents";
-
-const SUB_FILTERS: Record<string, string[]> = {
-  "Full-time": ["0-1 yr", "1-3 yr", "3-5 yr", "5-7 yr", "7+ yr"],
-  "Part-time": ["0-1 yr", "1-3 yr", "3-5 yr", "5-7 yr", "7+ yr"],
-  "Remote": ["0-1 yr", "1-3 yr", "3-5 yr", "5-7 yr", "7+ yr"],
-  "Internship": ["0-1 mo", "1-3 mo", "3-6 mo", "6-12 mo"],
-};
+import AdminJobs from "@/components/admin/AdminJobs";
 
 const NAV_KEYS = [
   { key: "forum", label: "Cirkle" },
@@ -35,14 +29,11 @@ const Admin = () => {
   const { user, profile, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   const [userSearch, setUserSearch] = useState("");
-  const [showJobForm, setShowJobForm] = useState(false);
-  const [editingJob, setEditingJob] = useState<any>(null);
   const [uploadingIitLogo, setUploadingIitLogo] = useState<string | null>(null);
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [reviewingDocument, setReviewingDocument] = useState<string | null>(null);
   const [reviewingCourse, setReviewingCourse] = useState<string | null>(null);
   const [testDataAction, setTestDataAction] = useState<"seed" | "purge" | null>(null);
-  const [jobForm, setJobForm] = useState({ title: "", company: "", location: "", description: "", job_type: "Full-time", experience_level: "", category: "", easy_apply: true, apply_url: "" });
 
   const { data: navConfig } = useQuery({
     queryKey: ["nav-config-admin"],
@@ -253,15 +244,6 @@ const Admin = () => {
     toast.success("Message removed");
   };
 
-  const { data: jobs } = useQuery({
-    queryKey: ["admin-jobs"],
-    queryFn: async () => {
-      const { data } = await supabase.from("jobs").select("*").order("created_at", { ascending: false }).limit(200);
-      return data ?? [];
-    },
-    enabled: !!isAdmin,
-  });
-
   const { data: stats } = useQuery({
     queryKey: ["admin-stats"],
     queryFn: async () => {
@@ -387,50 +369,6 @@ const Admin = () => {
     toast.success(current ? "Unverified" : "Verified!");
   };
 
-  const saveJob = useMutation({
-    mutationFn: async () => {
-      if (!user) return;
-      const payload: any = {
-        title: jobForm.title, company: jobForm.company, location: jobForm.location,
-        description: jobForm.description || null, job_type: jobForm.job_type,
-        experience_level: jobForm.experience_level || null, category: jobForm.category || null,
-        easy_apply: jobForm.easy_apply,
-        apply_url: jobForm.easy_apply ? null : (jobForm.apply_url || null),
-      };
-      if (editingJob) {
-        const { error } = await supabase.from("jobs").update(payload).eq("id", editingJob.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("jobs").insert({
-          ...payload,
-          created_by: user.id, community_id: "default",
-        });
-        if (error) throw error;
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin-jobs"] });
-      queryClient.invalidateQueries({ queryKey: ["jobs"] });
-      setShowJobForm(false); setEditingJob(null);
-      setJobForm({ title: "", company: "", location: "", description: "", job_type: "Full-time", experience_level: "", category: "", easy_apply: true, apply_url: "" });
-      toast.success(editingJob ? "Job updated!" : "Job posted!");
-    },
-    onError: (err: any) => toast.error(err.message),
-  });
-
-  const deleteJob = async (jobId: string) => {
-    await supabase.from("jobs").delete().eq("id", jobId);
-    queryClient.invalidateQueries({ queryKey: ["admin-jobs"] });
-    queryClient.invalidateQueries({ queryKey: ["jobs"] });
-    toast.success("Job deleted");
-  };
-
-  const openEditJob = (job: any) => {
-    setJobForm({ title: job.title, company: job.company, location: job.location, description: job.description || "", job_type: job.job_type, experience_level: job.experience_level || "", category: job.category || "", easy_apply: !!job.easy_apply, apply_url: job.apply_url || "" });
-    setEditingJob(job);
-    setShowJobForm(true);
-  };
-
   const filteredUsers = users?.filter((u: any) =>
     !userSearch || (u.name || "").toLowerCase().includes(userSearch.toLowerCase()) ||
     (u.iit_name || "").toLowerCase().includes(userSearch.toLowerCase()) ||
@@ -450,67 +388,6 @@ const Admin = () => {
 
   return (
     <div className="bg-background min-h-screen">
-      {/* Job Form Modal */}
-      {showJobForm && (
-        <div className="fixed inset-0 z-[60] bg-background/80 backdrop-blur-sm flex items-end sm:items-center justify-center">
-          <div className="bg-card w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-border p-6 animate-fade-in max-h-[85vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-foreground">{editingJob ? "Edit Job" : "Post a Job"}</h3>
-              <button onClick={() => { setShowJobForm(false); setEditingJob(null); }} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="space-y-3">
-              <div><Label className="text-sm">Title *</Label><Input placeholder="Frontend Developer" value={jobForm.title} onChange={(e) => setJobForm({ ...jobForm, title: e.target.value })} className="bg-secondary border-border mt-1" /></div>
-              <div><Label className="text-sm">Company *</Label><Input placeholder="Acme Inc" value={jobForm.company} onChange={(e) => setJobForm({ ...jobForm, company: e.target.value })} className="bg-secondary border-border mt-1" /></div>
-              <div><Label className="text-sm">Location *</Label><Input placeholder="Remote / Bangalore" value={jobForm.location} onChange={(e) => setJobForm({ ...jobForm, location: e.target.value })} className="bg-secondary border-border mt-1" /></div>
-              <div>
-                <Label className="text-sm">Job Type</Label>
-                <div className="flex flex-wrap gap-1.5 mt-1">
-                  {["Full-time", "Part-time", "Internship", "Remote"].map((t) => (
-                    <button key={t} onClick={() => setJobForm({ ...jobForm, job_type: t, experience_level: "" })}
-                      className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${jobForm.job_type === t ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground"}`}>{t}</button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <Label className="text-sm">Experience Level</Label>
-                <div className="flex flex-wrap gap-1.5 mt-1">
-                  {(SUB_FILTERS[jobForm.job_type] || SUB_FILTERS["Full-time"]).map((lvl) => (
-                    <button key={lvl} onClick={() => setJobForm({ ...jobForm, experience_level: jobForm.experience_level === lvl ? "" : lvl })}
-                      className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors ${jobForm.experience_level === lvl ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground"}`}>{lvl}</button>
-                  ))}
-                </div>
-              </div>
-              <div><Label className="text-sm">Description</Label><Textarea placeholder="Job responsibilities, requirements..." value={jobForm.description} onChange={(e) => setJobForm({ ...jobForm, description: e.target.value })} className="bg-secondary border-border mt-1" rows={3} /></div>
-              <div>
-                <Label className="text-sm">Application Method</Label>
-                <div className="flex gap-1.5 mt-1">
-                  <button type="button" onClick={() => setJobForm({ ...jobForm, easy_apply: true })}
-                    className={`flex-1 text-xs px-3 py-2 rounded-xl border transition-colors flex items-center justify-center gap-1 ${jobForm.easy_apply ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground"}`}>
-                    <Zap className="w-3.5 h-3.5" /> Easy Apply
-                  </button>
-                  <button type="button" onClick={() => setJobForm({ ...jobForm, easy_apply: false })}
-                    className={`flex-1 text-xs px-3 py-2 rounded-xl border transition-colors flex items-center justify-center gap-1 ${!jobForm.easy_apply ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground"}`}>
-                    <ExternalLink className="w-3.5 h-3.5" /> External Link
-                  </button>
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-1">
-                  {jobForm.easy_apply ? "Applicants apply directly within Cirkle." : "Applicants are sent to an external website."}
-                </p>
-              </div>
-              {!jobForm.easy_apply && (
-                <div>
-                  <Label className="text-sm">Apply URL *</Label>
-                  <Input placeholder="https://company.com/careers/123" value={jobForm.apply_url} onChange={(e) => setJobForm({ ...jobForm, apply_url: e.target.value })} className="bg-secondary border-border mt-1" />
-                </div>
-              )}
-              <Button className="w-full h-11 rounded-xl" onClick={() => saveJob.mutate()} disabled={saveJob.isPending || !jobForm.title || !jobForm.company || !jobForm.location || (!jobForm.easy_apply && !jobForm.apply_url)}>
-                {saveJob.isPending ? "Saving..." : editingJob ? "Update Job" : "Post Job"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <header className="sticky top-0 z-40 bg-card border-b border-border px-4 py-4">
         <div className="flex items-center gap-3 max-w-4xl mx-auto">
           <button onClick={() => navigate(-1)} className="p-1 text-foreground hover-scale"><ArrowLeft className="w-5 h-5" /></button>
@@ -577,32 +454,7 @@ const Admin = () => {
 
           {/* Jobs Tab */}
           <TabsContent value="jobs" className="space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground">{jobs?.length || 0} jobs</p>
-              <Button size="sm" className="gap-1 rounded-full" onClick={() => { setEditingJob(null); setJobForm({ title: "", company: "", location: "", description: "", job_type: "Full-time", experience_level: "", category: "", easy_apply: true, apply_url: "" }); setShowJobForm(true); }}>
-                <Plus className="w-3.5 h-3.5" /> Post Job
-              </Button>
-            </div>
-            <div className="grid gap-2 lg:grid-cols-2">
-              {jobs?.map((job: any) => (
-                <div key={job.id} className="bg-card border border-border rounded-xl p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-foreground truncate">{job.title}</p>
-                      <p className="text-xs text-muted-foreground">{job.company} · {job.location}</p>
-                      <div className="flex gap-1 mt-1">
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">{job.job_type}</span>
-                        {job.experience_level && <span className="text-[10px] px-2 py-0.5 rounded-full bg-accent text-foreground">{job.experience_level}</span>}
-                      </div>
-                    </div>
-                    <div className="flex gap-1 flex-shrink-0">
-                      <button onClick={() => openEditJob(job)} className="p-1.5 text-muted-foreground hover:text-primary rounded-lg hover:bg-primary/10"><Pencil className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => deleteJob(job.id)} className="p-1.5 text-destructive hover:bg-destructive/10 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <AdminJobs />
           </TabsContent>
 
           <TabsContent value="events" className="space-y-3">

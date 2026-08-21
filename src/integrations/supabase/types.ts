@@ -755,7 +755,17 @@ export type Database = {
           id: string
           job_type: string
           location: string
+          expires_at: string | null
+          published_at: string | null
+          salary_text: string | null
+          scan_run_id: string | null
+          skills: string[]
+          source_fingerprint: string | null
+          source_type: string
+          source_url: string | null
+          status: string
           title: string
+          updated_at: string
         }
         Insert: {
           apply_url?: string | null
@@ -771,7 +781,17 @@ export type Database = {
           id?: string
           job_type?: string
           location?: string
+          expires_at?: string | null
+          published_at?: string | null
+          salary_text?: string | null
+          scan_run_id?: string | null
+          skills?: string[]
+          source_fingerprint?: string | null
+          source_type?: string
+          source_url?: string | null
+          status?: string
           title: string
+          updated_at?: string
         }
         Update: {
           apply_url?: string | null
@@ -787,7 +807,130 @@ export type Database = {
           id?: string
           job_type?: string
           location?: string
+          expires_at?: string | null
+          published_at?: string | null
+          salary_text?: string | null
+          scan_run_id?: string | null
+          skills?: string[]
+          source_fingerprint?: string | null
+          source_type?: string
+          source_url?: string | null
+          status?: string
           title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "jobs_scan_run_id_fkey"
+            columns: ["scan_run_id"]
+            isOneToOne: false
+            referencedRelation: "job_scan_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      job_scan_runs: {
+        Row: {
+          company: string | null
+          completed_at: string | null
+          created_at: string
+          discovered_count: number
+          error_message: string | null
+          id: string
+          imported_count: number
+          instructions: string | null
+          model: string
+          provider: string
+          publish_mode: string
+          requested_by: string
+          skipped_count: number
+          source_urls: string[]
+          status: string
+        }
+        Insert: {
+          company?: string | null
+          completed_at?: string | null
+          created_at?: string
+          discovered_count?: number
+          error_message?: string | null
+          id?: string
+          imported_count?: number
+          instructions?: string | null
+          model: string
+          provider: string
+          publish_mode?: string
+          requested_by: string
+          skipped_count?: number
+          source_urls: string[]
+          status?: string
+        }
+        Update: {
+          company?: string | null
+          completed_at?: string | null
+          created_at?: string
+          discovered_count?: number
+          error_message?: string | null
+          id?: string
+          imported_count?: number
+          instructions?: string | null
+          model?: string
+          provider?: string
+          publish_mode?: string
+          requested_by?: string
+          skipped_count?: number
+          source_urls?: string[]
+          status?: string
+        }
+        Relationships: []
+      }
+      job_scan_sources: {
+        Row: {
+          auto_publish: boolean
+          company: string
+          created_at: string
+          created_by: string
+          id: string
+          instructions: string | null
+          is_active: boolean
+          last_error: string | null
+          last_scan_status: string | null
+          last_scanned_at: string | null
+          model: string
+          provider: string
+          source_url: string
+          updated_at: string
+        }
+        Insert: {
+          auto_publish?: boolean
+          company: string
+          created_at?: string
+          created_by: string
+          id?: string
+          instructions?: string | null
+          is_active?: boolean
+          last_error?: string | null
+          last_scan_status?: string | null
+          last_scanned_at?: string | null
+          model: string
+          provider?: string
+          source_url: string
+          updated_at?: string
+        }
+        Update: {
+          auto_publish?: boolean
+          company?: string
+          created_at?: string
+          created_by?: string
+          id?: string
+          instructions?: string | null
+          is_active?: boolean
+          last_error?: string | null
+          last_scan_status?: string | null
+          last_scanned_at?: string | null
+          model?: string
+          provider?: string
+          source_url?: string
+          updated_at?: string
         }
         Relationships: []
       }
