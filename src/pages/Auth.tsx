@@ -88,21 +88,19 @@ const Auth = () => {
     <div className="relative min-h-[100svh] overflow-hidden bg-[#f6f7f9] text-[#10161e] supports-[height:100dvh]:min-h-[100dvh]">
       {/*
         This is deliberately a cropped, image-only version of the supplied
-        mobile reference. On a phone it keeps the complete four-column collage
-        in view. On wide/4K screens it tiles horizontally at a fixed visual
-        height instead of scaling the original portrait image until only one
-        oversized row is visible.
+        mobile reference. It always renders once across the full viewport so
+        there are no visible tile seams on desktop or 4K displays.
       */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[min(500px,52svh)] bg-repeat-x bg-top bg-[length:100%_auto] sm:h-[min(680px,70svh)] sm:bg-[length:auto_100%]"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[min(500px,48svh)] bg-no-repeat bg-[length:100%_100%] sm:h-[clamp(300px,45svh,480px)]"
         style={{ backgroundImage: 'url("/auth-community-grid.jpg")' }}
       />
       <main
         id="main-content"
         className="relative z-10 flex min-h-[100svh] w-full items-end px-6 pb-[max(24px,env(safe-area-inset-bottom))] supports-[height:100dvh]:min-h-[100dvh]"
       >
-        <section className="w-full" aria-labelledby="login-title">
+        <section className="relative w-full bg-[#f6f7f9] before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-12 before:bg-gradient-to-t before:from-[#f6f7f9] before:to-transparent" aria-labelledby="login-title">
           <h1 id="login-title" className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-[#10161e]">
             Welcome
           </h1>
