@@ -88,13 +88,18 @@ const Auth = () => {
     <div className="relative min-h-[100svh] overflow-hidden bg-[#f6f7f9] text-[#10161e] supports-[height:100dvh]:min-h-[100dvh]">
       {/*
         This is deliberately a cropped, image-only version of the supplied
-        mobile reference. It always renders once across the full viewport so
-        there are no visible tile seams on desktop or 4K displays.
+        mobile reference. It always renders once across the full viewport at
+        its natural aspect ratio, preventing both desktop tile seams and
+        stretched portraits on 4K displays.
       */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[min(500px,48svh)] bg-no-repeat bg-[length:100%_100%] sm:h-[clamp(300px,45svh,480px)]"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[min(500px,48svh)] bg-no-repeat bg-top bg-[length:100%_auto] sm:h-[clamp(300px,45svh,480px)]"
         style={{ backgroundImage: 'url("/auth-community-grid.jpg")' }}
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[min(500px,48svh)] bg-[linear-gradient(to_bottom,rgba(246,247,249,0)_0%,rgba(246,247,249,0.08)_38%,rgba(246,247,249,0.72)_76%,#f6f7f9_100%)] sm:h-[clamp(300px,45svh,480px)]"
       />
       <main
         id="main-content"
