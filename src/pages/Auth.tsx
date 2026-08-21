@@ -10,6 +10,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
 import { readResumeRoute } from "@/lib/sessionResume";
 
+const GoogleMark = () => (
+  <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 shrink-0">
+    <path fill="#4285F4" d="M21.6 12.23c0-.71-.06-1.4-.18-2.07H12v3.92h5.38a4.6 4.6 0 0 1-2 3.02v2.54h3.24c1.9-1.75 2.98-4.33 2.98-7.41Z" />
+    <path fill="#34A853" d="M12 22c2.7 0 4.97-.9 6.62-2.36l-3.24-2.54c-.9.6-2.05.96-3.38.96-2.61 0-4.82-1.76-5.61-4.13H3.05v2.62A10 10 0 0 0 12 22Z" />
+    <path fill="#FBBC05" d="M6.39 13.93A6.02 6.02 0 0 1 6.08 12c0-.67.11-1.32.31-1.93V7.45H3.05A10 10 0 0 0 2 12c0 1.61.38 3.14 1.05 4.55l3.34-2.62Z" />
+    <path fill="#EA4335" d="M12 5.94c1.47 0 2.79.5 3.83 1.5l2.87-2.87A9.64 9.64 0 0 0 12 2a10 10 0 0 0-8.95 5.45l3.34 2.62C7.18 7.7 9.39 5.94 12 5.94Z" />
+  </svg>
+);
+
 
 const isValidPhone = (digits: string) => digits.length === 10;
 
@@ -76,30 +85,43 @@ const Auth = () => {
 
 
   return (
-    <div className="relative min-h-[100dvh] overflow-hidden bg-[#f7f9fc] text-foreground" style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
+    <div className="relative min-h-[100svh] overflow-hidden bg-[#f6f7f9] text-[#10161e] supports-[height:100dvh]:min-h-[100dvh]">
+      {/* The source is a single cacheable composite. Clip it before its embedded
+          reference form begins, then recreate the long fade independently. */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[52dvh] min-h-[430px] bg-[url('/auth-community-bg.jpg')] bg-[length:100%_auto] bg-top bg-no-repeat opacity-90 grayscale sm:h-[46dvh] sm:min-h-[360px] sm:bg-cover lg:h-[45dvh] lg:min-h-[430px]"
-      />
+        className="pointer-events-none absolute inset-x-0 top-0 h-[300px] overflow-hidden sm:h-[40vw] sm:max-h-[580px]"
+      >
+        <img
+          src="/auth-community-bg.jpg"
+          alt=""
+          width="948"
+          height="1977"
+          className="h-auto w-full max-w-none select-none"
+        />
+      </div>
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[67dvh] min-h-[560px] bg-gradient-to-b from-[#111827]/50 via-[#f7f9fc]/76 to-[#f7f9fc] sm:h-[58dvh] sm:min-h-[500px] lg:h-[58dvh]"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[62dvh] bg-[linear-gradient(to_bottom,transparent_0%,transparent_34%,rgba(246,247,249,0.42)_60%,#f6f7f9_100%)] sm:h-[65dvh]"
       />
 
-      <main className="relative z-10 min-h-[100dvh] w-full px-8 pb-[max(18px,env(safe-area-inset-bottom))] pt-[50dvh] sm:px-8 sm:pt-[45dvh] lg:px-8">
+      <main
+        id="main-content"
+        className="relative z-10 flex min-h-[100svh] w-full items-end px-6 pb-[max(24px,env(safe-area-inset-bottom))] supports-[height:100dvh]:min-h-[100dvh]"
+      >
         <section className="w-full" aria-labelledby="login-title">
-          <h1 id="login-title" className="text-[36px] font-black leading-none tracking-normal text-[#111827] sm:text-[38px] lg:text-[36px]">
+          <h1 id="login-title" className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-[#10161e]">
             Welcome
           </h1>
-          <p className="mt-2 text-[19px] leading-7 tracking-normal text-slate-500 sm:text-[20px] lg:text-[20px]">
+          <p className="mb-4 mt-1 text-sm leading-5 text-[#637083]">
             Sign up or login to your account
           </p>
 
-          <div className="mt-5 flex items-center gap-3 sm:mt-6 sm:gap-3">
+          <div className="flex items-center gap-2">
             <CountryCodeSelect
               value={country}
               onChange={setCountry}
-              className="h-14 rounded-2xl border-[#d5dbe4] bg-[#eaf0f5] px-4 shadow-sm hover:bg-[#e4ebf1] sm:h-[68px] sm:rounded-[18px] sm:px-5 [&>span:first-child]:text-xl [&>span:nth-child(2)]:text-lg [&>svg]:h-4 [&>svg]:w-4"
+              className="h-12 w-[94px] justify-center rounded-xl border-[#d6dbe1] bg-[#e7ebee] px-2 shadow-none hover:bg-[#dfe5e9] [&>span:first-child]:text-lg [&>span:nth-child(2)]:text-base [&>svg]:h-3.5 [&>svg]:w-3.5"
             />
             <Input
               id="mobile-number"
@@ -109,48 +131,49 @@ const Auth = () => {
               placeholder="Enter 10-digit number"
               value={phone}
               onChange={(e) => handlePhoneChange(e.target.value)}
-              className="h-14 min-w-0 flex-1 rounded-2xl border-[#d5dbe4] bg-[#eaf0f5] px-4 text-[20px] tracking-normal text-[#111827] shadow-sm placeholder:text-slate-500 focus:border-primary sm:h-[68px] sm:rounded-[18px] sm:px-5 sm:text-[20px]"
+              aria-label="Enter 10-digit number"
+              className="h-12 min-w-0 flex-1 rounded-xl border-[#d6dbe1] bg-[#e7ebee] px-3 text-base text-[#10161e] shadow-none placeholder:text-[#637083] focus-visible:border-[#1666b6] focus-visible:ring-2 focus-visible:ring-[#1666b6]/20 sm:text-sm"
               onKeyDown={(e) => e.key === "Enter" && handleContinue()}
               maxLength={10}
             />
           </div>
 
-          <div className={`mt-3 text-[16px] tracking-normal tabular-nums sm:mt-4 sm:text-[18px] ${isValidPhone(phone) ? "text-[hsl(var(--success))]" : "text-slate-500"}`}>
+          <p className={`mb-2 mt-4 text-xs leading-4 tabular-nums ${isValidPhone(phone) ? "text-[hsl(var(--success))]" : "text-[#637083]"}`} aria-live="polite">
             {phone.length}/10 digits
-          </div>
+          </p>
 
           <Button
             size="lg"
-            className="mt-3 h-14 w-full rounded-2xl bg-[#83b3df] text-[20px] font-bold tracking-normal text-white shadow-none hover:bg-[#6ca4d7] disabled:opacity-70 sm:mt-4 sm:h-[68px] sm:rounded-[18px] sm:text-[22px]"
+            className="h-12 w-full rounded-xl bg-[#1666b6] px-8 text-base font-semibold text-white shadow-none hover:bg-[#125a9f] disabled:opacity-50"
             onClick={handleContinue}
             disabled={loading || !isValidPhone(phone)}
           >
             {loading ? "Sending code..." : "Continue"}
           </Button>
 
-          <div className="my-4 flex items-center gap-7 text-center text-[18px] tracking-normal text-slate-500 sm:my-8 sm:text-[20px]">
-            <span className="h-px flex-1 bg-slate-300" />
+          <div className="my-4 flex h-5 items-center gap-4 text-center text-sm leading-5 text-[#637083]">
+            <span className="h-px flex-1 bg-[#d6dbe1]" />
             <span>Or</span>
-            <span className="h-px flex-1 bg-slate-300" />
+            <span className="h-px flex-1 bg-[#d6dbe1]" />
           </div>
 
           <Button
             type="button"
             variant="outline"
             size="lg"
-            className="h-14 w-full gap-4 rounded-2xl border-[#d5dbe4] bg-[#eaf0f5] text-[18px] font-semibold tracking-normal text-[#111827] shadow-sm hover:bg-[#e4ebf1] sm:h-[68px] sm:rounded-[18px] sm:text-[20px]"
+            className="h-12 w-full gap-2 rounded-xl border-[#d6dbe1] bg-[#e7ebee] p-0 text-base font-semibold text-[#10161e] shadow-none hover:bg-[#dfe5e9]"
             onClick={handleGoogleContinue}
             disabled={loading}
           >
-            <span className="text-[28px] font-black leading-none text-[#4285f4]">G</span>
+            <GoogleMark />
             Google
           </Button>
 
-          <p className="mt-4 text-center text-[15px] leading-6 tracking-normal text-slate-500 sm:mt-6 sm:text-[17px]">
+          <p className="mt-4 text-center text-xs leading-4 text-[#637083]">
             By continuing, you agree to our{" "}
-            <button onClick={() => setShowTerms(true)} className="font-medium text-slate-600 underline underline-offset-4">T&C</button>
+            <button onClick={() => setShowTerms(true)} className="font-medium text-[#566273] underline underline-offset-2">T&C</button>
             {" "}&{" "}
-            <button onClick={() => setShowPrivacy(true)} className="font-medium text-slate-600 underline underline-offset-4">Privacy policy</button>
+            <button onClick={() => setShowPrivacy(true)} className="font-medium text-[#566273] underline underline-offset-2">Privacy policy</button>
           </p>
         </section>
       </main>
