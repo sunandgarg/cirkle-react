@@ -86,25 +86,18 @@ const Auth = () => {
 
   return (
     <div className="relative min-h-[100svh] overflow-hidden bg-[#f6f7f9] text-[#10161e] supports-[height:100dvh]:min-h-[100dvh]">
-      {/* The source is a single cacheable composite. Clip it before its embedded
-          reference form begins, then recreate the long fade independently. */}
+      {/*
+        This is deliberately a cropped, image-only version of the supplied
+        mobile reference. On a phone it keeps the complete four-column collage
+        in view. On wide/4K screens it tiles horizontally at a fixed visual
+        height instead of scaling the original portrait image until only one
+        oversized row is visible.
+      */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[300px] overflow-hidden sm:h-[40vw] sm:max-h-[580px]"
-      >
-        <img
-          src="/auth-community-bg.jpg"
-          alt=""
-          width="948"
-          height="1977"
-          className="h-auto w-full max-w-none select-none"
-        />
-      </div>
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[62dvh] bg-[linear-gradient(to_bottom,transparent_0%,transparent_34%,rgba(246,247,249,0.42)_60%,#f6f7f9_100%)] sm:h-[65dvh]"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[min(500px,52svh)] bg-repeat-x bg-top bg-[length:100%_auto] sm:h-[min(680px,70svh)] sm:bg-[length:auto_100%]"
+        style={{ backgroundImage: 'url("/auth-community-grid.jpg")' }}
       />
-
       <main
         id="main-content"
         className="relative z-10 flex min-h-[100svh] w-full items-end px-6 pb-[max(24px,env(safe-area-inset-bottom))] supports-[height:100dvh]:min-h-[100dvh]"
