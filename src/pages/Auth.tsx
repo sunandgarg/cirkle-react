@@ -103,7 +103,7 @@ const Auth = () => {
       />
       <main
         id="main-content"
-        className="relative z-10 flex min-h-[100svh] w-full items-end px-6 pb-[max(24px,env(safe-area-inset-bottom))] supports-[height:100dvh]:min-h-[100dvh]"
+        className="relative z-10 flex min-h-[100svh] w-full items-start px-6 pb-[max(24px,env(safe-area-inset-bottom))] pt-[min(45svh,470px)] supports-[height:100dvh]:min-h-[100dvh] sm:items-end sm:pt-0"
       >
         <section className="relative w-full bg-[#f6f7f9] before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-12 before:bg-gradient-to-t before:from-[#f6f7f9] before:to-transparent" aria-labelledby="login-title">
           <h1 id="login-title" className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-[#10161e]">
