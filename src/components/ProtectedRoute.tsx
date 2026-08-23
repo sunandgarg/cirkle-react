@@ -7,14 +7,13 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { user, profile, loading } = useAuth();
   const location = useLocation();
 
-  const hasPhone = Boolean(user?.phone || (user?.user_metadata as any)?.phone);
   const canEnterApp = Boolean(profile?.is_verified && profile?.onboarding_completed);
 
   useEffect(() => {
-    if (user?.id && hasPhone && canEnterApp) {
+    if (user?.id && canEnterApp) {
       saveResumeRoute(user.id, `${location.pathname}${location.search}${location.hash}`);
     }
-  }, [canEnterApp, hasPhone, location.hash, location.pathname, location.search, user?.id]);
+  }, [canEnterApp, location.hash, location.pathname, location.search, user?.id]);
 
   if (loading) {
     return (
@@ -26,11 +25,6 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 
   if (!user) {
     return <Navigate to="/auth" replace />;
-  }
-
-  // Social sign-ins (Google) must complete mobile verification first
-  if (!hasPhone && location.pathname !== "/phone-verify") {
-    return <Navigate to="/phone-verify" replace />;
   }
 
   // Verification and onboarding are durable server-side states. No protected

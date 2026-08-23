@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
 import { readResumeRoute } from "@/lib/sessionResume";
 
 const GoogleMark = () => (
@@ -20,23 +19,21 @@ const GoogleMark = () => (
 );
 
 
-const isValidPhone = (digits: string) => digits.length === 10;
+const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 
 const Auth = () => {
-  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
-  const [country, setCountry] = useState<CountryOption>(COUNTRY_CODES[0]);
   const navigate = useNavigate();
   const { user, profile, loading: authLoading } = useAuth();
 
   // Redirect already-logged-in users
   useEffect(() => {
     if (!authLoading && user) {
-      if (!(user.user_metadata as any)?.phone) {
-        navigate("/phone-verify", { replace: true });
-      } else if (!profile?.is_verified || !profile?.onboarding_completed) {
+      if (!profile?.is_verified || !profile?.onboarding_completed) {
         navigate("/iit-verify", { replace: true });
       } else {
         navigate(readResumeRoute(user.id), { replace: true });
@@ -44,26 +41,31 @@ const Auth = () => {
     }
   }, [user, profile?.is_verified, profile?.onboarding_completed, authLoading, navigate]);
 
-  const handlePhoneChange = (value: string) => {
-    setPhone(value.replace(/\D/g, "").slice(0, 10));
+  const handleEmailChange = (value: string) => {
+    setEmail(value.trim().toLowerCase());
+    setEmailSent(false);
   };
 
-  const handleContinue = async () => {
-    if (!isValidPhone(phone)) {
-      toast.error("Please enter a valid 10-digit mobile number");
+  const handleEmailContinue = async () => {
+    if (!isValidEmail(email)) {
+      toast.error("Please enter a valid email address");
       return;
     }
     setLoading(true);
     try {
-      const fullPhone = `${country.code}${phone}`;
       const { error } = await supabase.auth.signInWithOtp({
-        phone: fullPhone,
-        options: { shouldCreateUser: true },
+        email,
+        options: {
+          shouldCreateUser: true,
+          emailRedirectTo: `${window.location.origin}/iit-verify`,
+        },
       });
       if (error) throw error;
-      navigate("/otp-verify", { state: { phone, countryCode: country.code } });
+      setEmailSent(true);
+      toast.success("Verification link sent to your email");
     } catch (error: any) {
-      toast.error(error.message || "Could not start mobile verification. Please try again.");
+      toast.error(error.message || "Could not send email verification. Please try again.");
+    } finally {
       setLoading(false);
     }
   };
@@ -71,11 +73,11 @@ const Auth = () => {
   const handleGoogleContinue = async () => {
     setLoading(true);
     try {
-      const redirect_uri = `${window.location.origin}/phone-verify`;
+      const redirect_uri = `${window.location.origin}/iit-verify`;
       const result = await lovable.auth.signInWithOAuth("google", { redirect_uri });
       if (result.error) throw result.error;
       if (!result.redirected) {
-        navigate("/phone-verify", { replace: true });
+        navigate("/iit-verify", { replace: true });
       }
     } catch (error: any) {
       toast.error(error.message || "Could not continue with Google. Please try again.");
@@ -113,38 +115,30 @@ const Auth = () => {
             Sign up or login to your account
           </p>
 
-          <div className="flex items-center gap-2">
-            <CountryCodeSelect
-              value={country}
-              onChange={setCountry}
-              className="h-12 w-[94px] justify-center rounded-xl border-[#d6dbe1] bg-[#e7ebee] px-2 shadow-none hover:bg-[#dfe5e9] [&>span:first-child]:text-lg [&>span:nth-child(2)]:text-base [&>svg]:h-3.5 [&>svg]:w-3.5"
-            />
-            <Input
-              id="mobile-number"
-              type="tel"
-              inputMode="numeric"
-              autoComplete="tel-national"
-              placeholder="Enter 10-digit number"
-              value={phone}
-              onChange={(e) => handlePhoneChange(e.target.value)}
-              aria-label="Enter 10-digit number"
-              className="h-12 min-w-0 flex-1 rounded-xl border-[#d6dbe1] bg-[#e7ebee] px-3 text-base text-[#10161e] shadow-none placeholder:text-[#637083] focus-visible:border-[#1666b6] focus-visible:ring-2 focus-visible:ring-[#1666b6]/20 sm:text-sm"
-              onKeyDown={(e) => e.key === "Enter" && handleContinue()}
-              maxLength={10}
-            />
-          </div>
+          <Input
+            id="email-address"
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            placeholder="Enter your email"
+            value={email}
+            onChange={(e) => handleEmailChange(e.target.value)}
+            aria-label="Enter your email"
+            className="h-12 w-full rounded-xl border-[#d6dbe1] bg-[#e7ebee] px-3 text-base text-[#10161e] shadow-none placeholder:text-[#637083] focus-visible:border-[#1666b6] focus-visible:ring-2 focus-visible:ring-[#1666b6]/20 sm:text-sm"
+            onKeyDown={(e) => e.key === "Enter" && handleEmailContinue()}
+          />
 
-          <p className={`mb-2 mt-4 text-xs leading-4 tabular-nums ${isValidPhone(phone) ? "text-[hsl(var(--success))]" : "text-[#637083]"}`} aria-live="polite">
-            {phone.length}/10 digits
+          <p className={`mb-2 mt-4 text-xs leading-4 ${emailSent ? "text-[hsl(var(--success))]" : "text-[#637083]"}`} aria-live="polite">
+            {emailSent ? "Check your inbox and tap the verification link to continue." : "We'll send a secure verification link to this email."}
           </p>
 
           <Button
             size="lg"
             className="h-12 w-full rounded-xl bg-[#1666b6] px-8 text-base font-semibold text-white shadow-none hover:bg-[#125a9f] disabled:opacity-50"
-            onClick={handleContinue}
-            disabled={loading || !isValidPhone(phone)}
+            onClick={handleEmailContinue}
+            disabled={loading || !isValidEmail(email)}
           >
-            {loading ? "Sending code..." : "Continue"}
+            {loading ? "Sending link..." : "Continue with email"}
           </Button>
 
           <div className="my-4 flex h-5 items-center gap-4 text-center text-sm leading-5 text-[#637083]">
@@ -198,7 +192,7 @@ const Auth = () => {
         <DialogContent className="max-h-[min(88dvh,720px)] w-[calc(100%_-_1.5rem)] max-w-md overflow-y-auto rounded-[24px] p-5 sm:p-6">
           <DialogHeader><DialogTitle>Privacy Policy</DialogTitle></DialogHeader>
           <div className="text-sm text-muted-foreground space-y-3">
-            <p><strong>1. Data Collection</strong><br />We collect your phone number, profile information, and usage data to provide our services.</p>
+            <p><strong>1. Data Collection</strong><br />We collect your email address, profile information, and usage data to provide our services.</p>
             <p><strong>2. Data Usage</strong><br />Your data is used to personalize your experience, facilitate connections, and improve our platform.</p>
             <p><strong>3. Data Sharing</strong><br />We do not sell your personal data. Information is shared only with your consent or as required by law.</p>
             <p><strong>4. Data Security</strong><br />We implement industry-standard security measures to protect your data including encryption and secure storage.</p>
