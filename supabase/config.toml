@@ -1,5 +1,11 @@
 project_id = "bugwubrwvlqayxwcazfd"
 
+[functions.request-login-otp]
+verify_jwt = false
+
+[functions.verify-login-otp]
+verify_jwt = false
+
 [functions.send-verification-email]
 verify_jwt = true
 

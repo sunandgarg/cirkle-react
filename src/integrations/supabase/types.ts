@@ -1366,6 +1366,9 @@ export type Database = {
           mentor_price_video: number | null
           name: string | null
           onboarding_completed: boolean
+          phone_country_code: string | null
+          phone_full: string | null
+          phone_number: string | null
           primary_education_id: string | null
           role: Database["public"]["Enums"]["app_role"]
           skills: string[] | null
@@ -1396,6 +1399,9 @@ export type Database = {
           mentor_price_video?: number | null
           name?: string | null
           onboarding_completed?: boolean
+          phone_country_code?: string | null
+          phone_full?: string | null
+          phone_number?: string | null
           primary_education_id?: string | null
           role?: Database["public"]["Enums"]["app_role"]
           skills?: string[] | null
@@ -1426,6 +1432,9 @@ export type Database = {
           mentor_price_video?: number | null
           name?: string | null
           onboarding_completed?: boolean
+          phone_country_code?: string | null
+          phone_full?: string | null
+          phone_number?: string | null
           primary_education_id?: string | null
           role?: Database["public"]["Enums"]["app_role"]
           skills?: string[] | null
@@ -1766,6 +1775,21 @@ export type Database = {
         }
         Returns: undefined
       }
+      complete_member_onboarding: {
+        Args: {
+          p_company?: string
+          p_degree: string
+          p_iit_name: string
+          p_linkedin?: string
+          p_location?: string
+          p_name: string
+          p_passing_year: string
+          p_phone?: string
+          p_phone_country_code?: string
+          p_specialisation: string
+        }
+        Returns: string
+      }
       create_chat_group: {
         Args: { p_member_ids: string[]; p_name: string }
         Returns: string
@@ -1814,6 +1838,14 @@ export type Database = {
       }
       revoke_admin_role: {
         Args: { p_target_user_id: string }
+        Returns: undefined
+      }
+      save_account_details: {
+        Args: {
+          p_name: string
+          p_phone?: string
+          p_phone_country_code?: string
+        }
         Returns: undefined
       }
       set_member_verification: {

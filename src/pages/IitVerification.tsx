@@ -7,11 +7,12 @@ import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search, FileUp, Clock3, LockKeyhole, RefreshCw } from "lucide-react";
+import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search, FileUp, Clock3, LockKeyhole, RefreshCw, User } from "lucide-react";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, expectedIitEmailDomain, IIT_LIST, iitLogoSettingKey, isMatchingIitEmail, type IitInstitute, type IitMemberStatus } from "@/data/iitInstitutes";
 import { readResumeRoute } from "@/lib/sessionResume";
+import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
 
 const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
   const [failed, setFailed] = useState(false);
@@ -51,17 +52,21 @@ function deriveIitFromEmail(email: string): string | undefined {
   return match?.name;
 }
 
-type Step = "select_iit" | "select_status" | "verify_email" | "verify_otp" | "upload_documents" | "documents_pending" | "onboarding";
+type Step = "account_details" | "select_iit" | "select_status" | "verify_email" | "verify_otp" | "upload_documents" | "documents_pending" | "onboarding";
 
 const IitVerification = () => {
   const navigate = useNavigate();
   const { user, profile, refetchProfile } = useAuth();
-  const [step, setStep] = useState<Step>("select_iit");
+  const [step, setStep] = useState<Step>("account_details");
   const [selectedIit, setSelectedIit] = useState<IitInstitute | null>(null);
   const [studentStatus, setStudentStatus] = useState<string>("");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
+  const [accountName, setAccountName] = useState(() => profile?.name || (user?.user_metadata as any)?.full_name || (user?.user_metadata as any)?.name || "");
+  const [country, setCountry] = useState<CountryOption>(COUNTRY_CODES[0]);
+  const [phone, setPhone] = useState((profile as any)?.phone_number || "");
+  const [editingAccountDetails, setEditingAccountDetails] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [existingRecordMessage, setExistingRecordMessage] = useState("");
   const [documentType, setDocumentType] = useState("student_id");
@@ -112,8 +117,21 @@ const IitVerification = () => {
     }
     if (profile?.is_verified && !profile.onboarding_completed) {
       setStep("onboarding");
+      return;
     }
-  }, [latestDocumentSubmission, navigate, profile?.is_verified, profile?.onboarding_completed, user?.id]);
+    if (!editingAccountDetails && !profile?.is_verified && profile?.name && step === "account_details") {
+      setStep("select_iit");
+    }
+  }, [editingAccountDetails, latestDocumentSubmission, navigate, profile?.is_verified, profile?.name, profile?.onboarding_completed, step, user?.id]);
+
+  useEffect(() => {
+    if (profile?.name) {
+      setAccountName(profile.name);
+    } else if ((user?.user_metadata as any)?.full_name || (user?.user_metadata as any)?.name) {
+      setAccountName((user?.user_metadata as any)?.full_name || (user?.user_metadata as any)?.name);
+    }
+    if ((profile as any)?.phone_number) setPhone((profile as any).phone_number);
+  }, [profile, user?.user_metadata]);
 
   const filteredIits = IIT_LIST.filter((iit) =>
     iit.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -127,6 +145,34 @@ const IitVerification = () => {
   const handleSelectStatus = (status: string) => {
     setStudentStatus(status);
     setStep("verify_email");
+  };
+
+  const handleSaveAccountDetails = async () => {
+    const cleanPhone = phone.replace(/\D/g, "").slice(0, 10);
+    if (accountName.trim().length < 2) {
+      toast.error("Enter your name");
+      return;
+    }
+    if (cleanPhone && cleanPhone.length !== 10) {
+      toast.error("Enter a valid 10-digit phone number");
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await (supabase as any).rpc("save_account_details", {
+        p_name: accountName.trim(),
+        p_phone_country_code: cleanPhone ? country.code : null,
+        p_phone: cleanPhone || null,
+      });
+      if (error) throw error;
+      await refetchProfile();
+      setEditingAccountDetails(false);
+      setStep("select_iit");
+    } catch (error: any) {
+      toast.error(error.message || "Could not save your details");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getExpectedDomain = () => {
@@ -353,7 +399,7 @@ const IitVerification = () => {
     );
   }
 
-  const stepIndex = step === "select_iit" ? 0 : step === "select_status" ? 1 : step === "verify_email" ? 2 : 3;
+  const stepIndex = step === "account_details" ? 0 : step === "select_iit" ? 1 : step === "select_status" ? 2 : step === "verify_email" ? 3 : 4;
 
   return (
     <div className="onboarding-shell">
@@ -365,6 +411,10 @@ const IitVerification = () => {
             else if (step === "upload_documents" || step === "verify_otp") setStep("verify_email");
             else if (step === "verify_email") setStep("select_status");
             else if (step === "select_status") setStep("select_iit");
+            else if (step === "select_iit") {
+              setEditingAccountDetails(true);
+              setStep("account_details");
+            }
             else navigate(-1);
           }}
           className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
@@ -374,10 +424,10 @@ const IitVerification = () => {
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <p className="truncate text-xs font-bold text-foreground">Verify your IIT identity</p>
-            <span className="text-[10px] font-semibold text-muted-foreground">{Math.min(stepIndex + 1, 4)} of 4</span>
+            <span className="text-[10px] font-semibold text-muted-foreground">{Math.min(stepIndex + 1, 5)} of 5</span>
           </div>
-          <div className="flex gap-1.5" aria-label={`Verification step ${Math.min(stepIndex + 1, 4)} of 4`}>
-          {[0, 1, 2, 3].map((i) => (
+          <div className="flex gap-1.5" aria-label={`Verification step ${Math.min(stepIndex + 1, 5)} of 5`}>
+          {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${stepIndex >= i ? "bg-primary shadow-[0_3px_10px_-4px_hsl(var(--primary))]" : "bg-border"}`} />
           ))}
           </div>
@@ -385,6 +435,56 @@ const IitVerification = () => {
       </header>
 
       <div className="onboarding-scroll touch-pan-y">
+        {step === "account_details" && (
+          <div className="onboarding-stage animate-fade-in">
+            <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mb-5">
+              <User className="w-7 h-7 text-primary" />
+            </div>
+            <span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Account verified</span>
+            <h1 className="text-2xl font-black tracking-tight text-foreground mt-2 mb-2">Add your basic details</h1>
+            <p className="text-sm leading-6 text-muted-foreground mb-6">
+              We use this to create your profile before IIT verification. Your phone number is optional and never shown publicly.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="account-name" className="mb-1.5 block text-sm font-semibold text-foreground">Full name</label>
+                <Input
+                  id="account-name"
+                  value={accountName}
+                  onChange={(event) => setAccountName(event.target.value)}
+                  placeholder="e.g., Rahul Sharma"
+                  className="h-12 rounded-xl bg-secondary border-border text-[16px]"
+                  autoComplete="name"
+                  onKeyDown={(event) => event.key === "Enter" && handleSaveAccountDetails()}
+                />
+              </div>
+              <div>
+                <label htmlFor="account-phone" className="mb-1.5 block text-sm font-semibold text-foreground">
+                  Phone number <span className="font-normal text-muted-foreground">(optional)</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <CountryCodeSelect value={country} onChange={setCountry} className="h-12 w-[96px] justify-center rounded-xl bg-secondary" />
+                  <Input
+                    id="account-phone"
+                    type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel-national"
+                    placeholder="10-digit number"
+                    value={phone}
+                    onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 10))}
+                    className="h-12 min-w-0 flex-1 rounded-xl bg-secondary border-border text-[16px]"
+                    maxLength={10}
+                    onKeyDown={(event) => event.key === "Enter" && handleSaveAccountDetails()}
+                  />
+                </div>
+              </div>
+            </div>
+            <Button className="mt-6 h-12 w-full rounded-xl font-bold" onClick={handleSaveAccountDetails} disabled={loading || accountName.trim().length < 2 || (!!phone && phone.length !== 10)}>
+              {loading ? "Saving..." : "Continue to IIT verification"}
+            </Button>
+          </div>
+        )}
+
         {step === "select_iit" && (
           <div className="onboarding-stage animate-fade-in !max-w-2xl">
             <div className="flex items-center gap-3 mb-2">

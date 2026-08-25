@@ -11,6 +11,7 @@ import { companies } from "@/data/companiesList";
 import { ALL_COURSES, getSpecialisations } from "@/data/courseSpecialisations";
 import { clearMobileTestCourseRequest, clearMobileTestSession, readMobileTestSession, saveMobileTestCourseRequest, updateMobileTestSession, withdrawMobileTestCourseRequest } from "@/lib/mobileVerification";
 import { useQuery } from "@tanstack/react-query";
+import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
 
 const YEARS = Array.from({ length: 56 }, (_, i) => String(2035 - i));
 
@@ -35,6 +36,8 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
   const [specialisation, setSpecialisation] = useState("");
   const [year, setYear] = useState("");
   const [location, setLocation] = useState(profile?.location || "");
+  const [country, setCountry] = useState<CountryOption>(COUNTRY_CODES[0]);
+  const [phone, setPhone] = useState((profile as any)?.phone_number || "");
   const [linkedin, setLinkedin] = useState("");
   const [company, setCompany] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -106,7 +109,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
       case "degree": return !!degree && (degree !== "Other" || otherCourse.trim().length >= 2);
       case "specialisation": return !!specialisation;
       case "year": return !!year;
-      case "optional": return acceptedTerms;
+      case "optional": return acceptedTerms && (!phone || phone.length === 10);
       default: return true;
     }
   };
@@ -242,6 +245,8 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
         p_location: location || null,
         p_linkedin: linkedin.trim() || null,
         p_company: company.trim() || null,
+        p_phone_country_code: phone ? country.code : null,
+        p_phone: phone || null,
       });
       if (onboardingError) throw onboardingError;
 
@@ -452,6 +457,22 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
                     allowOther={true}
                     className="rounded-xl"
                   />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1.5 block">Phone number <span className="font-normal text-muted-foreground">(optional)</span></label>
+                  <div className="flex items-center gap-2">
+                    <CountryCodeSelect value={country} onChange={setCountry} className="h-12 w-[96px] justify-center rounded-xl bg-secondary" />
+                    <Input
+                      value={phone}
+                      onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 10))}
+                      placeholder="10-digit number"
+                      className="h-12 min-w-0 flex-1 rounded-xl bg-secondary border-border text-[16px]"
+                      inputMode="numeric"
+                      autoComplete="tel-national"
+                      maxLength={10}
+                    />
+                  </div>
+                  {!!phone && phone.length !== 10 && <p className="mt-1.5 text-xs text-destructive">Enter a valid 10-digit phone number.</p>}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1.5 block">LinkedIn URL</label>

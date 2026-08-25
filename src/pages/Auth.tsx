@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase, supabaseUrl } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { readResumeRoute } from "@/lib/sessionResume";
@@ -31,8 +32,10 @@ const getGoogleAuthUrl = () => {
 
 const Auth = () => {
   const [email, setEmail] = useState("");
+  const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
+  const [authStep, setAuthStep] = useState<"email" | "otp">("email");
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const navigate = useNavigate();
@@ -52,6 +55,7 @@ const Auth = () => {
   const handleEmailChange = (value: string) => {
     setEmail(value.trim().toLowerCase());
     setEmailSent(false);
+    setOtp("");
   };
 
   const handleEmailContinue = async () => {
@@ -61,21 +65,49 @@ const Auth = () => {
     }
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: true,
-          emailRedirectTo: `${window.location.origin}/iit-verify`,
+      const { error } = await supabase.functions.invoke("request-login-otp", {
+        body: {
+          email,
+          redirect_to: `${window.location.origin}/iit-verify`,
         },
       });
       if (error) throw error;
       setEmailSent(true);
-      toast.success("Verification link sent to your email");
+      setAuthStep("otp");
+      toast.success("Verification code sent to your email");
     } catch (error: any) {
-      toast.error(error.message || "Could not send email verification. Please try again.");
+      toast.error(error.message || "Could not send email code. Please try again.");
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleVerifyEmailOtp = async () => {
+    if (!isValidEmail(email) || otp.length !== 6) {
+      toast.error("Enter the 6-digit code sent to your email");
+      return;
+    }
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("verify-login-otp", {
+        body: { email, code: otp },
+      });
+      if (error) throw error;
+      if (!data?.session) throw new Error("Could not start your session. Please request a new code.");
+      const { error: sessionError } = await supabase.auth.setSession(data.session);
+      if (sessionError) throw sessionError;
+      toast.success("Email verified");
+      navigate("/iit-verify", { replace: true });
+    } catch (error: any) {
+      toast.error(error.message || "Could not verify the code. Please try again.");
+      setLoading(false);
+    }
+  };
+
+  const handleEditEmail = () => {
+    setAuthStep("email");
+    setOtp("");
+    setEmailSent(false);
   };
 
   return (
@@ -107,38 +139,6 @@ const Auth = () => {
             Sign up or login to your account
           </p>
 
-          <Input
-            id="email-address"
-            type="email"
-            inputMode="email"
-            autoComplete="email"
-            placeholder="Enter your email"
-            value={email}
-            onChange={(e) => handleEmailChange(e.target.value)}
-            aria-label="Enter your email"
-            className="h-12 w-full rounded-xl border-[#d6dbe1] bg-[#e7ebee] px-3 text-base text-[#10161e] shadow-none placeholder:text-[#637083] focus-visible:border-[#1666b6] focus-visible:ring-2 focus-visible:ring-[#1666b6]/20 sm:text-sm"
-            onKeyDown={(e) => e.key === "Enter" && handleEmailContinue()}
-          />
-
-          <p className={`mb-2 mt-4 text-xs leading-4 ${emailSent ? "text-[hsl(var(--success))]" : "text-[#637083]"}`} aria-live="polite">
-            {emailSent ? "Check your inbox and tap the verification link to continue." : "We'll send a secure verification link to this email."}
-          </p>
-
-          <Button
-            size="lg"
-            className="h-12 w-full rounded-xl bg-[#1666b6] px-8 text-base font-semibold text-white shadow-none hover:bg-[#125a9f] disabled:opacity-50"
-            onClick={handleEmailContinue}
-            disabled={loading || !isValidEmail(email)}
-          >
-            {loading ? "Sending link..." : "Continue with email"}
-          </Button>
-
-          <div className="my-4 flex h-5 items-center gap-4 text-center text-sm leading-5 text-[#637083]">
-            <span className="h-px flex-1 bg-[#d6dbe1]" />
-            <span>Or</span>
-            <span className="h-px flex-1 bg-[#d6dbe1]" />
-          </div>
-
           <Button
             asChild
             variant="outline"
@@ -150,6 +150,69 @@ const Auth = () => {
               Google
             </a>
           </Button>
+
+          <div className="my-4 flex h-5 items-center gap-4 text-center text-sm leading-5 text-[#637083]">
+            <span className="h-px flex-1 bg-[#d6dbe1]" />
+            <span>Or</span>
+            <span className="h-px flex-1 bg-[#d6dbe1]" />
+          </div>
+
+          {authStep === "email" ? (
+            <>
+              <Input
+                id="email-address"
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                placeholder="Enter your email"
+                value={email}
+                onChange={(e) => handleEmailChange(e.target.value)}
+                aria-label="Enter your email"
+                className="h-12 w-full rounded-xl border-[#d6dbe1] bg-[#e7ebee] px-3 text-base text-[#10161e] shadow-none placeholder:text-[#637083] focus-visible:border-[#1666b6] focus-visible:ring-2 focus-visible:ring-[#1666b6]/20 sm:text-sm"
+                onKeyDown={(e) => e.key === "Enter" && handleEmailContinue()}
+              />
+
+              <p className="mb-2 mt-4 text-xs leading-4 text-[#637083]" aria-live="polite">
+                We'll email a 6-digit secure code to verify this account.
+              </p>
+
+              <Button
+                size="lg"
+                className="h-12 w-full rounded-xl bg-[#1666b6] px-8 text-base font-semibold text-white shadow-none hover:bg-[#125a9f] disabled:opacity-50"
+                onClick={handleEmailContinue}
+                disabled={loading || !isValidEmail(email)}
+              >
+                {loading ? "Sending code..." : "Send email code"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="mb-4 text-sm leading-5 text-[#637083]" aria-live="polite">
+                Enter the 6-digit code sent to <span className="font-semibold text-[#10161e]">{email}</span>
+                <button type="button" onClick={handleEditEmail} className="ml-2 font-semibold text-[#1666b6] underline underline-offset-2">Change</button>
+              </p>
+              <div className="flex justify-center overflow-hidden">
+                <InputOTP autoFocus maxLength={6} value={otp} onChange={setOtp}>
+                  <InputOTPGroup className="gap-1.5 sm:gap-2">
+                    {[0, 1, 2, 3, 4, 5].map((index) => (
+                      <InputOTPSlot key={index} index={index} className="h-12 w-10 rounded-xl border-[#d6dbe1] bg-[#e7ebee] text-lg font-bold text-[#10161e] first:rounded-xl last:rounded-xl sm:w-12" />
+                    ))}
+                  </InputOTPGroup>
+                </InputOTP>
+              </div>
+              <Button
+                size="lg"
+                className="mt-4 h-12 w-full rounded-xl bg-[#1666b6] px-8 text-base font-semibold text-white shadow-none hover:bg-[#125a9f] disabled:opacity-50"
+                onClick={handleVerifyEmailOtp}
+                disabled={loading || otp.length !== 6}
+              >
+                {loading ? "Verifying..." : "Verify email"}
+              </Button>
+              <button type="button" onClick={handleEmailContinue} disabled={loading} className="mt-3 w-full text-center text-xs font-semibold text-[#1666b6] disabled:opacity-50">
+                {emailSent ? "Send a new code" : "Resend code"}
+              </button>
+            </>
+          )}
 
           <p className="mt-4 text-center text-xs leading-4 text-[#637083]">
             By continuing, you agree to our{" "}
