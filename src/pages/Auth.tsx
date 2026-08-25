@@ -1,8 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { supabase } from "@/integrations/supabase/client";
-import { lovable } from "@/integrations/lovable";
+import { supabase, supabaseUrl } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -20,6 +19,15 @@ const GoogleMark = () => (
 
 
 const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+
+const getGoogleAuthUrl = () => {
+  const authUrl = new URL("/auth/v1/authorize", supabaseUrl);
+  authUrl.searchParams.set("provider", "google");
+  authUrl.searchParams.set("redirect_to", `${window.location.origin}/iit-verify`);
+  authUrl.searchParams.set("access_type", "offline");
+  authUrl.searchParams.set("prompt", "select_account");
+  return authUrl.toString();
+};
 
 const Auth = () => {
   const [email, setEmail] = useState("");
@@ -69,22 +77,6 @@ const Auth = () => {
       setLoading(false);
     }
   };
-
-  const handleGoogleContinue = async () => {
-    setLoading(true);
-    try {
-      const redirect_uri = `${window.location.origin}/iit-verify`;
-      const result = await lovable.auth.signInWithOAuth("google", { redirect_uri });
-      if (result.error) throw result.error;
-      if (!result.redirected) {
-        navigate("/iit-verify", { replace: true });
-      }
-    } catch (error: any) {
-      toast.error(error.message || "Could not continue with Google. Please try again.");
-      setLoading(false);
-    }
-  };
-
 
   return (
     <div className="relative min-h-[100svh] overflow-hidden bg-[#f6f7f9] text-[#10161e] supports-[height:100dvh]:min-h-[100dvh]">
@@ -148,15 +140,15 @@ const Auth = () => {
           </div>
 
           <Button
-            type="button"
+            asChild
             variant="outline"
             size="lg"
             className="h-12 w-full gap-2 rounded-xl border-[#d6dbe1] bg-[#e7ebee] p-0 text-base font-semibold text-[#10161e] shadow-none hover:bg-[#dfe5e9]"
-            onClick={handleGoogleContinue}
-            disabled={loading}
           >
-            <GoogleMark />
-            Google
+            <a href={typeof window === "undefined" ? "#" : getGoogleAuthUrl()} onClick={() => setLoading(true)}>
+              <GoogleMark />
+              Google
+            </a>
           </Button>
 
           <p className="mt-4 text-center text-xs leading-4 text-[#637083]">

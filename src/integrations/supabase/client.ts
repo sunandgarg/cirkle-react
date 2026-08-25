@@ -52,3 +52,5 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
     storageKey: `cirkle-auth-${import.meta.env.VITE_SUPABASE_PROJECT_ID}`,
   }
 });
+
+export const supabaseUrl = SUPABASE_URL;
