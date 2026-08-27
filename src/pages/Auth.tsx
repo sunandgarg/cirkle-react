@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { supabase, supabaseUrl } from "@/integrations/supabase/client";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
@@ -20,15 +20,6 @@ const GoogleMark = () => (
 
 
 const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
-
-const getGoogleAuthUrl = () => {
-  const authUrl = new URL("/auth/v1/authorize", supabaseUrl);
-  authUrl.searchParams.set("provider", "google");
-  authUrl.searchParams.set("redirect_to", `${window.location.origin}/iit-verify`);
-  authUrl.searchParams.set("access_type", "offline");
-  authUrl.searchParams.set("prompt", "select_account");
-  return authUrl.toString();
-};
 
 const Auth = () => {
   const [email, setEmail] = useState("");
@@ -79,6 +70,26 @@ const Auth = () => {
       toast.error(error.message || "Could not send email code. Please try again.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/iit-verify`,
+          queryParams: {
+            access_type: "offline",
+            prompt: "select_account",
+          },
+        },
+      });
+      if (error) throw error;
+    } catch (error: any) {
+      setLoading(false);
+      toast.error(error.message || "Google login is not available yet. Please try email verification.");
     }
   };
 
@@ -140,15 +151,15 @@ const Auth = () => {
           </p>
 
           <Button
-            asChild
+            type="button"
             variant="outline"
             size="lg"
             className="h-12 w-full gap-2 rounded-xl border-[#d6dbe1] bg-[#e7ebee] p-0 text-base font-semibold text-[#10161e] shadow-none hover:bg-[#dfe5e9]"
+            onClick={handleGoogleLogin}
+            disabled={loading}
           >
-            <a href={typeof window === "undefined" ? "#" : getGoogleAuthUrl()} onClick={() => setLoading(true)}>
-              <GoogleMark />
-              Google
-            </a>
+            <GoogleMark />
+            Google
           </Button>
 
           <div className="my-4 flex h-5 items-center gap-4 text-center text-sm leading-5 text-[#637083]">
