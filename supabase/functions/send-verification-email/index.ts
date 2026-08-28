@@ -7,6 +7,8 @@ const corsHeaders = {
   "Content-Type": "application/json",
 };
 
+const SES_FROM_EMAIL = "Cirkle <verify@cirkle.world>";
+
 type MemberStatus = "current_student" | "alumni";
 type IitDomains = { student: string; alumni: string };
 
@@ -144,7 +146,7 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     const pepper = Deno.env.get("VERIFICATION_CODE_PEPPER");
-    const emailFrom = Deno.env.get("AWS_SES_FROM_EMAIL") || Deno.env.get("VERIFICATION_EMAIL_FROM") || "Cirkle <verify@cirkle.world>";
+    const emailFrom = SES_FROM_EMAIL;
     if (!supabaseUrl || !serviceKey || !pepper) {
       return json({ error: "Email verification service is not configured" }, 503);
     }

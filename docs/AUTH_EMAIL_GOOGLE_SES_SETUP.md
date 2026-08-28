@@ -45,9 +45,12 @@ Set these Supabase Edge Function secrets:
 supabase secrets set AWS_REGION=ap-south-1 --project-ref bugwubrwvlqayxwcazfd
 supabase secrets set AWS_ACCESS_KEY_ID=... --project-ref bugwubrwvlqayxwcazfd
 supabase secrets set AWS_SECRET_ACCESS_KEY=... --project-ref bugwubrwvlqayxwcazfd
-supabase secrets set AWS_SES_FROM_EMAIL='Cirkle <verify@cirkle.world>' --project-ref bugwubrwvlqayxwcazfd
 supabase secrets set VERIFICATION_CODE_PEPPER=... --project-ref bugwubrwvlqayxwcazfd
 ```
+
+Both OTP functions enforce `Cirkle <verify@cirkle.world>` as the sender. A
+personal Gmail identity is not used and cannot override the sender through an
+environment variable.
 
 `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are provided automatically by Supabase for hosted Edge Functions.
 
@@ -57,7 +60,7 @@ The AWS IAM user should have permission for:
 ses:SendEmail
 ```
 
-The sender/domain in `AWS_SES_FROM_EMAIL` must be verified in AWS SES. If the SES account is still in sandbox mode, recipient addresses must also be verified.
+The `cirkle.world` domain must be verified in AWS SES. If the SES account is still in sandbox mode, recipient addresses must also be verified.
 
 ## Deploy
 
