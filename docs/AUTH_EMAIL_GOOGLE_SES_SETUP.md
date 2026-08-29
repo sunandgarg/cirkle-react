@@ -1,9 +1,11 @@
 # Auth, Google, and AWS SES Setup
 
-This app now has two account login paths on `/auth`:
+This app now has three account login paths on `/auth`:
 
 1. Google login through Supabase OAuth.
 2. Email OTP login through Supabase Auth OTP, delivered by AWS SES.
+3. Email and password login, including a secure password-recovery link that
+   returns to `/reset-password`.
 
 After account login, `/iit-verify` collects basic details including optional phone number, then runs the separate IIT email/document verification gate.
 
@@ -28,7 +30,13 @@ In Supabase Auth URL Configuration, allow the production app URL:
 https://cirkle.pages.dev
 https://cirkle.pages.dev/**
 https://cirkle.pages.dev/iit-verify
+https://cirkle.pages.dev/reset-password
 ```
+
+Add the equivalent `https://cirkle.world/**` entry when the custom domain is
+active. Password-recovery emails are sent by Supabase Auth, so Supabase Auth's
+SMTP settings must point to the production AWS SES SMTP credentials if the
+reset message must come from `cirkle.world`.
 
 Add local development URLs only when testing locally:
 

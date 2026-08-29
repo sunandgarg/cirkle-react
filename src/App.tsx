@@ -12,6 +12,7 @@ import { lazy, Suspense } from "react";
 // ─── Lazy-loaded routes (code splitting per route) ───
 const Landing = lazy(() => import("@/pages/Landing"));
 const Auth = lazy(() => import("@/pages/Auth"));
+const ResetPassword = lazy(() => import("@/pages/ResetPassword"));
 const OtpVerification = lazy(() => import("@/pages/OtpVerification"));
 const PhoneVerification = lazy(() => import("@/pages/PhoneVerification"));
 const IitVerification = lazy(() => import("@/pages/IitVerification"));
@@ -63,6 +64,7 @@ const App = () => (
                 {/* Public routes */}
                 <Route path="/" element={<Landing />} />
                 <Route path="/auth" element={<Auth />} />
+                <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/otp-verify" element={<OtpVerification />} />
                 <Route path="/phone-verify" element={<PhoneVerification />} />
                 <Route path="/iit-verify" element={<IitVerification />} />

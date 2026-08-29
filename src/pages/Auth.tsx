@@ -1,12 +1,12 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { toast } from "sonner";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { readResumeRoute } from "@/lib/sessionResume";
 
 const GoogleMark = () => (
@@ -27,10 +27,24 @@ const Auth = () => {
   const [loading, setLoading] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
   const [authStep, setAuthStep] = useState<"email" | "otp">("email");
+  const [authMethod, setAuthMethod] = useState<"otp" | "password">("otp");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [recoveryEmail, setRecoveryEmail] = useState("");
+  const [recoverySent, setRecoverySent] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user, profile, loading: authLoading } = useAuth();
+
+  useEffect(() => {
+    if (searchParams.get("password_reset") !== "success") return;
+    toast.success("Password updated. Sign in with your new password.");
+    setAuthMethod("password");
+    setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // Redirect already-logged-in users
   useEffect(() => {
@@ -90,6 +104,56 @@ const Auth = () => {
     } catch (error: any) {
       setLoading(false);
       toast.error(error.message || "Google login is not available yet. Please try email verification.");
+    }
+  };
+
+  const handlePasswordLogin = async () => {
+    if (!isValidEmail(email)) {
+      toast.error("Please enter a valid email address");
+      return;
+    }
+    if (!password) {
+      toast.error("Please enter your password");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      toast.success("Signed in securely");
+    } catch {
+      toast.error("Email or password is incorrect. You can also use an email code.");
+      setLoading(false);
+    }
+  };
+
+  const openForgotPassword = () => {
+    setRecoveryEmail(email);
+    setRecoverySent(false);
+    setShowForgotPassword(true);
+  };
+
+  const handleForgotPassword = async () => {
+    const normalizedEmail = recoveryEmail.trim().toLowerCase();
+    if (!isValidEmail(normalizedEmail)) {
+      toast.error("Please enter a valid email address");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (error) throw error;
+      setRecoveryEmail(normalizedEmail);
+      setRecoverySent(true);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message.toLowerCase() : "";
+      toast.error(message.includes("rate") ? "Too many requests. Please wait before trying again." : "Could not send the recovery email. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -180,21 +244,73 @@ const Auth = () => {
                 onChange={(e) => handleEmailChange(e.target.value)}
                 aria-label="Enter your email"
                 className="h-12 w-full rounded-xl border-[#d6dbe1] bg-[#e7ebee] px-3 text-base text-[#10161e] shadow-none placeholder:text-[#637083] focus-visible:border-[#1666b6] focus-visible:ring-2 focus-visible:ring-[#1666b6]/20 sm:text-sm"
-                onKeyDown={(e) => e.key === "Enter" && handleEmailContinue()}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  if (authMethod === "otp") handleEmailContinue();
+                  else handlePasswordLogin();
+                }}
               />
 
+              {authMethod === "password" && (
+                <div className="relative mt-3">
+                  <Input
+                    id="account-password"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="current-password"
+                    placeholder="Enter your password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    aria-label="Enter your password"
+                    className="h-12 w-full rounded-xl border-[#d6dbe1] bg-[#e7ebee] px-3 pr-16 text-base text-[#10161e] shadow-none placeholder:text-[#637083] focus-visible:border-[#1666b6] focus-visible:ring-2 focus-visible:ring-[#1666b6]/20 sm:text-sm"
+                    onKeyDown={(event) => event.key === "Enter" && handlePasswordLogin()}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((current) => !current)}
+                    className="absolute inset-y-0 right-3 text-xs font-semibold text-[#566273]"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? "Hide" : "Show"}
+                  </button>
+                </div>
+              )}
+
               <p className="mb-2 mt-4 text-xs leading-4 text-[#637083]" aria-live="polite">
-                We'll email a 6-digit secure code to verify this account.
+                {authMethod === "otp"
+                  ? "We'll email a 6-digit secure code to verify this account."
+                  : "Sign in with your existing account password."}
               </p>
 
               <Button
                 size="lg"
                 className="h-12 w-full rounded-xl bg-[#1666b6] px-8 text-base font-semibold text-white shadow-none hover:bg-[#125a9f] disabled:opacity-50"
-                onClick={handleEmailContinue}
-                disabled={loading || !isValidEmail(email)}
+                onClick={authMethod === "otp" ? handleEmailContinue : handlePasswordLogin}
+                disabled={loading || !isValidEmail(email) || (authMethod === "password" && !password)}
               >
-                {loading ? "Sending code..." : "Send email code"}
+                {loading
+                  ? authMethod === "otp" ? "Sending code..." : "Signing in..."
+                  : authMethod === "otp" ? "Send email code" : "Sign in"}
               </Button>
+
+              <div className="mt-3 flex items-center justify-between gap-3 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMethod((current) => current === "otp" ? "password" : "otp");
+                    setPassword("");
+                  }}
+                  className="text-left text-[#1666b6] underline-offset-2 hover:underline"
+                >
+                  {authMethod === "otp" ? "Use password instead" : "Use email code"}
+                </button>
+                <button
+                  type="button"
+                  onClick={openForgotPassword}
+                  className="text-right text-[#566273] underline-offset-2 hover:underline"
+                >
+                  Forgot password?
+                </button>
+              </div>
             </>
           ) : (
             <>
@@ -233,6 +349,58 @@ const Auth = () => {
           </p>
         </section>
       </main>
+
+
+      <Dialog open={showForgotPassword} onOpenChange={(open) => {
+        setShowForgotPassword(open);
+        if (!open) setRecoverySent(false);
+      }}>
+        <DialogContent className="w-[calc(100%_-_1.5rem)] max-w-md rounded-[24px] p-5 sm:p-6">
+          <DialogHeader>
+            <DialogTitle>{recoverySent ? "Check your email" : "Reset your password"}</DialogTitle>
+            <DialogDescription>
+              {recoverySent
+                ? `If an account exists for ${recoveryEmail}, a secure reset link has been sent.`
+                : "Enter your account email. We’ll send a secure, single-use password reset link."}
+            </DialogDescription>
+          </DialogHeader>
+          {recoverySent ? (
+            <div className="space-y-3 pt-2">
+              <p className="text-sm text-muted-foreground">The link expires automatically. Also check your spam folder.</p>
+              <Button className="h-11 w-full rounded-xl" onClick={() => setShowForgotPassword(false)}>Back to sign in</Button>
+              <button
+                type="button"
+                className="w-full text-center text-xs font-semibold text-[#1666b6]"
+                onClick={() => setRecoverySent(false)}
+              >
+                Use a different email
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3 pt-2">
+              <label htmlFor="recovery-email" className="text-sm font-semibold text-[#10161e]">Email address</label>
+              <Input
+                id="recovery-email"
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={recoveryEmail}
+                onChange={(event) => setRecoveryEmail(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && handleForgotPassword()}
+                className="h-11 rounded-xl"
+              />
+              <Button
+                className="h-11 w-full rounded-xl"
+                disabled={loading || !isValidEmail(recoveryEmail)}
+                onClick={handleForgotPassword}
+              >
+                {loading ? "Sending secure link..." : "Send reset link"}
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
 
 
