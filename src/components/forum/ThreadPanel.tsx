@@ -83,7 +83,19 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
         p_parent_id: parentPost.id, p_limit: THREAD_PAGE_SIZE,
         p_before_created_at: pageParam?.createdAt || null, p_before_id: pageParam?.id || null,
       });
-      if (error) throw error;
+      if (error) {
+        let query = supabase.from("posts").select("*").eq("reply_to_id", parentPost.id)
+          .is("deleted_at", null).order("created_at", { ascending: false }).order("id", { ascending: false })
+          .limit(THREAD_PAGE_SIZE) as any;
+        if (pageParam) query = query.or(`created_at.lt.${pageParam.createdAt},and(created_at.eq.${pageParam.createdAt},id.lt.${pageParam.id})`);
+        const { data: fallbackReplies, error: fallbackError } = await query;
+        if (fallbackError) throw fallbackError;
+        const authors = [...new Set((fallbackReplies || []).map((reply: any) => reply.author_id))] as string[];
+        const { data: fallbackProfiles } = authors.length ? await supabase.from("profiles")
+          .select("user_id,name,avatar_url,slug").in("user_id", authors) : { data: [] as any[] };
+        const fallbackProfilesById = new Map((fallbackProfiles || []).map((entry: any) => [entry.user_id, entry]));
+        return (fallbackReplies || []).map((reply: any) => ({ ...reply, profile: reply.is_anonymous ? null : fallbackProfilesById.get(reply.author_id) || null }));
+      }
       return hydrateForumMediaUrls((data || []).map((row: any) => row.post || row));
     },
     getNextPageParam: (lastPage) => {

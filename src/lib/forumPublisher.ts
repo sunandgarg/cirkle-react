@@ -42,6 +42,26 @@ export const publishForumOutboxItem = async (item: ForumOutboxItem) => {
     voice_url: item.voicePath ? null : item.voiceUrl, voice_path: item.voicePath || null, voice_duration: item.voiceDuration || null,
   };
   let { data: post, error } = await supabase.from("posts").insert(postData).select("*").single();
+  // Keep delivery working during a rolling deployment where the frontend can
+  // reach an older schema for a few minutes before the migration is applied.
+  if (error?.code === "42703") {
+    const legacyPostData = { ...postData };
+    delete legacyPostData.image_path;
+    delete legacyPostData.file_path;
+    delete legacyPostData.voice_path;
+    legacyPostData.image_url = imagePath
+      ? supabase.storage.from("post-images").getPublicUrl(imagePath).data.publicUrl
+      : imageUrl;
+    legacyPostData.file_url = filePath
+      ? supabase.storage.from("forum-files").getPublicUrl(filePath).data.publicUrl
+      : null;
+    legacyPostData.voice_url = item.voicePath
+      ? supabase.storage.from("voice-notes").getPublicUrl(item.voicePath).data.publicUrl
+      : item.voiceUrl;
+    const legacyInsert = await supabase.from("posts").insert(legacyPostData).select("*").single();
+    post = legacyInsert.data;
+    error = legacyInsert.error;
+  }
   if (error?.code === "23505") {
     const existing = await supabase.from("posts").select("*").eq("id", item.id).single();
     post = existing.data;

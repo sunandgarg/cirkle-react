@@ -59,7 +59,7 @@ const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
 );
 const QUICK_REACTIONS = ["❤️", "🔥", "👍", "😂", "💯"];
-const FORUM_POST_COLUMNS = "id,community_id,scope_type,scope_key,scope_identity,channel,content,is_anonymous,author_id,created_at,image_url,image_path,reply_to_id,file_url,file_path,file_name,file_size,file_type,deleted_at,deleted_for_users,is_deleted_for_everyone,edited_at,pinned_at,voice_url,voice_path,voice_duration";
+const LEGACY_FORUM_POST_COLUMNS = "id,community_id,scope_type,scope_key,channel,content,is_anonymous,author_id,created_at,image_url,reply_to_id,file_url,file_name,file_size,file_type,deleted_at,deleted_for_users,is_deleted_for_everyone,edited_at,pinned_at,voice_url,voice_duration";
 
 /* ─── Color helpers ─── */
 const DISCORD_COLORS = [
@@ -96,7 +96,7 @@ const getDateLabel = (dateStr: string): string => {
 type ForumCursor = { createdAt: string; id: string };
 
 const buildScopeQuery = (scopeType: string, scopeKey: string, limit = 50, before?: ForumCursor) => {
-  let q = supabase.from("posts").select(FORUM_POST_COLUMNS)
+  let q = supabase.from("posts").select(LEGACY_FORUM_POST_COLUMNS)
     .is("reply_to_id", null)
     .is("deleted_at", null)
     .eq("scope_type", scopeType)
@@ -732,7 +732,16 @@ const Forum = () => {
           demos: generateScopeDemos(activeScope.type, activeScope.key, activeScopeDef),
         };
       }
-      const rawPosts = await fetchForumPage(activeScope.type, activeScope.key, PAGE_SIZE);
+      let rawPosts: any[];
+      let serverEnriched = true;
+      try {
+        rawPosts = await fetchForumPage(activeScope.type, activeScope.key, PAGE_SIZE);
+      } catch {
+        const { data, error } = await buildScopeQuery(activeScope.type, activeScope.key, PAGE_SIZE);
+        if (error) throw error;
+        rawPosts = (data || []) as any[];
+        serverEnriched = false;
+      }
       const history = user?.id
         ? await readForumHistory<any>(user.id, activeScope.type, activeScope.key)
         : [];
@@ -744,7 +753,7 @@ const Forum = () => {
         // Real empty: return marker so empty-state UI can show.
         return { posts: [], isDemo: activeScope.type === "GLOBAL", demos: activeScope.type === "GLOBAL" ? DEMO_MESSAGES : [] };
       }
-      const enriched = (rawPosts as any[]).reverse();
+      const enriched = (serverEnriched ? rawPosts : await enrichPosts(rawPosts)).reverse();
       const merged = mergeForumHistoryPosts(history, enriched);
       setCachedPosts(activeScope.type, activeScope.key, merged, user?.id);
       if (user?.id) void persistForumHistory(user.id, activeScope.type, activeScope.key, merged);
@@ -1045,6 +1054,8 @@ const Forum = () => {
       toast.error("Message could not be sent. Check your connection and try again.");
     },
   });
+  const createPostRef = useRef(createPost);
+  createPostRef.current = createPost;
 
   useEffect(() => {
     if (!user?.id || readMobileTestSession()) return;
@@ -1072,9 +1083,9 @@ const Forum = () => {
         is_pending: !item.lastError, is_failed: !!item.lastError,
       })));
       const due = queued.find((item) => item.nextAttemptAt <= Date.now());
-      if (due && navigator.onLine && !createPost.isPending && !processingOutboxRef.current) {
+      if (due && navigator.onLine && !createPostRef.current.isPending && !processingOutboxRef.current) {
         processingOutboxRef.current = true;
-        createPost.mutate(due, { onSettled: () => { processingOutboxRef.current = false; } });
+        createPostRef.current.mutate(due, { onSettled: () => { processingOutboxRef.current = false; } });
       }
     };
     void syncOutbox();
@@ -1084,7 +1095,7 @@ const Forum = () => {
     return () => {
       disposed = true; unsubscribe(); window.clearInterval(retryTimer); window.removeEventListener("online", syncOutbox);
     };
-  }, [user?.id, profile, createPost.isPending]);
+  }, [user?.id, profile]);
 
   useEffect(() => () => {
     outboxPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
@@ -1196,7 +1207,7 @@ const Forum = () => {
   /* ─── Realtime: subscribe only to the open room ─── */
   useEffect(() => {
     if (readMobileTestSession()) return;
-    const filter = `scope_identity=eq.${activeScope.type}:${activeScope.key}`;
+    const filter = `scope_key=eq.${activeScope.key}`;
     const roomQueryKey = ["forum-posts", user?.id, activeScope.type, activeScope.key] as const;
     const pendingEvents: ForumRealtimeEvent[] = [];
     let flushFrame: number | null = null;
@@ -1264,9 +1275,10 @@ const Forum = () => {
       const current = queryClient.getQueryData<any>(roomQueryKey);
       const latest = current?.posts?.[current.posts.length - 1];
       if (!latest?.created_at) return;
-      const { data, error } = await (supabase.from("posts") as any)
-        .select(FORUM_POST_COLUMNS)
-        .eq("scope_identity", `${activeScope.type}:${activeScope.key}`)
+      const { data, error } = await supabase.from("posts")
+        .select(LEGACY_FORUM_POST_COLUMNS)
+        .eq("scope_type", activeScope.type)
+        .eq("scope_key", activeScope.key)
         .is("reply_to_id", null)
         .is("deleted_at", null)
         .gte("created_at", latest.created_at)
@@ -1431,14 +1443,24 @@ const Forum = () => {
       setLoadingOlder(true);
       const prevHeight = el.scrollHeight;
       try {
-        const olderArr = await fetchForumPage(activeScope.type, activeScope.key, PAGE_SIZE, {
-          createdAt: oldestReal.created_at,
-          id: oldestReal.id,
-        });
+        let olderArr: any[];
+        let serverEnriched = true;
+        try {
+          olderArr = await fetchForumPage(activeScope.type, activeScope.key, PAGE_SIZE, {
+            createdAt: oldestReal.created_at, id: oldestReal.id,
+          });
+        } catch {
+          const { data, error } = await buildScopeQuery(activeScope.type, activeScope.key, PAGE_SIZE, {
+            createdAt: oldestReal.created_at, id: oldestReal.id,
+          });
+          if (error) throw error;
+          olderArr = (data || []) as any[];
+          serverEnriched = false;
+        }
         if (olderArr.length === 0) {
           setHasMoreOlder(false);
         } else {
-          const enriched = olderArr.reverse();
+          const enriched = (serverEnriched ? olderArr : await enrichPosts(olderArr)).reverse();
           setOlderPages(prev => mergeForumHistoryPosts(enriched, prev));
           if (user?.id) void persistForumHistory(user.id, activeScope.type, activeScope.key, enriched);
           if (olderArr.length < PAGE_SIZE) setHasMoreOlder(false);
@@ -1606,15 +1628,15 @@ const Forum = () => {
     }
 
     try {
-      const { data: newPost, error } = await supabase.from("posts").insert({
-        id: crypto.randomUUID(),
-        community_id: "default", scope_type: activeScope.type, scope_key: activeScope.key,
-        channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
-        content: "🎤 Voice message", is_anonymous: isAnonymous, author_id: user.id,
-        voice_url: voicePath ? null : voiceUrl, voice_path: voicePath || null, voice_duration: duration,
-        reply_to_id: replyTo?.id || null,
-      } as any).select("*").single();
-      if (error) throw error;
+      const queued: ForumOutboxItem = {
+        id: crypto.randomUUID(), userId: user.id, scopeType: activeScope.type, scopeKey: activeScope.key,
+        content: "🎤 Voice message", isAnonymous, replyToId: replyTo?.id || null,
+        voiceUrl, voicePath: voicePath || null, voiceDuration: duration,
+        createdAt: new Date().toISOString(), attempts: 0, nextAttemptAt: Date.now() + 30_000,
+      };
+      await putForumOutboxItem(queued);
+      const newPost = await publishForumOutboxItem(queued);
+      await deleteForumOutboxItem(queued.id);
       queryClient.setQueryData(
         ["forum-posts", user?.id, activeScope.type, activeScope.key],
         (current: any) => {
@@ -1687,7 +1709,15 @@ const Forum = () => {
         p_query: debouncedSearchQuery, p_kind: searchTab, p_limit: 100,
         p_before_created_at: null, p_before_id: null,
       });
-      if (error) throw error;
+      if (error) {
+        let fallback = sortPostsChronologically(posts || []);
+        const query = debouncedSearchQuery.toLowerCase();
+        if (query) fallback = fallback.filter((post: any) => post.content?.toLowerCase().includes(query) || post.profile?.name?.toLowerCase().includes(query));
+        if (searchTab === "media") fallback = fallback.filter((post: any) => post.image_url || post.voice_url);
+        if (searchTab === "links") fallback = fallback.filter((post: any) => /https?:\/\//i.test(post.content || ""));
+        if (searchTab === "pins") fallback = fallback.filter((post: any) => post.pinned_at || userPinnedIds.includes(post.id));
+        return fallback.slice(-100);
+      }
       return hydrateForumMediaUrls((data || []).map((row: any) => row.post || row));
     },
     enabled: !!user?.id && showSearch && !readMobileTestSession(),
