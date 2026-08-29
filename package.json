@@ -17,7 +17,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:chat-load": "vitest run src/test/forumLoad.test.ts --reporter verbose",
-    "test:chat-load:live": "k6 run load/k6-chat.js",
+    "test:chat-load:live": "k6 run load/k6-forum.js",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -53,6 +53,7 @@
     "@radix-ui/react-tooltip": "^1.2.7",
     "@supabase/supabase-js": "^2.95.3",
     "@tanstack/react-query": "^5.83.0",
+    "@tanstack/react-virtual": "^3.14.10",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",

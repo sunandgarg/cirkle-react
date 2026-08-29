@@ -16,6 +16,7 @@ import {
 import BottomNav from "@/components/BottomNav";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { format, isToday, isYesterday, subDays, subHours, subMinutes } from "date-fns";
@@ -40,6 +41,12 @@ import {
 import { hasMobileTestAcademicProfile, readMobileTestSession } from "@/lib/mobileVerification";
 import { applyForumRealtimeBatch, type ForumRealtimeEvent } from "@/lib/forumRealtime";
 import { acknowledgeForumPost } from "@/lib/forumMessages";
+import { hydrateForumMediaUrls } from "@/lib/forumMedia";
+import { publishForumOutboxItem } from "@/lib/forumPublisher";
+import {
+  deleteForumOutboxItem, listForumOutboxItems, markForumOutboxFailed,
+  putForumOutboxItem, subscribeForumOutbox, type ForumOutboxItem,
+} from "@/lib/forumOutbox";
 import {
   forumSendFingerprint, resolveForumSendIdentity,
   type ForumSendIdentity, type ForumSendSnapshot,
@@ -52,7 +59,7 @@ const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
 );
 const QUICK_REACTIONS = ["❤️", "🔥", "👍", "😂", "💯"];
-const FORUM_POST_COLUMNS = "id,community_id,scope_type,scope_key,channel,content,is_anonymous,author_id,created_at,image_url,reply_to_id,file_url,file_name,file_size,file_type,deleted_at,deleted_for_users,is_deleted_for_everyone,edited_at,pinned_at,voice_url,voice_duration";
+const FORUM_POST_COLUMNS = "id,community_id,scope_type,scope_key,scope_identity,channel,content,is_anonymous,author_id,created_at,image_url,image_path,reply_to_id,file_url,file_path,file_name,file_size,file_type,deleted_at,deleted_for_users,is_deleted_for_everyone,edited_at,pinned_at,voice_url,voice_path,voice_duration";
 
 /* ─── Color helpers ─── */
 const DISCORD_COLORS = [
@@ -105,6 +112,15 @@ const buildScopeQuery = (scopeType: string, scopeKey: string, limit = 50, before
   }
 
   return q;
+};
+
+const fetchForumPage = async (scopeType: string, scopeKey: string, limit = 50, before?: ForumCursor) => {
+  const { data, error } = await (supabase as any).rpc("get_forum_posts_page", {
+    p_scope_type: scopeType, p_scope_key: scopeKey, p_limit: limit,
+    p_before_created_at: before?.createdAt || null, p_before_id: before?.id || null,
+  });
+  if (error) throw error;
+  return hydrateForumMediaUrls<any>((data || []).map((row: any) => row.post || row)) as Promise<any[]>;
 };
 
 /* ─── Expanded test data (60+ messages) ─── */
@@ -343,10 +359,9 @@ const Forum = () => {
   const [editingPost, setEditingPost] = useState<any>(null);
   const [editContent, setEditContent] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [searchTab, setSearchTab] = useState<"messages" | "media" | "pins" | "links">("messages");
-  const [showSearchFilters, setShowSearchFilters] = useState(false);
-  const [searchFilter, setSearchFilter] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"feed" | "pinned">("feed");
   const [scopeToggles, setScopeToggles] = useState<Record<string, number>>({});
   const [highlightedPostId, setHighlightedPostId] = useState<string | null>(null);
@@ -384,6 +399,8 @@ const Forum = () => {
   const prevPostCountRef = useRef(0);
   const shouldFollowLiveRef = useRef(true);
   const sendIdentityRef = useRef<ForumSendIdentity | null>(null);
+  const processingOutboxRef = useRef(false);
+  const outboxPreviewUrlsRef = useRef<Map<string, string>>(new Map());
 
   // Slow mode state
   const [slowModeEnabled, setSlowModeEnabled] = useState(false);
@@ -668,9 +685,9 @@ const Forum = () => {
 
     let userDeletedIds: string[] = [];
     if (user?.id) {
-      const { data: deletedRows } = await supabase.from("message_deleted_for_user" as any)
-        .select("message_id").eq("user_id", user.id).in("message_id", postIds);
-      userDeletedIds = (deletedRows || []).map((r: any) => r.message_id);
+      const { data: deletedRows } = await supabase.from("forum_deleted_for_user" as any)
+        .select("post_id").eq("user_id", user.id).in("post_id", postIds);
+      userDeletedIds = (deletedRows || []).map((r: any) => r.post_id);
     }
 
     return postsData
@@ -715,9 +732,7 @@ const Forum = () => {
           demos: generateScopeDemos(activeScope.type, activeScope.key, activeScopeDef),
         };
       }
-      const q = buildScopeQuery(activeScope.type, activeScope.key, PAGE_SIZE);
-      const { data: rawPosts, error } = await q;
-      if (error) throw error;
+      const rawPosts = await fetchForumPage(activeScope.type, activeScope.key, PAGE_SIZE);
       const history = user?.id
         ? await readForumHistory<any>(user.id, activeScope.type, activeScope.key)
         : [];
@@ -729,7 +744,7 @@ const Forum = () => {
         // Real empty: return marker so empty-state UI can show.
         return { posts: [], isDemo: activeScope.type === "GLOBAL", demos: activeScope.type === "GLOBAL" ? DEMO_MESSAGES : [] };
       }
-      const enriched = (await enrichPosts(rawPosts as any[])).reverse();
+      const enriched = (rawPosts as any[]).reverse();
       const merged = mergeForumHistoryPosts(history, enriched);
       setCachedPosts(activeScope.type, activeScope.key, merged, user?.id);
       if (user?.id) void persistForumHistory(user.id, activeScope.type, activeScope.key, merged);
@@ -739,7 +754,7 @@ const Forum = () => {
     initialData: initialCachedPosts
       ? { posts: initialCachedPosts, isDemo: false, demos: [] }
       : undefined,
-    initialDataUpdatedAt: initialCachedPosts ? Date.now() : undefined,
+    initialDataUpdatedAt: initialCachedPosts ? 0 : undefined,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
@@ -749,7 +764,7 @@ const Forum = () => {
   useEffect(() => {
     if (!user?.id || readMobileTestSession()) return;
     let cancelled = false;
-    void readForumHistory<any>(user.id, activeScope.type, activeScope.key).then((history) => {
+    void readForumHistory<any>(user.id, activeScope.type, activeScope.key).then((history) => hydrateForumMediaUrls(history)).then((history) => {
       if (cancelled || history.length === 0) return;
       queryClient.setQueryData(["forum-posts", user.id, activeScope.type, activeScope.key], (current: any) => {
         const merged = mergeForumHistoryPosts(history, current?.posts || []);
@@ -766,7 +781,7 @@ const Forum = () => {
     const base = postsData.isDemo ? postsData.demos : [...olderPages, ...(postsData.posts || [])];
     const persisted = readMobileTestSession() ? [...base, ...testRoomPosts.filter((post) => !post.reply_to_id)] : base;
     const roomOutbox = outboxPosts.filter((post) =>
-      post.scope_type === activeScope.type && post.scope_key === activeScope.key
+      post.scope_type === activeScope.type && post.scope_key === activeScope.key && !post.reply_to_id
     );
     return sortPostsChronologically([...persisted, ...roomOutbox]);
   }, [postsData, olderPages, testRoomPosts, outboxPosts, activeScope.type, activeScope.key]);
@@ -794,6 +809,19 @@ const Forum = () => {
     return identity;
   };
 
+  const buildCurrentOutboxItem = (): ForumOutboxItem | undefined => {
+    if (!user) return undefined;
+    const identity = resolveCurrentSendIdentity();
+    return {
+      id: identity.id, userId: user.id, scopeType: activeScope.type, scopeKey: activeScope.key,
+      content: content.trim(), isAnonymous, replyToId: replyTo?.id || null,
+      createdAt: new Date().toISOString(), attempts: 0, nextAttemptAt: Date.now() + 30_000,
+      image: imageFile ? { blob: imageFile, name: imageFile.name, type: imageFile.type, lastModified: imageFile.lastModified } : null,
+      file: attachedFile ? { blob: attachedFile, name: attachedFile.name, type: attachedFile.type, lastModified: attachedFile.lastModified } : null,
+      pollQuestion: showPollCreator ? pollQuestion : "", pollOptions: showPollCreator ? pollOptions : [],
+    };
+  };
+
 
   // Track new message arrivals for pill
   useEffect(() => {
@@ -817,7 +845,7 @@ const Forum = () => {
 
   /* ─── Mutations ─── */
   const createPost = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (queuedItem?: ForumOutboxItem) => {
       if (!user) { navigate("/auth"); return; }
       if (slowModeEnabled && !isAdmin) {
         const now = Date.now();
@@ -828,9 +856,17 @@ const Forum = () => {
           throw new Error(`Slow mode: wait ${remaining}s`);
         }
       }
-      if (!content.trim() && !imageFile && !showPollCreator && !attachedFile) throw new Error("Please type a message");
+      if (!queuedItem && !content.trim() && !imageFile && !showPollCreator && !attachedFile) throw new Error("Please type a message");
 
-      const sendIdentity = resolveCurrentSendIdentity();
+      const sendIdentity = queuedItem
+        ? { id: queuedItem.id, fingerprint: forumSendFingerprint({
+            scopeType: queuedItem.scopeType, scopeKey: queuedItem.scopeKey, content: queuedItem.content,
+            isAnonymous: queuedItem.isAnonymous, replyToId: queuedItem.replyToId,
+            imageFingerprint: queuedItem.image ? `${queuedItem.image.name}:${queuedItem.image.blob.size}:${queuedItem.image.lastModified || 0}` : null,
+            fileFingerprint: queuedItem.file ? `${queuedItem.file.name}:${queuedItem.file.blob.size}:${queuedItem.file.lastModified || 0}` : null,
+            pollQuestion: queuedItem.pollQuestion || "", pollOptions: queuedItem.pollOptions || [],
+          }) }
+        : resolveCurrentSendIdentity();
 
       const testSession = readMobileTestSession();
       if (testSession) {
@@ -852,6 +888,15 @@ const Forum = () => {
           replyCount: 0, reactions: {}, myReactions: [],
         };
         return { localPost, serverPost: null, scopeType: activeScope.type, scopeKey: activeScope.key, sendIdentity };
+      }
+
+      if (queuedItem) {
+        const serverPost = await publishForumOutboxItem(queuedItem);
+        return {
+          localPost: null, serverPost: { ...serverPost, profile: queuedItem.isAnonymous ? null : profile },
+          scopeType: queuedItem.scopeType, scopeKey: queuedItem.scopeKey,
+          sendIdentity: { id: queuedItem.id, fingerprint: sendIdentity.fingerprint },
+        };
       }
 
       let imageUrl: string | null = null;
@@ -923,21 +968,24 @@ const Forum = () => {
       };
       return { localPost: null, serverPost: optimisticPost, scopeType: activeScope.type, scopeKey: activeScope.key, sendIdentity };
     },
-    onMutate: () => {
+    onMutate: async (queuedItem?: ForumOutboxItem) => {
       if (!user) return { pendingId: null };
-      const sendIdentity = resolveCurrentSendIdentity();
+      const sendIdentity = queuedItem
+        ? { id: queuedItem.id, fingerprint: "queued" }
+        : resolveCurrentSendIdentity();
+      if (queuedItem && !readMobileTestSession()) await putForumOutboxItem(queuedItem);
       const pendingId = `outbox-${sendIdentity.id}`;
       setOutboxPosts((current) => [...current.filter((post) => post.send_identity_id !== sendIdentity.id), {
         id: pendingId,
         send_identity_id: sendIdentity.id,
-        community_id: "outbox", scope_type: activeScope.type, scope_key: activeScope.key,
-        channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
-        content: content.trim() || (imageFile ? "📷 Sending image…" : attachedFile ? `📎 ${attachedFile.name}` : `📊 ${pollQuestion}`),
-        is_anonymous: isAnonymous, author_id: user.id, created_at: new Date().toISOString(),
-        image_url: imagePreview, file_url: null, file_name: attachedFile?.name || null,
-        reply_to_id: replyTo?.id || null, deleted_at: null, is_deleted_for_everyone: false,
+        community_id: "outbox", scope_type: queuedItem?.scopeType || activeScope.type, scope_key: queuedItem?.scopeKey || activeScope.key,
+        channel: (queuedItem?.scopeType || activeScope.type).toLowerCase().replace(/_/g, "-"),
+        content: queuedItem?.content || content.trim() || (imageFile ? "📷 Sending image…" : attachedFile ? `📎 ${attachedFile.name}` : `📊 ${pollQuestion}`),
+        is_anonymous: queuedItem?.isAnonymous ?? isAnonymous, author_id: user.id, created_at: queuedItem?.createdAt || new Date().toISOString(),
+        image_url: imagePreview, file_url: null, file_name: queuedItem?.file?.name || attachedFile?.name || null,
+        reply_to_id: queuedItem?.replyToId ?? replyTo?.id ?? null, deleted_at: null, is_deleted_for_everyone: false,
         seen_by: [], edited_at: null, pinned_at: null,
-        profile: isAnonymous ? null : profile,
+        profile: (queuedItem?.isAnonymous ?? isAnonymous) ? null : profile,
         poll: null, replyCount: 0, reactions: {}, myReactions: [], is_pending: true,
       }]);
       requestAnimationFrame(() => scrollContainerRef.current?.scrollTo({
@@ -966,6 +1014,7 @@ const Forum = () => {
       if (context?.pendingId) {
         setOutboxPosts((current) => current.filter((post) => post.id !== context.pendingId));
       }
+      if (result?.sendIdentity?.id) void deleteForumOutboxItem(result.sendIdentity.id);
       if (result?.sendIdentity && sendIdentityRef.current?.id === result.sendIdentity.id) {
         sendIdentityRef.current = null;
       }
@@ -981,12 +1030,13 @@ const Forum = () => {
       if (slowModeEnabled && !isAdmin) setSlowModeCooldown(slowModeSeconds);
       setTimeout(() => scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" }), 300);
     },
-    onError: (err: any, _variables, context) => {
+    onError: (err: any, queuedItem, context) => {
       if (context?.pendingId) {
         setOutboxPosts((current) => current.map((post) => post.id === context.pendingId
           ? { ...post, is_pending: false, is_failed: true }
           : post));
       }
+      if (queuedItem) void markForumOutboxFailed(queuedItem, err);
       if (err?.code === "42501" || /row-level security|permission denied/i.test(err?.message || "")) {
         toast.error("Your verified community access is still syncing. Refresh once, then try again.");
         void queryClient.invalidateQueries({ queryKey: ["canonical-academic-identity", user?.id] });
@@ -995,6 +1045,60 @@ const Forum = () => {
       toast.error("Message could not be sent. Check your connection and try again.");
     },
   });
+
+  useEffect(() => {
+    if (!user?.id || readMobileTestSession()) return;
+    let disposed = false;
+    const syncOutbox = async () => {
+      const queued = await listForumOutboxItems(user.id);
+      if (disposed) return;
+      const activeIds = new Set(queued.map((item) => item.id));
+      outboxPreviewUrlsRef.current.forEach((url, id) => {
+        if (!activeIds.has(id)) { URL.revokeObjectURL(url); outboxPreviewUrlsRef.current.delete(id); }
+      });
+      setOutboxPosts(queued.map((item) => ({
+        id: `outbox-${item.id}`, send_identity_id: item.id, community_id: "outbox",
+        scope_type: item.scopeType, scope_key: item.scopeKey, content: item.content || "Queued attachment",
+        is_anonymous: item.isAnonymous, author_id: item.userId, created_at: item.createdAt,
+        image_url: item.image ? (() => {
+          const cached = outboxPreviewUrlsRef.current.get(item.id);
+          if (cached) return cached;
+          const created = URL.createObjectURL(item.image.blob);
+          outboxPreviewUrlsRef.current.set(item.id, created);
+          return created;
+        })() : item.imageUrl,
+        file_name: item.file?.name || null, reply_to_id: item.replyToId,
+        profile: item.isAnonymous ? null : profile, replyCount: 0, reactions: {}, myReactions: [],
+        is_pending: !item.lastError, is_failed: !!item.lastError,
+      })));
+      const due = queued.find((item) => item.nextAttemptAt <= Date.now());
+      if (due && navigator.onLine && !createPost.isPending && !processingOutboxRef.current) {
+        processingOutboxRef.current = true;
+        createPost.mutate(due, { onSettled: () => { processingOutboxRef.current = false; } });
+      }
+    };
+    void syncOutbox();
+    const unsubscribe = subscribeForumOutbox(() => void syncOutbox());
+    const retryTimer = window.setInterval(() => void syncOutbox(), 5_000);
+    window.addEventListener("online", syncOutbox);
+    return () => {
+      disposed = true; unsubscribe(); window.clearInterval(retryTimer); window.removeEventListener("online", syncOutbox);
+    };
+  }, [user?.id, profile, createPost.isPending]);
+
+  useEffect(() => () => {
+    outboxPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    outboxPreviewUrlsRef.current.clear();
+  }, []);
+
+  const retryOutboxPost = async (post: any) => {
+    if (!user?.id || processingOutboxRef.current) return;
+    const queued = await listForumOutboxItems(user.id);
+    const item = queued.find((entry) => entry.id === post.send_identity_id);
+    if (!item) return;
+    processingOutboxRef.current = true;
+    createPost.mutate({ ...item, nextAttemptAt: 0 }, { onSettled: () => { processingOutboxRef.current = false; } });
+  };
 
   const editPost = useMutation({
     mutationFn: async () => {
@@ -1027,8 +1131,8 @@ const Forum = () => {
           throw new Error("Could not delete message");
         }
       } else {
-        const { error } = await supabase.from("message_deleted_for_user" as any)
-          .insert({ message_id: postId, user_id: user.id });
+        const { error } = await supabase.from("forum_deleted_for_user" as any)
+          .upsert({ post_id: postId, user_id: user.id }, { onConflict: "post_id,user_id" });
         if (error) {
           if (error.message?.includes("duplicate")) return;
           throw new Error("Could not hide message");
@@ -1092,7 +1196,7 @@ const Forum = () => {
   /* ─── Realtime: subscribe only to the open room ─── */
   useEffect(() => {
     if (readMobileTestSession()) return;
-    const filter = `scope_key=eq.${activeScope.key}`;
+    const filter = `scope_identity=eq.${activeScope.type}:${activeScope.key}`;
     const roomQueryKey = ["forum-posts", user?.id, activeScope.type, activeScope.key] as const;
     const pendingEvents: ForumRealtimeEvent[] = [];
     let flushFrame: number | null = null;
@@ -1143,6 +1247,14 @@ const Forum = () => {
       if (typeof requestAnimationFrame === "function") flushFrame = requestAnimationFrame(flushRoomEvents);
       else flushTimer = setTimeout(flushRoomEvents, 16);
     };
+    const applyHydratedRoomEvent = (event: ForumRealtimeEvent) => {
+      if (!event.new || (!event.new.image_path && !event.new.file_path && !event.new.voice_path)) {
+        applyRoomEvent(event);
+        return;
+      }
+      void hydrateForumMediaUrls([event.new]).then(([post]) => applyRoomEvent({ ...event, new: post }))
+        .catch(() => applyRoomEvent(event));
+    };
     let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
     let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
     let fallbackStarted = false;
@@ -1152,10 +1264,9 @@ const Forum = () => {
       const current = queryClient.getQueryData<any>(roomQueryKey);
       const latest = current?.posts?.[current.posts.length - 1];
       if (!latest?.created_at) return;
-      const { data, error } = await supabase.from("posts")
+      const { data, error } = await (supabase.from("posts") as any)
         .select(FORUM_POST_COLUMNS)
-        .eq("scope_type", activeScope.type)
-        .eq("scope_key", activeScope.key)
+        .eq("scope_identity", `${activeScope.type}:${activeScope.key}`)
         .is("reply_to_id", null)
         .is("deleted_at", null)
         .gte("created_at", latest.created_at)
@@ -1163,7 +1274,7 @@ const Forum = () => {
         .order("id", { ascending: false })
         .limit(MAX_ROOM_HISTORY);
       if (disposed || error || !data?.length) return;
-      const enriched = await enrichPosts(data as any[]);
+      const enriched = await hydrateForumMediaUrls(await enrichPosts(data as any[]));
       enriched.forEach((post) => applyRoomEvent({ eventType: "INSERT", new: post }));
       flushRoomEvents();
     };
@@ -1172,10 +1283,10 @@ const Forum = () => {
       fallbackStarted = true;
       fallbackChannel = supabase.channel(`forum-pg-${activeScope.type}-${activeScope.key}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts', filter }, (payload: any) => {
-        applyRoomEvent({ eventType: "INSERT", new: payload.new || {} });
+        applyHydratedRoomEvent({ eventType: "INSERT", new: payload.new || {} });
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts', filter }, (payload: any) => {
-        applyRoomEvent({ eventType: "UPDATE", new: payload.new || {} });
+        applyHydratedRoomEvent({ eventType: "UPDATE", new: payload.new || {} });
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts', filter }, (payload: any) => {
         applyRoomEvent({ eventType: "DELETE", old: payload.old || {} });
@@ -1200,10 +1311,10 @@ const Forum = () => {
         config: { private: true },
       })
         .on('broadcast', { event: 'INSERT' }, (payload: any) => {
-          applyRoomEvent({ eventType: "INSERT", new: payload.new || payload.payload?.new || {} });
+          applyHydratedRoomEvent({ eventType: "INSERT", new: payload.new || payload.payload?.new || {} });
         })
         .on('broadcast', { event: 'UPDATE' }, (payload: any) => {
-          applyRoomEvent({ eventType: "UPDATE", new: payload.new || payload.payload?.new || {} });
+          applyHydratedRoomEvent({ eventType: "UPDATE", new: payload.new || payload.payload?.new || {} });
         })
         .on('broadcast', { event: 'DELETE' }, (payload: any) => {
           applyRoomEvent({ eventType: "DELETE", old: payload.old || payload.payload?.old || {} });
@@ -1320,17 +1431,14 @@ const Forum = () => {
       setLoadingOlder(true);
       const prevHeight = el.scrollHeight;
       try {
-        const q = buildScopeQuery(activeScope.type, activeScope.key, PAGE_SIZE, {
+        const olderArr = await fetchForumPage(activeScope.type, activeScope.key, PAGE_SIZE, {
           createdAt: oldestReal.created_at,
           id: oldestReal.id,
         });
-        const { data: older, error } = await q;
-        if (error) throw error;
-        const olderArr = (older as any[]) || [];
         if (olderArr.length === 0) {
           setHasMoreOlder(false);
         } else {
-          const enriched = (await enrichPosts(olderArr)).reverse();
+          const enriched = olderArr.reverse();
           setOlderPages(prev => mergeForumHistoryPosts(enriched, prev));
           if (user?.id) void persistForumHistory(user.id, activeScope.type, activeScope.key, enriched);
           if (olderArr.length < PAGE_SIZE) setHasMoreOlder(false);
@@ -1352,7 +1460,8 @@ const Forum = () => {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey && (content.trim() || imageFile || attachedFile)) {
       e.preventDefault();
-      createPost.mutate();
+      const item = buildCurrentOutboxItem();
+      if (item) createPost.mutate(item);
     }
   };
 
@@ -1474,7 +1583,7 @@ const Forum = () => {
     }
   };
 
-  const handleVoiceSend = async (voiceUrl: string, duration: number) => {
+  const handleVoiceSend = async (voiceUrl: string, duration: number, voicePath?: string) => {
     if (!user) return;
     const testSession = readMobileTestSession();
     if (testSession) {
@@ -1502,7 +1611,7 @@ const Forum = () => {
         community_id: "default", scope_type: activeScope.type, scope_key: activeScope.key,
         channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
         content: "🎤 Voice message", is_anonymous: isAnonymous, author_id: user.id,
-        voice_url: voiceUrl, voice_duration: duration,
+        voice_url: voicePath ? null : voiceUrl, voice_path: voicePath || null, voice_duration: duration,
         reply_to_id: replyTo?.id || null,
       } as any).select("*").single();
       if (error) throw error;
@@ -1512,7 +1621,7 @@ const Forum = () => {
           const existing = current?.posts || [];
           if (!newPost) return current;
           const nextPosts = acknowledgeForumPost(existing, {
-            ...newPost, profile: isAnonymous ? null : profile, replyCount: 0, reactions: {}, myReactions: [],
+            ...newPost, voice_url: voiceUrl, profile: isAnonymous ? null : profile, replyCount: 0, reactions: {}, myReactions: [],
           }, MAX_ROOM_HISTORY);
           setCachedPosts(activeScope.type, activeScope.key, nextPosts, user?.id);
           if (user?.id) void persistForumHistory(user.id, activeScope.type, activeScope.key, nextPosts);
@@ -1565,8 +1674,28 @@ const Forum = () => {
     setThreadPost(null);
   };
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearchQuery(searchQuery.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  const { data: serverSearchPosts = [], isFetching: isSearchingServer } = useQuery({
+    queryKey: ["forum-search", user?.id, activeScope.type, activeScope.key, debouncedSearchQuery, searchTab],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).rpc("search_forum_posts", {
+        p_scope_type: activeScope.type, p_scope_key: activeScope.key,
+        p_query: debouncedSearchQuery, p_kind: searchTab, p_limit: 100,
+        p_before_created_at: null, p_before_id: null,
+      });
+      if (error) throw error;
+      return hydrateForumMediaUrls((data || []).map((row: any) => row.post || row));
+    },
+    enabled: !!user?.id && showSearch && !readMobileTestSession(),
+    staleTime: 15_000,
+  });
+
   const filteredPosts = useMemo(() => {
-    let filtered = sortPostsChronologically(posts || []);
+    let filtered = sortPostsChronologically(showSearch && !readMobileTestSession() ? serverSearchPosts : (posts || []));
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       switch (searchTab) {
@@ -1586,7 +1715,7 @@ const Forum = () => {
     // Cap at MAX_RENDERED
     if (filtered.length > MAX_RENDERED) filtered = filtered.slice(filtered.length - MAX_RENDERED);
     return sortPostsChronologically(filtered);
-  }, [posts, searchQuery, searchTab, showSearch, activeTab, userPinnedIds]);
+  }, [posts, serverSearchPosts, searchQuery, searchTab, showSearch, activeTab, userPinnedIds]);
 
   const searchCounts = useMemo(() => {
     if (!posts) return { messages: 0, media: 0, pins: 0, links: 0 };
@@ -1722,7 +1851,7 @@ const Forum = () => {
               </button>
             )}
 
-            <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); setSearchTab("messages"); setSearchFilter(null); setShowSearchFilters(false); }} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${showSearch ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="Search messages">
+            <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); setSearchTab("messages"); }} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${showSearch ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="Search messages">
               <Search className="w-4 h-4" />
             </button>
             <button onClick={() => setMemberPanelOpen(!memberPanelOpen)} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${memberPanelOpen ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="View channel members">
@@ -1759,10 +1888,6 @@ const Forum = () => {
                   </button>
                 )}
               </div>
-              <button onClick={() => setShowSearchFilters(!showSearchFilters)}
-                className={`w-8 h-8 flex items-center justify-center rounded-lg flex-shrink-0 transition-colors ${showSearchFilters ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}>
-                <Filter className="w-4 h-4" />
-              </button>
             </div>
 
             <div className="flex px-3 gap-0 overflow-x-auto scrollbar-hide">
@@ -1784,27 +1909,6 @@ const Forum = () => {
               ))}
             </div>
 
-            {showSearchFilters && (
-              <div className="px-3 py-2 border-t border-border bg-accent/50 animate-fade-in">
-                <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Filter results...</p>
-                <div className="space-y-0.5">
-                  {[
-                    { key: "from", label: "From a specific person", icon: User },
-                    { key: "mentions", label: "Mentions someone", icon: AtSign },
-                    { key: "date", label: "Sent on a date", icon: Calendar },
-                  ].map(f => (
-                    <button key={f.key}
-                      onClick={() => { setSearchFilter(searchFilter === f.key ? null : f.key); setShowSearchFilters(false); }}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 text-[13px] rounded-lg transition-colors ${
-                        searchFilter === f.key ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-accent"
-                      }`}>
-                      <f.icon className="w-4 h-4 text-muted-foreground" />
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -1830,7 +1934,7 @@ const Forum = () => {
 
             {!isVerified && user ? (
               <MaskedContent>
-                <MessagesView isLoading={isLoading} groupedByDate={groupedByDate} messagesEndRef={messagesEndRef}
+                <MessagesView isLoading={isLoading} groupedByDate={groupedByDate} messagesEndRef={messagesEndRef} scrollContainerRef={scrollContainerRef}
                   onReply={handleReply} onReact={(postId, emoji) => toggleReaction.mutate({ postId, emoji })}
                   userId={user?.id} isAdmin={!!isAdmin}
                   onAdminPin={(id) => toggleAdminPin.mutate(id)}
@@ -1841,10 +1945,10 @@ const Forum = () => {
                   isEmptyChannel={isEmptyChannel} onStartFirst={() => textareaRef.current?.focus()}
                   onEdit={handleEdit} onDelete={(id, forAll) => deletePost.mutate({ postId: id, forEveryone: forAll })}
                   onCopy={handleCopy} profileMap={profileMap}
-                  onImageClick={setLightboxImage} onThread={handleThread} />
+                  onImageClick={setLightboxImage} onThread={handleThread} onRetry={retryOutboxPost} />
               </MaskedContent>
             ) : (
-              <MessagesView isLoading={isLoading} groupedByDate={groupedByDate} messagesEndRef={messagesEndRef}
+              <MessagesView isLoading={isLoading} groupedByDate={groupedByDate} messagesEndRef={messagesEndRef} scrollContainerRef={scrollContainerRef}
                 onReply={handleReply} onReact={(postId, emoji) => toggleReaction.mutate({ postId, emoji })}
                 userId={user?.id} isAdmin={!!isAdmin}
                 onAdminPin={(id) => toggleAdminPin.mutate(id)}
@@ -1855,7 +1959,7 @@ const Forum = () => {
                 isEmptyChannel={isEmptyChannel} onStartFirst={() => textareaRef.current?.focus()}
                 onEdit={handleEdit} onDelete={(id, forAll) => deletePost.mutate({ postId: id, forEveryone: forAll })}
                 onCopy={handleCopy} profileMap={profileMap}
-                onImageClick={setLightboxImage} onThread={handleThread} />
+                onImageClick={setLightboxImage} onThread={handleThread} onRetry={retryOutboxPost} />
             )}
           </div>
         </div>
@@ -2095,7 +2199,7 @@ const Forum = () => {
                   <button
                     type="button"
                     aria-label="Send message"
-                    onClick={() => createPost.mutate()}
+                    onClick={() => { const item = buildCurrentOutboxItem(); if (item) createPost.mutate(item); }}
                     disabled={createPost.isPending || (slowModeEnabled && slowModeCooldown > 0 && !isAdmin)}
                     className="w-11 h-11 flex items-center justify-center rounded-full bg-primary text-primary-foreground flex-shrink-0 shadow-[0_8px_22px_-10px_hsl(var(--primary))] active:scale-95 transition-all duration-150 disabled:opacity-50"
                   >
@@ -2305,8 +2409,9 @@ const ScopeItem = ({ scope, activeScope, scopeToggles, unreadDots, onSelect, onT
 /* ══════════════════════════════════════════════════ */
 /*              MESSAGES VIEW                        */
 /* ══════════════════════════════════════════════════ */
-const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, onReply, onReact, userId, isAdmin, onAdminPin, onUserPin, userPinnedIds, navigate, messageRefs, highlightedPostId, onScrollToMessage, findParentPost, adMessages, activeScopeDef, isEmptyChannel, onStartFirst, onEdit, onDelete, onCopy, profileMap, onImageClick, onThread }: {
+const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContainerRef, onReply, onReact, userId, isAdmin, onAdminPin, onUserPin, userPinnedIds, navigate, messageRefs, highlightedPostId, onScrollToMessage, findParentPost, adMessages, activeScopeDef, isEmptyChannel, onStartFirst, onEdit, onDelete, onCopy, profileMap, onImageClick, onThread, onRetry }: {
   isLoading: boolean; groupedByDate: Record<string, any[]>; messagesEndRef: React.RefObject<HTMLDivElement>;
+  scrollContainerRef: React.RefObject<HTMLDivElement>;
   onReply: (post: any) => void; onReact: (postId: string, emoji: string) => void; userId?: string;
   isAdmin: boolean; onAdminPin: (id: string) => void; onUserPin: (id: string) => void;
   userPinnedIds: string[]; navigate: (path: string) => void;
@@ -2319,7 +2424,22 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, onReply, onRea
   onCopy: (text: string) => void;
   profileMap: Map<string, any>;
   onImageClick: (src: string) => void; onThread: (post: any) => void;
-}) => (
+  onRetry: (post: any) => void;
+}) => {
+  const listRef = useRef<HTMLDivElement>(null);
+  const timelineItems = useMemo(() => Object.entries(groupedByDate).flatMap(([date, datePosts]) => [
+    { type: "date" as const, key: `date-${date}`, date },
+    ...datePosts.map((post: any) => ({ type: "post" as const, key: post.id, post })),
+  ]), [groupedByDate]);
+  const virtualizer = useVirtualizer({
+    count: timelineItems.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: (index) => timelineItems[index]?.type === "date" ? 48 : 82,
+    overscan: 12,
+    getItemKey: (index) => timelineItems[index]?.key || index,
+    scrollMargin: listRef.current?.offsetTop || 0,
+  });
+  return (
   <>
     {isLoading ? (
       /* ── Shimmer Skeleton (FIX 8) - 8 skeleton messages ── */
@@ -2357,29 +2477,39 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, onReply, onRea
             ))}
           </div>
         )}
-        {Object.entries(groupedByDate).map(([dateKey, datePosts]) => (
-          <div key={dateKey}>
-            <div className="sticky top-2 z-[2] my-3 flex justify-center px-4 pointer-events-none">
-              <span className="rounded-full border border-white/60 bg-card/80 px-3 py-1 text-[11px] font-semibold text-muted-foreground shadow-sm backdrop-blur-xl dark:border-border/70">{dateKey}</span>
-            </div>
-            {datePosts.map((post: any, idx: number) => {
-              const prevPost = idx > 0 ? datePosts[idx - 1] : null;
+        <div ref={listRef} style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
+          {virtualizer.getVirtualItems().map((virtualRow) => {
+            const item = timelineItems[virtualRow.index];
+            return (
+              <div key={item.key} ref={virtualizer.measureElement} data-index={virtualRow.index}
+                style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)` }}>
+                {item.type === "date" ? (
+                  <div className="my-3 flex justify-center px-4 pointer-events-none">
+                    <span className="rounded-full border border-white/60 bg-card/80 px-3 py-1 text-[11px] font-semibold text-muted-foreground shadow-sm backdrop-blur-xl dark:border-border/70">{item.date}</span>
+                  </div>
+                ) : (() => {
+              const post = item.post;
+              const previousItem = timelineItems[virtualRow.index - 1];
+              const prevPost = previousItem?.type === "post" ? previousItem.post : null;
               const isSameAuthor = prevPost && prevPost.author_id === post.author_id && !prevPost.deleted_at;
               const timeDiff = prevPost ? (new Date(post.created_at).getTime() - new Date(prevPost.created_at).getTime()) / 60000 : 999;
               const isGrouped = isSameAuthor && timeDiff < 7;
               return (
-                <MemoizedDiscordMessage key={post.id} post={post} onReply={onReply} onReact={onReact}
+                <MemoizedDiscordMessage post={post} onReply={onReply} onReact={onReact}
                   userId={userId} isAdmin={isAdmin} onAdminPin={onAdminPin}
                   onUserPin={onUserPin} isUserPinned={userPinnedIds.includes(post.id)}
                   navigate={navigate} messageRefs={messageRefs} highlightedPostId={highlightedPostId}
                   onScrollToMessage={onScrollToMessage} findParentPost={findParentPost}
                   onEdit={onEdit} onDelete={onDelete} onCopy={onCopy}
                   profileMap={profileMap} onImageClick={onImageClick} onThread={onThread}
+                  onRetry={onRetry}
                   isGrouped={isGrouped} />
               );
-            })}
-          </div>
-        ))}
+                })()}
+              </div>
+            );
+          })}
+        </div>
       </>
     ) : (
       <div className="flex flex-col items-center justify-center py-16 sm:py-20 text-center px-6">
@@ -2404,7 +2534,8 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, onReply, onRea
     )}
     <div ref={messagesEndRef} className="h-4" />
   </>
-);
+  );
+};
 
 /* ══════════════════════════════════════════════════ */
 /*       Discord-style MESSAGE ROW (React.memo FIX 6)*/
@@ -2422,9 +2553,10 @@ interface DiscordMessageProps {
   profileMap: Map<string, any>;
   onImageClick: (src: string) => void; onThread: (post: any) => void;
   isGrouped?: boolean;
+  onRetry: (post: any) => void;
 }
 
-const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, onUserPin, isUserPinned, navigate, messageRefs, highlightedPostId, onScrollToMessage, findParentPost, onEdit, onDelete, onCopy, profileMap, onImageClick, onThread, isGrouped }: DiscordMessageProps) => {
+const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, onUserPin, isUserPinned, navigate, messageRefs, highlightedPostId, onScrollToMessage, findParentPost, onEdit, onDelete, onCopy, profileMap, onImageClick, onThread, isGrouped, onRetry }: DiscordMessageProps) => {
   const [showActions, setShowActions] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2637,7 +2769,7 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
             {isEdited && isMine && <span className="text-[9px] text-muted-foreground">edited</span>}
             <span className="text-[10px] text-muted-foreground tabular-nums" title={fullTime}>{time}</span>
             {isMine && post.is_pending && <Clock className="w-3 h-3 text-muted-foreground" aria-label="Sending" />}
-            {isMine && post.is_failed && <span className="text-[9px] font-semibold text-destructive">Not sent · tap send to retry</span>}
+            {isMine && post.is_failed && <button type="button" onClick={() => onRetry(post)} className="text-[9px] font-semibold text-destructive hover:underline">Not sent · tap to retry</button>}
           </div>
         </div>
       </div>

@@ -3,7 +3,7 @@ import { X, Send, Reply, EyeOff, LocateFixed } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { format } from "date-fns";
 import { toast } from "sonner";
@@ -14,6 +14,11 @@ import {
   forumSendFingerprint, resolveForumSendIdentity,
   type ForumSendIdentity, type ForumSendSnapshot,
 } from "@/lib/forumSend";
+import { hydrateForumMediaUrls } from "@/lib/forumMedia";
+import { publishForumOutboxItem } from "@/lib/forumPublisher";
+import { deleteForumOutboxItem, markForumOutboxFailed, putForumOutboxItem, type ForumOutboxItem } from "@/lib/forumOutbox";
+
+const THREAD_PAGE_SIZE = 50;
 
 const AVATAR_COLORS = [
   "bg-[hsl(0,55%,55%)]", "bg-[hsl(120,35%,45%)]", "bg-[hsl(210,55%,50%)]", "bg-[hsl(30,65%,50%)]",
@@ -35,6 +40,7 @@ const sortThreadReplies = (replies: any[]) => [...replies].sort((left, right) =>
   const byTime = new Date(left.created_at || 0).getTime() - new Date(right.created_at || 0).getTime();
   return byTime || String(left.id || "").localeCompare(String(right.id || ""));
 });
+const sortThreadPageDescending = (replies: any[]) => sortThreadReplies(replies).reverse();
 
 interface ThreadPanelProps {
   parentPost: any;
@@ -56,9 +62,10 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
   const testSession = readMobileTestSession();
 
   // Fetch thread replies
-  const { data: replies = [], isLoading } = useQuery({
+  const { data: threadData, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery({
     queryKey: ["thread-replies", parentPost.id],
-    queryFn: async () => {
+    initialPageParam: null as { createdAt: string; id: string } | null,
+    queryFn: async ({ pageParam }) => {
       if (testSession) {
         const saved = getForumTestPosts(activeScope.type, activeScope.key)
           .filter((post) => post.reply_to_id === parentPost.id);
@@ -72,29 +79,21 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
           profile: { name: ["Aditi Rao", "Kabir Khanna", "Meera Joshi"][index % 3], avatar_url: null, slug: null },
         }));
       }
-      const { data: repliesData } = await supabase.from("posts")
-        .select("*")
-        .eq("reply_to_id", parentPost.id)
-        .is("deleted_at", null)
-        .order("created_at", { ascending: true })
-        .order("id", { ascending: true });
-
-      if (!repliesData?.length) return [];
-
-      const authorIds = [...new Set(repliesData.map((r: any) => r.author_id))] as string[];
-      const { data: profiles } = await supabase.from("profiles")
-        .select("user_id, name, avatar_url, slug")
-        .in("user_id", authorIds);
-
-      const pMap = new Map(profiles?.map((p) => [p.user_id, p]) ?? []);
-
-      return sortThreadReplies(repliesData.map((r: any) => ({
-        ...r,
-        profile: pMap.get(r.author_id) ?? null,
-      })));
+      const { data, error } = await (supabase as any).rpc("get_forum_thread_page", {
+        p_parent_id: parentPost.id, p_limit: THREAD_PAGE_SIZE,
+        p_before_created_at: pageParam?.createdAt || null, p_before_id: pageParam?.id || null,
+      });
+      if (error) throw error;
+      return hydrateForumMediaUrls((data || []).map((row: any) => row.post || row));
+    },
+    getNextPageParam: (lastPage) => {
+      if (lastPage.length < THREAD_PAGE_SIZE) return undefined;
+      const oldest = lastPage[lastPage.length - 1];
+      return { createdAt: oldest.created_at, id: oldest.id };
     },
     staleTime: 10000,
   });
+  const replies = sortThreadReplies((threadData?.pages || []).flat());
 
   const sendReply = useMutation({
     mutationFn: async () => {
@@ -124,23 +123,20 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
         appendForumTestPost(activeScope.type, activeScope.key, localReply);
         return { reply: localReply, sendIdentity };
       }
-      let { data: reply, error } = await supabase.from("posts").insert({
-        id: sendIdentity.id,
-        community_id: "default",
-        scope_type: activeScope.type,
-        scope_key: activeScope.key,
-        channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
-        content: content.trim(),
-        is_anonymous: isAnonymous,
-        author_id: user.id,
-        reply_to_id: parentPost.id,
-      }).select("*").single();
-      if (error?.code === "23505") {
-        const existing = await supabase.from("posts").select("*").eq("id", sendIdentity.id).single();
-        reply = existing.data;
-        error = existing.error;
+      const queued: ForumOutboxItem = {
+        id: sendIdentity.id, userId: user.id, scopeType: activeScope.type, scopeKey: activeScope.key,
+        content: content.trim(), isAnonymous, replyToId: parentPost.id,
+        createdAt: new Date().toISOString(), attempts: 0, nextAttemptAt: Date.now() + 30_000,
+      };
+      await putForumOutboxItem(queued);
+      let reply;
+      try {
+        reply = await publishForumOutboxItem(queued);
+        await deleteForumOutboxItem(queued.id);
+      } catch (error) {
+        await markForumOutboxFailed(queued, error);
+        throw error;
       }
-      if (error || !reply) throw error || new Error("Reply could not be sent");
       return {
         reply: { ...reply, profile: isAnonymous ? null : profile },
         sendIdentity,
@@ -149,12 +145,11 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
     onSuccess: (result) => {
       if (!result?.reply) return;
       let added = false;
-      queryClient.setQueryData(["thread-replies", parentPost.id], (current: any[] = []) => {
-        added = !current.some((reply) => reply.id === result.reply.id);
-        return sortThreadReplies([
-          ...current.filter((reply) => reply.id !== result.reply.id),
-          result.reply,
-        ]);
+      queryClient.setQueryData(["thread-replies", parentPost.id], (current: any) => {
+        const pages = current?.pages || [[]];
+        const all = pages.flat();
+        added = !all.some((reply: any) => reply.id === result.reply.id);
+        return { ...current, pages: [sortThreadPageDescending([...pages[0].filter((reply: any) => reply.id !== result.reply.id), result.reply]), ...pages.slice(1)] };
       });
       if (added) {
         queryClient.setQueriesData({ queryKey: ["forum-posts"] }, (current: any) => current?.posts ? {
@@ -197,11 +192,13 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
     const applyReplyEvent = (eventType: string, row: any) => {
       if (!row?.id) return;
       let replyCountDelta = 0;
-      queryClient.setQueryData(["thread-replies", parentPost.id], (current: any[] = []) => {
-        const existing = current.find((reply) => reply.id === row.id);
+      queryClient.setQueryData(["thread-replies", parentPost.id], (current: any) => {
+        const pages = current?.pages || [[]];
+        const all = pages.flat();
+        const existing = all.find((reply: any) => reply.id === row.id);
         if (eventType === "DELETE" || row.deleted_at) {
           if (existing) replyCountDelta = -1;
-          return current.filter((reply) => reply.id !== row.id);
+          return { ...current, pages: pages.map((page: any[]) => page.filter((reply) => reply.id !== row.id)) };
         }
         if (!existing) replyCountDelta = 1;
         const enriched = {
@@ -209,14 +206,14 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
           ...row,
           profile: row.is_anonymous ? null : profileMap.get(row.author_id) ?? existing?.profile ?? null,
         };
-        return sortThreadReplies([...current.filter((reply) => reply.id !== row.id), enriched]);
+        return { ...current, pages: [sortThreadPageDescending([...pages[0].filter((reply: any) => reply.id !== row.id), enriched]), ...pages.slice(1).map((page: any[]) => page.filter((reply) => reply.id !== row.id))] };
       });
       updateParentReplyCount(replyCountDelta);
     };
-    const channel = supabase.channel(`thread-${parentPost.id}-${crypto.randomUUID()}`)
-      .on("postgres_changes", {
-        event: "*", schema: "public", table: "posts", filter: `reply_to_id=eq.${parentPost.id}`,
-      }, (payload: any) => applyReplyEvent(payload.eventType, payload.eventType === "DELETE" ? payload.old : payload.new))
+    const channel = supabase.channel(`forum-thread:${parentPost.id}`, { config: { private: true } })
+      .on("broadcast", { event: "INSERT" }, (payload: any) => applyReplyEvent("INSERT", payload.new || payload.payload?.new))
+      .on("broadcast", { event: "UPDATE" }, (payload: any) => applyReplyEvent("UPDATE", payload.new || payload.payload?.new))
+      .on("broadcast", { event: "DELETE" }, (payload: any) => applyReplyEvent("DELETE", payload.old || payload.payload?.old))
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
   }, [parentPost.id, profileMap, queryClient, testSession]);
@@ -272,6 +269,12 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
 
       {/* Thread replies */}
       <div className="flex-1 overflow-y-auto px-4 py-2 space-y-3 min-h-0">
+        {hasNextPage && (
+          <button type="button" onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}
+            className="w-full py-2 text-xs font-semibold text-primary hover:underline disabled:opacity-50">
+            {isFetchingNextPage ? "Loading older replies…" : "Load older replies"}
+          </button>
+        )}
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
             <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />

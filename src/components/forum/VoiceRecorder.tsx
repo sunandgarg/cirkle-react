@@ -5,7 +5,7 @@ import { toast } from "sonner";
 
 interface VoiceRecorderProps {
   userId: string;
-  onSend: (voiceUrl: string, duration: number) => Promise<void> | void;
+  onSend: (voiceUrl: string, duration: number, voicePath?: string) => Promise<void> | void;
   onCancel: () => void;
   localOnly?: boolean;
 }
@@ -81,9 +81,10 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRec
         upsert: false,
       });
       if (uploadError) throw uploadError;
-      const { data: urlData } = supabase.storage.from("voice-notes").getPublicUrl(path);
+      const { data: urlData, error: signedUrlError } = await supabase.storage.from("voice-notes").createSignedUrl(path, 3600);
+      if (signedUrlError) throw signedUrlError;
       try {
-        await onSendRef.current(urlData.publicUrl, seconds);
+        await onSendRef.current(urlData.signedUrl, seconds, path);
       } catch (error) {
         await supabase.storage.from("voice-notes").remove([path]);
         throw error;

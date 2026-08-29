@@ -3,22 +3,24 @@
 The repository includes two complementary checks:
 
 - `npm run test:chat-load` is a deterministic local simulation that validates ordering, room isolation, fan-out and cache behavior without touching production.
-- `npm run test:chat-load:live` runs an authenticated k6 write/read test against an isolated Supabase performance project.
+- `npm run test:chat-load:live` writes real forum `posts`, reads paginated history, and keeps real private Supabase Realtime subscribers connected against an isolated performance project.
 
 ## Safety and required environment
 
 Never run the live test against the production database. Use a separate project populated with synthetic users and a room whose members are only test accounts. The script refuses to start unless these variables exist:
 
 ```text
-LOAD_TEST_ACK=I_UNDERSTAND
+FORUM_LOAD_TEST_ACK=ISOLATED_PROJECT_ONLY
+PERF_PROJECT_REF=dedicated-performance-project-ref
 SUPABASE_URL=https://PROJECT.supabase.co
 SUPABASE_ANON_KEY=...
 TEST_JWT=...
 TEST_USER_ID=...
-ROOM_ID=...
+SCOPE_TYPE=GLOBAL
+SCOPE_KEY=LOAD_TEST
 ```
 
-Optional controls are `WRITE_RATE`, `READ_RATE`, `DURATION`, `WRITE_VUS`, `WRITE_MAX_VUS`, `READ_VUS`, `READ_MAX_VUS`, and `RUN_ID`. Every generated message begins with `[load-test:<RUN_ID>]` so it can be removed safely from the isolated project.
+Optional controls are `WRITE_RATE`, `READ_RATE`, `REALTIME_SUBSCRIBERS`, `DURATION`, `MAX_WRITE_VUS`, `REALTIME_SESSION_MS`, and `RUN_ID`. The harness refuses both known application project refs and any URL that does not match `PERF_PROJECT_REF`. Every generated message is tagged `[load-test:<RUN_ID>:<timestamp>]` for isolated-project cleanup and end-to-end Realtime latency measurement.
 
 ## 100 million messages/day qualification
 
