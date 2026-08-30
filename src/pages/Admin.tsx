@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays, Mail, RotateCcw } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, Shield, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays, Mail, RotateCcw, LayoutDashboard } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,6 +15,7 @@ import { convertToWebP } from "@/lib/imageUtils";
 import { defaultIitLogo, IIT_LIST, iitLogoSettingKey } from "@/data/iitInstitutes";
 import AdminEvents from "@/components/admin/AdminEvents";
 import AdminJobs from "@/components/admin/AdminJobs";
+import AdminAnalyticsDashboard from "@/components/admin/AdminAnalyticsDashboard";
 import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
 
 const NAV_KEYS = [
@@ -27,7 +28,7 @@ const NAV_KEYS = [
 
 const Admin = () => {
   const navigate = useNavigate();
-  const { user, profile, isAdmin } = useAuth();
+  const { user, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   const [userSearch, setUserSearch] = useState("");
   const [uploadingIitLogo, setUploadingIitLogo] = useState<string | null>(null);
@@ -279,21 +280,6 @@ const Admin = () => {
     toast.success("Message removed");
   };
 
-  const { data: stats } = useQuery({
-    queryKey: ["admin-stats"],
-    queryFn: async () => {
-      const [usersRes, postsRes, jobsRes, eventsRes, connectionsRes] = await Promise.all([
-        supabase.from("profiles").select("user_id", { count: "exact", head: true }),
-        supabase.from("posts").select("id", { count: "exact", head: true }),
-        supabase.from("jobs").select("id", { count: "exact", head: true }),
-        supabase.from("events").select("id", { count: "exact", head: true }),
-        supabase.from("connections").select("id", { count: "exact", head: true }).eq("status", "accepted"),
-      ]);
-      return { users: usersRes.count ?? 0, posts: postsRes.count ?? 0, jobs: jobsRes.count ?? 0, events: eventsRes.count ?? 0, connections: connectionsRes.count ?? 0 };
-    },
-    enabled: !!isAdmin,
-  });
-
   const { data: appSettings } = useQuery({
     queryKey: ["admin-app-settings"],
     queryFn: async () => {
@@ -439,33 +425,19 @@ const Admin = () => {
   return (
     <div className="bg-background min-h-screen">
       <header className="sticky top-0 z-40 bg-card border-b border-border px-4 py-4">
-        <div className="flex items-center gap-3 max-w-4xl mx-auto">
+        <div className="flex items-center gap-3 max-w-6xl mx-auto">
           <button onClick={() => navigate(-1)} className="p-1 text-foreground hover-scale"><ArrowLeft className="w-5 h-5" /></button>
           <div>
-            <h1 className="text-xl font-bold text-foreground">Admin</h1>
-            <p className="text-[10px] text-muted-foreground">Manage users, content & settings</p>
+            <h1 className="text-xl font-bold text-foreground">Cirkle Admin</h1>
+            <p className="text-[10px] text-muted-foreground">Business health, members, content and operations</p>
           </div>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-4">
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
-          {[
-            { label: "Users", value: stats?.users ?? 0, icon: Users, color: "text-primary" },
-            { label: "Posts", value: stats?.posts ?? 0, icon: FileText, color: "text-[hsl(var(--success))]" },
-            { label: "Jobs", value: stats?.jobs ?? 0, icon: BarChart3, color: "text-[hsl(var(--warning))]" },
-            { label: "Events", value: stats?.events ?? 0, icon: TrendingUp, color: "text-destructive" },
-            { label: "Connections", value: stats?.connections ?? 0, icon: Users, color: "text-primary" },
-          ].map(({ label, value, icon: Icon, color }) => (
-            <div key={label} className="bg-card border border-border rounded-xl p-4 flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-xl bg-muted flex items-center justify-center ${color}`}><Icon className="w-5 h-5" /></div>
-              <div><p className="text-2xl font-bold text-foreground">{value}</p><p className="text-xs text-muted-foreground">{label}</p></div>
-            </div>
-          ))}
-        </div>
-
-        <Tabs defaultValue="users">
-          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-4 sm:grid-cols-8 gap-1 p-1">
+      <main className="max-w-6xl mx-auto px-4 py-4">
+        <Tabs defaultValue="dashboard">
+          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-3 sm:grid-cols-9 gap-1 p-1">
+            <TabsTrigger value="dashboard" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><LayoutDashboard className="w-3.5 h-3.5 mr-1" /> Dashboard</TabsTrigger>
             <TabsTrigger value="users" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Users className="w-3.5 h-3.5 mr-1" /> Users</TabsTrigger>
             <TabsTrigger value="jobs" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Briefcase className="w-3.5 h-3.5 mr-1" /> Jobs</TabsTrigger>
             <TabsTrigger value="events" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><CalendarDays className="w-3.5 h-3.5 mr-1" /> Events</TabsTrigger>
@@ -475,6 +447,10 @@ const Admin = () => {
             <TabsTrigger value="courses" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><GraduationCap className="w-3.5 h-3.5 mr-1" /> Courses</TabsTrigger>
             <TabsTrigger value="settings" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Settings2 className="w-3.5 h-3.5 mr-1" /> Settings</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="dashboard" className="space-y-3">
+            <AdminAnalyticsDashboard owner={isPlatformOwner} />
+          </TabsContent>
 
           {/* Users Tab */}
           <TabsContent value="users" className="space-y-3">
@@ -737,8 +713,8 @@ const Admin = () => {
                   const uploading = uploadingIitLogo === iit.studentDomain;
                   return (
                     <div key={iit.studentDomain} className="flex items-center gap-3 rounded-xl bg-secondary/50 p-2.5 border border-border/60">
-                      <div className="w-10 h-10 rounded-lg bg-white border border-border flex items-center justify-center overflow-hidden shrink-0">
-                        <img src={logoUrl} alt={`${iit.name} logo`} className="w-8 h-8 object-contain" />
+                      <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm ring-1 ring-black/[0.03]">
+                        <img src={logoUrl} alt={`${iit.name} logo`} className="block h-full w-full rounded-sm bg-white object-contain" />
                       </div>
                       <span className="text-xs font-semibold text-foreground flex-1 min-w-0 truncate">{iit.name}</span>
                       {appSettings?.[iitLogoSettingKey(iit.studentDomain)] && (

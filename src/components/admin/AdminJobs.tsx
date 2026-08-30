@@ -47,6 +47,13 @@ const MODEL_DEFAULTS: Record<Provider, string> = {
   custom: "your-model",
 };
 
+const CRITERIA_PRESETS = [
+  ["India only", "Only include roles based in India or explicitly available remotely in India."],
+  ["Internships", "Prioritize internships and clearly label them as Internship."],
+  ["Entry level", "Only include student, graduate, fresher, or 0–2 year opportunities."],
+  ["MBA roles", "Prioritize consulting, finance, strategy, product, operations, sales, and marketing roles suitable for MBA students or alumni."],
+] as const;
+
 const parseHttpsUrl = (value: string, label: string) => {
   let url: URL;
   try { url = new URL(value.trim()); } catch { throw new Error(`${label} must be a valid URL.`); }
@@ -72,6 +79,7 @@ const AdminJobs = () => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("all");
+  const [jobTypeFilter, setJobTypeFilter] = useState("all");
   const [showEditor, setShowEditor] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [form, setForm] = useState<JobForm>(emptyJob());
@@ -242,7 +250,12 @@ const AdminJobs = () => {
     else await queryClient.invalidateQueries({ queryKey: ["admin-job-sources"] });
   };
 
-  const visibleJobs = useMemo(() => jobs.filter((job) => statusFilter === "all" || job.status === statusFilter), [jobs, statusFilter]);
+  const visibleJobs = useMemo(() => jobs.filter((job) => {
+    const statusMatches = statusFilter === "all" || job.status === statusFilter;
+    const isInternship = String(job.job_type || "").toLowerCase().includes("intern");
+    const typeMatches = jobTypeFilter === "all" || (jobTypeFilter === "internships" ? isInternship : !isInternship);
+    return statusMatches && typeMatches;
+  }), [jobTypeFilter, jobs, statusFilter]);
 
   return (
     <div className="space-y-4">
@@ -271,6 +284,10 @@ const AdminJobs = () => {
 
       <div className="flex gap-2 overflow-x-auto pb-1">
         {["all", "draft", "published", "closed", "archived"].map((status) => <button key={status} onClick={() => setStatusFilter(status)} className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold ${statusFilter === status ? "bg-primary text-primary-foreground" : "border border-border bg-card text-muted-foreground"}`}>{status[0].toUpperCase() + status.slice(1)}</button>)}
+      </div>
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-muted-foreground">Show:</span>
+        {[['all', 'All listings'], ['jobs', 'Jobs'], ['internships', 'Internships']].map(([value, label]) => <button key={value} onClick={() => setJobTypeFilter(value)} className={`rounded-full px-3 py-1.5 font-semibold ${jobTypeFilter === value ? "bg-foreground text-background" : "bg-secondary text-muted-foreground"}`}>{label}</button>)}
       </div>
 
       {isLoading ? <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div> : (
@@ -359,10 +376,10 @@ const AdminJobs = () => {
             <div className="grid gap-3 sm:grid-cols-2"><Field label="AI provider"><select value={provider} onChange={(e) => { const next = e.target.value as Provider; setProvider(next); setModel(MODEL_DEFAULTS[next]); }} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="custom">Any OpenAI-compatible API</option></select></Field><Field label="Model"><Input value={model} onChange={(e) => setModel(e.target.value)} /></Field></div>
             <Field label="Company"><Input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Optional fallback company name" /></Field>
             <Field label="Career URLs (one per line, maximum 5)"><Textarea rows={5} value={sourceUrls} onChange={(e) => setSourceUrls(e.target.value)} placeholder={"https://company.com/careers\nhttps://jobs.company.com/search"} /></Field>
-            <Field label="Extra extraction instructions"><Textarea rows={3} value={instructions} onChange={(e) => setInstructions(e.target.value)} placeholder="Optional: only India roles, include internships…" /></Field>
+            <Field label="Hiring criteria"><div className="mb-2 flex flex-wrap gap-2">{CRITERIA_PRESETS.map(([label, text]) => <button type="button" key={label} onClick={() => setInstructions((current) => current.includes(text) ? current : `${current}${current.trim() ? "\n" : ""}${text}`)} className="rounded-full border border-border bg-secondary/50 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground hover:border-primary hover:text-primary">+ {label}</button>)}</div><Textarea rows={4} value={instructions} onChange={(e) => setInstructions(e.target.value)} placeholder="Choose criteria above or add your own. The scanner will only extract real vacancies from the supplied sources." /></Field>
             <div className="grid grid-cols-2 gap-2"><button onClick={() => setPublishMode("draft")} className={`min-h-12 rounded-xl border text-xs font-semibold ${publishMode === "draft" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}>Import as drafts<br /><span className="font-normal">Recommended</span></button><button onClick={() => setPublishMode("published")} className={`min-h-12 rounded-xl border text-xs font-semibold ${publishMode === "published" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}>Publish automatically<br /><span className="font-normal">Use trusted sources only</span></button></div>
             <label className="flex items-center justify-between gap-3 rounded-xl border border-border p-3 text-xs font-semibold">Save these sources for future scans <Switch checked={saveSources} onCheckedChange={setSaveSources} /></label>
-            <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-[11px] leading-relaxed text-muted-foreground"><p className="flex items-center gap-1 font-bold text-foreground"><ShieldCheck className="h-3.5 w-3.5 text-primary" /> API keys stay on the server</p><p className="mt-1">Configure OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, or CUSTOM_AI_API_KEY + CUSTOM_AI_BASE_URL in Supabase Edge Function secrets. Keys are never sent to this browser.</p></div>
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-[11px] leading-relaxed text-muted-foreground"><p className="flex items-center gap-1 font-bold text-foreground"><ShieldCheck className="h-3.5 w-3.5 text-primary" /> Verified-source AI workflow</p><p className="mt-1">AI extracts only real openings found on the career URLs, imports drafts by default, deduplicates them, and keeps API keys on the server. It never invents a vacancy.</p></div>
             <Button className="h-11 w-full rounded-xl" disabled={runScan.isPending} onClick={() => runScan.mutate(undefined)}>{runScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />}{runScan.isPending ? "Scanning and validating…" : "Scan now"}</Button>
           </div>
         </div>

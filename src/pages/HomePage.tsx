@@ -173,17 +173,6 @@ const WIZARD_STEPS: { key: WizardStep; label: string; mandatory: boolean }[] = [
   { key: "cover", label: "Cover Photo (Optional)", mandatory: false },
 ];
 
-const getProfileCompleteness = (profile: any): number => {
-  if (!profile) return 0;
-  const fields = ["name", "headline", "bio", "avatar_url", "location", "skills", "iit_name", "student_status"];
-  const filled = fields.filter((f) => {
-    const val = profile[f];
-    if (Array.isArray(val)) return val.length > 0;
-    return !!val;
-  }).length;
-  return Math.round((filled / fields.length) * 100);
-};
-
 const EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
 
 const HomePage = () => {
@@ -718,7 +707,6 @@ const HomePage = () => {
     );
   }
 
-  const profileComplete = getProfileCompleteness(profile);
   const formatCount = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n));
 
   const handleCancelWizard = () => setShowCancelConfirm(true);
@@ -1214,41 +1202,6 @@ const HomePage = () => {
       )}
 
       <main className="max-w-lg lg:max-w-3xl mx-auto">
-        {profileComplete < 100 && (
-          <div className="bg-gradient-to-r from-primary to-primary/80 text-primary-foreground px-4 py-4 flex items-center gap-4">
-            <div className="relative w-14 h-14 flex-shrink-0">
-              <svg className="w-14 h-14 -rotate-90" viewBox="0 0 56 56">
-                <circle cx="28" cy="28" r="24" stroke="white" strokeOpacity="0.3" strokeWidth="4" fill="none" />
-                <circle
-                  cx="28"
-                  cy="28"
-                  r="24"
-                  stroke="white"
-                  strokeWidth="4"
-                  fill="none"
-                  strokeDasharray={`${(profileComplete / 100) * 150.8} 150.8`}
-                  strokeLinecap="round"
-                />
-              </svg>
-              <span className="absolute inset-0 flex items-center justify-center text-xs font-bold">
-                {profileComplete}%
-              </span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-bold text-sm">Enhance Profile</p>
-              <p className="text-xs text-primary-foreground/80">Complete your profile to stand out</p>
-            </div>
-            <Button
-              size="sm"
-              variant="secondary"
-              className="text-xs h-7 rounded-full px-3 flex-shrink-0"
-              onClick={openWizardWithData}
-            >
-              Complete Now
-            </Button>
-          </div>
-        )}
-
         <section
           className="flex gap-3 px-4 py-4 overflow-x-auto scrollbar-hide border-b border-border"
           aria-label="Stories"

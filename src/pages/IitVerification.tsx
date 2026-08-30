@@ -20,7 +20,6 @@ const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) 
   const officialUrl = defaultIitLogo(iit.studentDomain);
   const [source, setSource] = useState(customUrl || officialUrl);
   const [failed, setFailed] = useState(false);
-  const [wide, setWide] = useState(false);
   const initials = iit.name
     .replace("IIT ", "")
     .replace(" (ISM)", "")
@@ -33,11 +32,10 @@ const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) 
   useEffect(() => {
     setSource(customUrl || officialUrl);
     setFailed(false);
-    setWide(false);
   }, [customUrl, officialUrl]);
 
   return (
-    <div className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border/70 bg-white shadow-sm">
+    <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm ring-1 ring-black/[0.03]">
       {failed ? (
         <span className="text-sm font-black tracking-tight text-primary">{initials}</span>
       ) : (
@@ -50,18 +48,11 @@ const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) 
           onError={() => {
             if (source !== officialUrl) {
               setSource(officialUrl);
-              setWide(false);
               return;
             }
             setFailed(true);
           }}
-          onLoad={(event) => {
-            const image = event.currentTarget;
-            setWide(image.naturalWidth / Math.max(image.naturalHeight, 1) > 1.65);
-          }}
-          className={wide
-            ? `absolute h-9 w-auto max-w-none ${iit.studentDomain === "iitism.ac.in" ? "left-1/2 -translate-x-1/2" : "left-1.5"}`
-            : "w-9 h-9 object-contain"}
+          className="block h-full w-full rounded-sm bg-white object-contain"
         />
       )}
     </div>

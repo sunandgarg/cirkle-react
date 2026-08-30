@@ -10,6 +10,8 @@ import PostVerifyOnboarding from "./PostVerifyOnboarding";
 import { ErrorBoundary } from "./ErrorBoundary";
 import GlobalSearchOverlay from "./GlobalSearchOverlay";
 import { useEffect } from "react";
+import ProfileCompletionBanner from "./ProfileCompletionBanner";
+import { supabase } from "@/integrations/supabase/client";
 
 const AppLayout = () => {
   const { user, profile, isVerified, refetchProfile, profileResolved } = useAuth();
@@ -30,6 +32,27 @@ const AppLayout = () => {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  // Count first-party activity without third-party tracking or exposing raw
+  // account data. A browser-tab session is counted once; route views roll up
+  // into the owner-only daily dashboard.
+  useEffect(() => {
+    if (!user?.id || !profileResolved) return;
+    const key = `cirkle:activity-session:${user.id}`;
+    let sessionId = sessionStorage.getItem(key);
+    if (!sessionId) {
+      sessionId = typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      sessionStorage.setItem(key, sessionId);
+    }
+    void (supabase as any).rpc("record_user_activity", {
+      p_session_id: sessionId,
+      p_path: `${location.pathname}${location.search}`,
+    }).then(({ error }: { error?: { message?: string } | null }) => {
+      if (error) console.warn("Activity tracking unavailable", error.message);
+    });
+  }, [location.pathname, location.search, profileResolved, user?.id]);
 
   // If verified but onboarding not completed, show onboarding wizard
   const needsOnboarding = profileResolved && user && isVerified && profile && !profile.onboarding_completed;
@@ -67,6 +90,9 @@ const AppLayout = () => {
       <DesktopSidebar />
       <div className="flex-1 flex flex-col min-w-0 max-w-full overflow-hidden">
         {!isForum && <AppHeader />}
+        {user && profile && isVerified && profile.onboarding_completed && !location.pathname.startsWith("/profile") && (
+          <ProfileCompletionBanner userId={user.id} profile={profile as unknown as Record<string, unknown>} />
+        )}
         <main id="main-content" className={`flex-1 ${isForum ? '' : 'pb-[72px]'} lg:pb-0 overflow-y-auto overflow-x-hidden overscroll-y-contain`} style={{ WebkitOverflowScrolling: 'touch' }}>
           <ErrorBoundary>
             <Outlet />
