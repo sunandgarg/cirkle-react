@@ -2,7 +2,27 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+function normalizeSupabaseUrl(value: string | undefined): string {
+  if (!value) return '';
+
+  const parsed = new URL(value);
+  const pathname = parsed.pathname.replace(/\/+$/, '');
+
+  // Cloudflare was previously configured with the PostgREST endpoint. The
+  // Supabase client needs the project origin so Auth, Functions and Realtime
+  // can construct their own service URLs.
+  if (pathname === '/rest/v1') {
+    parsed.pathname = '/';
+  } else if (pathname && pathname !== '/') {
+    throw new Error('VITE_SUPABASE_URL must be a Supabase project URL');
+  }
+
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString().replace(/\/$/, '');
+}
+
+const SUPABASE_URL = normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL);
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
