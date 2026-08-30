@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { useEffect, useRef } from "react";
 import {
@@ -183,12 +183,16 @@ const Landing = () => {
 
       {/* ─── Footer ─── */}
       <footer className="border-t border-border py-5 px-5">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
+        <div className="max-w-4xl mx-auto flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <img src={cirkLogo} alt="Cirkle" className="w-5 h-5 rounded" />
-            <span className="text-sm font-semibold text-foreground">Cirkle</span>
+            <span className="text-sm font-semibold text-foreground">Cirkle.World</span>
           </div>
-          <p className="text-[10px] text-muted-foreground/40">© 2026 Cirkle</p>
+          <div className="flex items-center gap-4 text-[11px] text-muted-foreground">
+            <Link to="/privacy" className="hover:text-foreground hover:underline">Privacy</Link>
+            <Link to="/terms" className="hover:text-foreground hover:underline">Terms</Link>
+            <span className="text-muted-foreground/50">© 2026 Cirkle.World</span>
+          </div>
         </div>
       </footer>
     </div>
