@@ -8,6 +8,8 @@ import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { readResumeRoute } from "@/lib/sessionResume";
+import { applyThemePreference, readThemePreference, type ThemePreference } from "@/lib/theme";
+import { Monitor, Moon, Sun } from "lucide-react";
 
 const GoogleMark = () => (
   <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 shrink-0">
@@ -35,9 +37,14 @@ const Auth = () => {
   const [recoverySent, setRecoverySent] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user, profile, loading: authLoading } = useAuth();
+
+  useEffect(() => {
+    applyThemePreference(theme);
+  }, [theme]);
 
   useEffect(() => {
     if (searchParams.get("password_reset") !== "success") return;
@@ -186,8 +193,8 @@ const Auth = () => {
   };
 
   return (
-    <div className="min-h-[100svh] bg-[#0d0e10] text-white supports-[height:100dvh]:min-h-[100dvh] lg:grid lg:grid-cols-[minmax(0,1.25fr)_minmax(430px,0.75fr)]">
-      <div className="relative h-[38svh] min-h-[250px] max-h-[390px] overflow-hidden bg-[#111214] lg:sticky lg:top-0 lg:h-[100dvh] lg:min-h-0 lg:max-h-none">
+    <div className="min-h-[100svh] bg-[#f5f7f9] text-[#10161e] supports-[height:100dvh]:min-h-[100dvh] dark:bg-[#0d0e10] dark:text-white lg:grid lg:grid-cols-[minmax(0,1.25fr)_minmax(430px,0.75fr)]">
+      <div className="relative h-[38svh] min-h-[250px] max-h-[390px] overflow-hidden bg-[#dfe3e7] dark:bg-[#111214] lg:sticky lg:top-0 lg:h-[100dvh] lg:min-h-0 lg:max-h-none">
         <picture>
           <source media="(min-width: 1024px)" srcSet="/auth-community-landscape-v2.webp" />
           <img
@@ -195,10 +202,10 @@ const Auth = () => {
             alt=""
             aria-hidden="true"
             fetchPriority="high"
-            className="absolute inset-0 h-full w-full object-cover object-[center_20%] lg:object-cover lg:object-center"
+            className="absolute inset-0 h-full w-full object-cover object-[center_20%] opacity-85 dark:opacity-100 lg:object-cover lg:object-center"
           />
         </picture>
-        <div aria-hidden="true" className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(13,14,16,0.04)_0%,rgba(13,14,16,0.14)_60%,#0d0e10_100%)] lg:bg-[linear-gradient(to_right,rgba(13,14,16,0.08)_0%,rgba(13,14,16,0.12)_55%,rgba(13,14,16,0.72)_100%)]" />
+        <div aria-hidden="true" className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(245,247,249,0.02)_0%,rgba(245,247,249,0.12)_55%,#f5f7f9_100%)] dark:bg-[linear-gradient(to_bottom,rgba(13,14,16,0.04)_0%,rgba(13,14,16,0.14)_60%,#0d0e10_100%)] lg:bg-[linear-gradient(to_right,rgba(245,247,249,0.02)_0%,rgba(245,247,249,0.08)_55%,rgba(245,247,249,0.56)_100%)] lg:dark:bg-[linear-gradient(to_right,rgba(13,14,16,0.08)_0%,rgba(13,14,16,0.12)_55%,rgba(13,14,16,0.72)_100%)]" />
         <div className="absolute inset-x-8 bottom-10 hidden max-w-lg lg:block">
           <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/55">The verified IIT network</p>
           <p className="mt-3 text-3xl font-semibold leading-tight tracking-[-0.025em] text-white/90">Your campus community, without the noise.</p>
@@ -206,20 +213,39 @@ const Auth = () => {
       </div>
       <main
         id="main-content"
-        className="relative z-10 -mt-5 flex min-h-[calc(62svh+20px)] w-full items-start rounded-t-[28px] bg-[#0d0e10] px-6 pb-[max(24px,env(safe-area-inset-bottom))] pt-7 lg:mt-0 lg:min-h-[100dvh] lg:items-center lg:rounded-none lg:px-10 lg:py-12 xl:px-16"
+        className="relative z-10 -mt-5 flex min-h-[calc(62svh+20px)] w-full items-start rounded-t-[28px] bg-[#f5f7f9] px-6 pb-[max(24px,env(safe-area-inset-bottom))] pt-7 dark:bg-[#0d0e10] lg:mt-0 lg:min-h-[100dvh] lg:items-center lg:rounded-none lg:px-10 lg:py-12 xl:px-16"
       >
+        <div className="absolute right-5 top-5 flex rounded-full border border-black/10 bg-white/80 p-1 shadow-sm backdrop-blur-md dark:border-white/10 dark:bg-[#1a1a22]/90" role="group" aria-label="Appearance">
+          {([
+            { value: "light", label: "Use light theme", icon: Sun },
+            { value: "system", label: "Use device theme", icon: Monitor },
+            { value: "dark", label: "Use dark theme", icon: Moon },
+          ] as const).map(({ value, label, icon: Icon }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setTheme(value)}
+              aria-label={label}
+              aria-pressed={theme === value}
+              title={label}
+              className={`flex h-7 w-7 items-center justify-center rounded-full transition-colors ${theme === value ? "bg-[#10161e] text-white dark:bg-white dark:text-[#10161e]" : "text-[#637083] hover:bg-black/5 hover:text-[#10161e] dark:text-white/45 dark:hover:bg-white/10 dark:hover:text-white"}`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+            </button>
+          ))}
+        </div>
         <section className="mx-auto w-full max-w-md" aria-labelledby="login-title">
           <div className="mb-6 hidden items-center gap-3 lg:flex">
             <img src="/cirkle-logo.png" alt="Cirkle" className="h-10 w-10 rounded-xl" />
             <div>
               <p className="text-lg font-bold tracking-[-0.02em]">Cirkle</p>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">IIT Community</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#637083] dark:text-white/40">IIT Community</p>
             </div>
           </div>
-          <h1 id="login-title" className="text-[30px] font-bold leading-9 tracking-[-0.025em] text-white lg:text-4xl lg:leading-tight">
+          <h1 id="login-title" className="text-[30px] font-bold leading-9 tracking-[-0.025em] text-[#10161e] dark:text-white lg:text-4xl lg:leading-tight">
             Welcome
           </h1>
-          <p className="mb-5 mt-1 text-sm leading-5 text-white/55 lg:text-base">
+          <p className="mb-5 mt-1 text-sm leading-5 text-[#637083] dark:text-white/55 lg:text-base">
             Sign up or login to your account
           </p>
 
@@ -227,7 +253,7 @@ const Auth = () => {
             type="button"
             variant="outline"
             size="lg"
-            className="h-12 w-full gap-2 rounded-xl border-white/10 bg-[#1a1a22] p-0 text-base font-semibold text-white shadow-none hover:border-white/20 hover:bg-[#22222c]"
+            className="h-12 w-full gap-2 rounded-xl border-black/10 bg-white p-0 text-base font-semibold text-[#10161e] shadow-sm hover:bg-[#edf1f4] dark:border-white/10 dark:bg-[#1a1a22] dark:text-white dark:shadow-none dark:hover:border-white/20 dark:hover:bg-[#22222c]"
             onClick={handleGoogleLogin}
             disabled={loading}
           >
@@ -235,10 +261,10 @@ const Auth = () => {
             Google
           </Button>
 
-          <div className="my-4 flex h-5 items-center gap-4 text-center text-sm leading-5 text-white/45">
-            <span className="h-px flex-1 bg-white/10" />
+          <div className="my-4 flex h-5 items-center gap-4 text-center text-sm leading-5 text-[#637083] dark:text-white/45">
+            <span className="h-px flex-1 bg-black/10 dark:bg-white/10" />
             <span>Or</span>
-            <span className="h-px flex-1 bg-white/10" />
+            <span className="h-px flex-1 bg-black/10 dark:bg-white/10" />
           </div>
 
           {authStep === "email" ? (
@@ -252,7 +278,7 @@ const Auth = () => {
                 value={email}
                 onChange={(e) => handleEmailChange(e.target.value)}
                 aria-label="Enter your email"
-                className="h-12 w-full rounded-xl border-white/10 bg-[#1a1a22] px-4 text-base text-white shadow-none placeholder:text-white/38 focus-visible:border-[#75b7ff]/70 focus-visible:ring-2 focus-visible:ring-[#75b7ff]/15 sm:text-sm"
+                className="h-12 w-full rounded-xl border-black/10 bg-white px-4 text-base text-[#10161e] shadow-sm placeholder:text-[#7b8796] focus-visible:border-[#1666b6]/70 focus-visible:ring-2 focus-visible:ring-[#1666b6]/15 dark:border-white/10 dark:bg-[#1a1a22] dark:text-white dark:shadow-none dark:placeholder:text-white/38 dark:focus-visible:border-[#75b7ff]/70 dark:focus-visible:ring-[#75b7ff]/15 sm:text-sm"
                 onKeyDown={(event) => {
                   if (event.key !== "Enter") return;
                   if (authMethod === "otp") handleEmailContinue();
@@ -270,13 +296,13 @@ const Auth = () => {
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     aria-label="Enter your password"
-                    className="h-12 w-full rounded-xl border-white/10 bg-[#1a1a22] px-4 pr-16 text-base text-white shadow-none placeholder:text-white/38 focus-visible:border-[#75b7ff]/70 focus-visible:ring-2 focus-visible:ring-[#75b7ff]/15 sm:text-sm"
+                    className="h-12 w-full rounded-xl border-black/10 bg-white px-4 pr-16 text-base text-[#10161e] shadow-sm placeholder:text-[#7b8796] focus-visible:border-[#1666b6]/70 focus-visible:ring-2 focus-visible:ring-[#1666b6]/15 dark:border-white/10 dark:bg-[#1a1a22] dark:text-white dark:shadow-none dark:placeholder:text-white/38 dark:focus-visible:border-[#75b7ff]/70 dark:focus-visible:ring-[#75b7ff]/15 sm:text-sm"
                     onKeyDown={(event) => event.key === "Enter" && handlePasswordLogin()}
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword((current) => !current)}
-                    className="absolute inset-y-0 right-3 text-xs font-semibold text-white/55 hover:text-white"
+                    className="absolute inset-y-0 right-3 text-xs font-semibold text-[#637083] hover:text-[#10161e] dark:text-white/55 dark:hover:text-white"
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
                     {showPassword ? "Hide" : "Show"}
@@ -284,7 +310,7 @@ const Auth = () => {
                 </div>
               )}
 
-              <p className="mb-2 mt-4 text-xs leading-4 text-white/45" aria-live="polite">
+              <p className="mb-2 mt-4 text-xs leading-4 text-[#637083] dark:text-white/45" aria-live="polite">
                 {authMethod === "otp"
                   ? "We'll email a 6-digit secure code to verify this account."
                   : "Sign in with your existing account password."}
@@ -292,7 +318,7 @@ const Auth = () => {
 
               <Button
                 size="lg"
-                className="h-12 w-full rounded-xl bg-[#343438] px-8 text-base font-semibold text-white shadow-none hover:bg-[#414146] disabled:bg-[#242428] disabled:text-white/35 disabled:opacity-100"
+                className="h-12 w-full rounded-xl bg-[#1666b6] px-8 text-base font-semibold text-white shadow-sm hover:bg-[#125a9f] disabled:bg-[#b8cce0] disabled:text-white/80 disabled:opacity-100 dark:bg-[#343438] dark:shadow-none dark:hover:bg-[#414146] dark:disabled:bg-[#242428] dark:disabled:text-white/35"
                 onClick={authMethod === "otp" ? handleEmailContinue : handlePasswordLogin}
                 disabled={loading || !isValidEmail(email) || (authMethod === "password" && !password)}
               >
@@ -308,14 +334,14 @@ const Auth = () => {
                     setAuthMethod((current) => current === "otp" ? "password" : "otp");
                     setPassword("");
                   }}
-                  className="text-left text-[#75b7ff] underline-offset-2 hover:underline"
+                  className="text-left text-[#1666b6] underline-offset-2 hover:underline dark:text-[#75b7ff]"
                 >
                   {authMethod === "otp" ? "Use password instead" : "Use email code"}
                 </button>
                 <button
                   type="button"
                   onClick={openForgotPassword}
-                  className="text-right text-white/55 underline-offset-2 hover:text-white hover:underline"
+                  className="text-right text-[#637083] underline-offset-2 hover:text-[#10161e] hover:underline dark:text-white/55 dark:hover:text-white"
                 >
                   Forgot password?
                 </button>
@@ -323,38 +349,38 @@ const Auth = () => {
             </>
           ) : (
             <>
-              <p className="mb-4 text-sm leading-5 text-white/55" aria-live="polite">
-                Enter the 6-digit code sent to <span className="font-semibold text-white">{email}</span>
-                <button type="button" onClick={handleEditEmail} className="ml-2 font-semibold text-[#75b7ff] underline underline-offset-2">Change</button>
+              <p className="mb-4 text-sm leading-5 text-[#637083] dark:text-white/55" aria-live="polite">
+                Enter the 6-digit code sent to <span className="font-semibold text-[#10161e] dark:text-white">{email}</span>
+                <button type="button" onClick={handleEditEmail} className="ml-2 font-semibold text-[#1666b6] underline underline-offset-2 dark:text-[#75b7ff]">Change</button>
               </p>
               <div className="flex justify-center overflow-hidden">
                 <InputOTP autoFocus maxLength={6} value={otp} onChange={setOtp}>
                   <InputOTPGroup className="gap-1.5 sm:gap-2">
                     {[0, 1, 2, 3, 4, 5].map((index) => (
-                      <InputOTPSlot key={index} index={index} className="h-12 w-10 rounded-xl border-white/10 bg-[#1a1a22] text-lg font-bold text-white first:rounded-xl last:rounded-xl sm:w-12" />
+                      <InputOTPSlot key={index} index={index} className="h-12 w-10 rounded-xl border-black/10 bg-white text-lg font-bold text-[#10161e] shadow-sm first:rounded-xl last:rounded-xl dark:border-white/10 dark:bg-[#1a1a22] dark:text-white dark:shadow-none sm:w-12" />
                     ))}
                   </InputOTPGroup>
                 </InputOTP>
               </div>
               <Button
                 size="lg"
-                className="mt-4 h-12 w-full rounded-xl bg-[#343438] px-8 text-base font-semibold text-white shadow-none hover:bg-[#414146] disabled:bg-[#242428] disabled:text-white/35 disabled:opacity-100"
+                className="mt-4 h-12 w-full rounded-xl bg-[#1666b6] px-8 text-base font-semibold text-white shadow-sm hover:bg-[#125a9f] disabled:bg-[#b8cce0] disabled:text-white/80 disabled:opacity-100 dark:bg-[#343438] dark:shadow-none dark:hover:bg-[#414146] dark:disabled:bg-[#242428] dark:disabled:text-white/35"
                 onClick={handleVerifyEmailOtp}
                 disabled={loading || otp.length !== 6}
               >
                 {loading ? "Verifying..." : "Verify email"}
               </Button>
-              <button type="button" onClick={handleEmailContinue} disabled={loading} className="mt-3 w-full text-center text-xs font-semibold text-[#75b7ff] disabled:opacity-50">
+              <button type="button" onClick={handleEmailContinue} disabled={loading} className="mt-3 w-full text-center text-xs font-semibold text-[#1666b6] disabled:opacity-50 dark:text-[#75b7ff]">
                 {emailSent ? "Send a new code" : "Resend code"}
               </button>
             </>
           )}
 
-          <p className="mt-5 text-center text-xs leading-4 text-white/45">
+          <p className="mt-5 text-center text-xs leading-4 text-[#637083] dark:text-white/45">
             By continuing, you agree to our{" "}
-            <button onClick={() => setShowTerms(true)} className="font-medium text-white/70 underline decoration-white/30 underline-offset-2 hover:text-white">T&C</button>
+            <button onClick={() => setShowTerms(true)} className="font-medium text-[#495565] underline decoration-black/20 underline-offset-2 hover:text-[#10161e] dark:text-white/70 dark:decoration-white/30 dark:hover:text-white">T&C</button>
             {" "}&{" "}
-            <button onClick={() => setShowPrivacy(true)} className="font-medium text-white/70 underline decoration-white/30 underline-offset-2 hover:text-white">Privacy policy</button>
+            <button onClick={() => setShowPrivacy(true)} className="font-medium text-[#495565] underline decoration-black/20 underline-offset-2 hover:text-[#10161e] dark:text-white/70 dark:decoration-white/30 dark:hover:text-white">Privacy policy</button>
           </p>
         </section>
       </main>

@@ -6,38 +6,17 @@ import { Switch } from "@/components/ui/switch";
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { clearMobileTestSession } from "@/lib/mobileVerification";
-
-const getTheme = (): "light" | "dark" | "system" => {
-  if (typeof window === "undefined") return "light";
-  return (localStorage.getItem("cirkle-theme") as any) || "light";
-};
-
-const applyTheme = (theme: "light" | "dark" | "system") => {
-  localStorage.setItem("cirkle-theme", theme);
-  const root = document.documentElement;
-  if (theme === "dark") {
-    root.classList.add("dark");
-  } else if (theme === "light") {
-    root.classList.remove("dark");
-  } else {
-    // system
-    if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-    }
-  }
-};
+import { applyThemePreference, readThemePreference, type ThemePreference } from "@/lib/theme";
 
 const Settings = () => {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
   const [appLock, setAppLock] = useState(true);
   const [autoplay, setAutoplay] = useState(false);
-  const [theme, setTheme] = useState<"light" | "dark" | "system">(getTheme());
+  const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
 
   useEffect(() => {
-    applyTheme(theme);
+    applyThemePreference(theme);
   }, [theme]);
 
   const handleLogout = async () => {
