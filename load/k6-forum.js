@@ -22,6 +22,7 @@ const writeRate = Number(__ENV.WRITE_RATE || 10);
 const readRate = Number(__ENV.READ_RATE || 2);
 const realtimeSubscribers = Number(__ENV.REALTIME_SUBSCRIBERS || 5);
 const realtimeJwt = __ENV.REALTIME_JWT || __ENV.TEST_JWT;
+const realtimeRampUp = __ENV.REALTIME_RAMP_UP;
 const durationToMs = (value) => {
   const match = String(value).match(/^(\d+(?:\.\d+)?)(ms|s|m|h)$/);
   if (!match) fail(`Unsupported duration: ${value}`);
@@ -40,18 +41,33 @@ if (__ENV.PLAN_PROFILE === "PRO_SPEND_CAP") {
 const failedWrites = new Counter("forum_failed_writes");
 const realtimeEvents = new Counter("forum_realtime_events");
 const realtimeLag = new Trend("forum_realtime_lag_ms", true);
+const realtimeSubscriptions = new Counter("forum_realtime_subscriptions");
+const realtimeJoinFailures = new Counter("forum_realtime_join_failures");
+const realtimeSocketErrors = new Counter("forum_realtime_socket_errors");
 
-export const options = {
-  scenarios: {
-    posts: { executor: "constant-arrival-rate", exec: "writePost", rate: writeRate, timeUnit: "1s", duration, startTime: realtimeWarmup, preAllocatedVUs: 20, maxVUs: Number(__ENV.MAX_WRITE_VUS || 500) },
-    history: { executor: "constant-arrival-rate", exec: "readPosts", rate: readRate, timeUnit: "1s", duration, startTime: realtimeWarmup, preAllocatedVUs: 5, maxVUs: 100 },
-    realtime: { executor: "constant-vus", exec: "subscribeRealtime", vus: realtimeSubscribers, duration: realtimeDuration },
-  },
-  thresholds: {
-    http_req_failed: ["rate<0.01"], http_req_duration: ["p(95)<750", "p(99)<1500"],
-    forum_failed_writes: ["count<1"], forum_realtime_events: ["count>0"], forum_realtime_lag_ms: ["p(95)<2000"],
-  },
+const realtimeScenario = realtimeRampUp
+  ? { executor: "ramping-vus", exec: "subscribeRealtime", startVUs: 0, stages: [{ duration: realtimeRampUp, target: realtimeSubscribers }, { duration: realtimeDuration, target: realtimeSubscribers }], gracefulRampDown: "0s" }
+  : { executor: "constant-vus", exec: "subscribeRealtime", vus: realtimeSubscribers, duration: realtimeDuration };
+const scenarios = { realtime: realtimeScenario };
+if (writeRate > 0) scenarios.posts = { executor: "constant-arrival-rate", exec: "writePost", rate: writeRate, timeUnit: "1s", duration, startTime: realtimeWarmup, preAllocatedVUs: 20, maxVUs: Number(__ENV.MAX_WRITE_VUS || 500) };
+if (readRate > 0) scenarios.history = { executor: "constant-arrival-rate", exec: "readPosts", rate: readRate, timeUnit: "1s", duration, startTime: realtimeWarmup, preAllocatedVUs: 5, maxVUs: 100 };
+
+const thresholds = {
+  forum_realtime_subscriptions: [`count>=${realtimeSubscribers}`],
+  forum_realtime_join_failures: ["count<1"],
+  forum_realtime_socket_errors: ["count<1"],
 };
+if (writeRate > 0 || readRate > 0) {
+  thresholds.http_req_failed = ["rate<0.01"];
+  thresholds.http_req_duration = ["p(95)<750", "p(99)<1500"];
+}
+if (writeRate > 0) {
+  thresholds.forum_failed_writes = ["count<1"];
+  thresholds.forum_realtime_events = ["count>0"];
+  thresholds.forum_realtime_lag_ms = ["p(95)<2000"];
+}
+
+export const options = { scenarios, thresholds };
 
 const headers = { apikey: __ENV.SUPABASE_ANON_KEY, Authorization: `Bearer ${__ENV.TEST_JWT}`, "Content-Type": "application/json" };
 const uuid = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -135,6 +151,7 @@ export function subscribeRealtime() {
   const socketUrl = baseUrl.replace("https://", "wss://") + `/realtime/v1/websocket?apikey=${encodeURIComponent(__ENV.SUPABASE_ANON_KEY)}&vsn=2.0.0`;
   const topic = `realtime:forum:${scopeType}:${scopeKey}`;
   ws.connect(socketUrl, {}, (socket) => {
+    let joined = false;
     socket.on("open", () => socket.send(JSON.stringify(["1", "1", topic, "phx_join", {
       config: { private: true, broadcast: { self: false, ack: false, replication_ready: true }, presence: { enabled: false }, postgres_changes: [] },
       access_token: realtimeJwt,
@@ -143,6 +160,13 @@ export function subscribeRealtime() {
       if (debugRealtime) console.log(`realtime-frame ${raw}`);
       let frame;
       try { frame = JSON.parse(raw); } catch (_) { return; }
+      if (!joined && frame?.[3] === "phx_reply" && frame?.[4]?.status === "ok") {
+        joined = true;
+        realtimeSubscriptions.add(1);
+      } else if (!joined && frame?.[3] === "phx_reply" && frame?.[4]?.status === "error") {
+        realtimeJoinFailures.add(1);
+        if (debugRealtime) console.error(`realtime-join-error ${JSON.stringify(frame?.[4]?.response || {})}`);
+      }
       const payload = frame?.[4]?.payload || frame?.[4];
       recordRealtimePayload(payload);
     });
@@ -152,6 +176,7 @@ export function subscribeRealtime() {
       if (frame) recordRealtimePayload(frame.payload);
     });
     socket.on("error", (error) => {
+      realtimeSocketErrors.add(1);
       if (debugRealtime) console.error(`realtime-error ${String(error)}`);
     });
     socket.setInterval(() => socket.send(JSON.stringify([null, "hb", "phoenix", "heartbeat", {}])), 25_000);

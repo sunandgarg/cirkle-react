@@ -24,6 +24,8 @@ Optional controls are `WRITE_RATE`, `READ_RATE`, `REALTIME_SUBSCRIBERS`, `DURATI
 
 Set `PLAN_PROFILE=PRO_SPEND_CAP` for a guarded Pro-plan run. The harness then refuses configurations above 500 subscribers or a conservative estimate of 500 Realtime events/second (`WRITE_RATE * (REALTIME_SUBSCRIBERS + 1)`). It uses Realtime protocol v2, decodes server Broadcast binary frames, and starts writes only after the subscriber warm-up interval so a zero-event result cannot be mistaken for capacity.
 
+To validate the connection ceiling independently, set `WRITE_RATE=0`, `READ_RATE=0`, and `REALTIME_SUBSCRIBERS=500`. Use `REALTIME_RAMP_UP` (for example, `15s`) to avoid turning the connection test into an unrealistic single-millisecond TLS and channel-join spike. The HTTP scenarios and delivery thresholds are omitted, while the run still fails unless every requested private Realtime subscription joins successfully. Connection and throughput ceilings must be tested separately because one broadcast to 500 listening clients counts as approximately 501 Realtime messages.
+
 ## 100 million messages/day qualification
 
 One hundred million persisted messages/day averages about 1,158 writes/second. Qualify at no less than ten times that average (about 12,000 writes/second) for the expected peak window, with realistic concurrent history reads and Realtime subscribers. Increase in stages (10, 100, 1,000, 5,000, then 12,000 writes/second), stop on the first failed threshold, and retain the Supabase database, Realtime, connection-pool, WAL, storage, CPU and egress metrics for each run.
