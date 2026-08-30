@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Send, Smile, Search, ImageIcon, X, BarChart3, Plus, Trash2, Reply,
-  ChevronDown, Menu, Hash, Bookmark, Pin,
+  Menu, Hash, Bookmark, Pin,
   MoreHorizontal, Check, Users, Megaphone, Copy,
   Clock, Pencil, AtSign, ArrowDown, ArrowLeft,
   Mic, Paperclip, MessageSquare, Bold, Italic, Code, Timer, Settings2, Eye,
@@ -27,6 +27,7 @@ import VoiceRecorder, { VoicePlayback } from "@/components/forum/VoiceRecorder";
 import ImageLightbox from "@/components/forum/ImageLightbox";
 import FileAttachment from "@/components/forum/FileAttachment";
 import ThreadPanel from "@/components/forum/ThreadPanel";
+import ScopeNavigationItem from "@/components/forum/ScopeNavigationItem";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import {
   getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead,
@@ -334,7 +335,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = MAX_ROOM_HISTORY;
-const FORUM_BUILD = "2026.08.15.1";
+const FORUM_BUILD = "2026.08.30.2";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -363,7 +364,6 @@ const Forum = () => {
   const [showSearch, setShowSearch] = useState(false);
   const [searchTab, setSearchTab] = useState<"messages" | "media" | "pins" | "links">("messages");
   const [activeTab, setActiveTab] = useState<"feed" | "pinned">("feed");
-  const [scopeToggles, setScopeToggles] = useState<Record<string, number>>({});
   const [highlightedPostId, setHighlightedPostId] = useState<string | null>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
   const [showMentionSuggestions, setShowMentionSuggestions] = useState(false);
@@ -551,16 +551,15 @@ const Forum = () => {
   const activeScopeDef = useMemo(() => {
     for (const s of scopes) {
       if (s.hasToggle && s.toggleOptions) {
-        const toggleIdx = scopeToggles[s.id] ?? 0;
-        const opt = s.toggleOptions[toggleIdx];
-        if (opt.type === activeScope.type && opt.key === activeScope.key) {
+        const opt = s.toggleOptions.find((option) => option.type === activeScope.type && option.key === activeScope.key);
+        if (opt) {
           return { ...s, label: opt.scopeLabel || s.label, subtitle: opt.subtitle || s.subtitle };
         }
       }
       if (s.type === activeScope.type && s.key === activeScope.key) return s;
     }
     return scopes[0] || { label: "Multiverse", subtitle: "Global", emoji: "🌐" };
-  }, [scopes, activeScope, scopeToggles]);
+  }, [scopes, activeScope]);
 
   useEffect(() => {
     if (!scopes.length || !user?.id) return;
@@ -1756,10 +1755,10 @@ const Forum = () => {
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-hide">
           <ScopeList
-            scopes={scopes} activeScope={activeScope} scopeToggles={scopeToggles}
+            scopes={scopes} activeScope={activeScope}
             unreadDots={unreadDots}
             onSelect={selectScope}
-            onToggle={(scopeId, idx) => { setScopeToggles(prev => ({ ...prev, [scopeId]: idx })); const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key); }}
+            onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key); }}
           />
         </div>
         <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
@@ -1776,10 +1775,10 @@ const Forum = () => {
           </SheetTitle>
           <div className="flex-1 overflow-y-auto scrollbar-hide">
             <ScopeList
-              scopes={scopes} activeScope={activeScope} scopeToggles={scopeToggles}
+              scopes={scopes} activeScope={activeScope}
               unreadDots={unreadDots}
               onSelect={selectScope}
-              onToggle={(scopeId, idx) => { setScopeToggles(prev => ({ ...prev, [scopeId]: idx })); const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key); }}
+              onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key); }}
             />
           </div>
           <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
@@ -2323,9 +2322,9 @@ const Forum = () => {
 /* ══════════════════════════════════════════════════ */
 /*              SCOPE LIST SIDEBAR                   */
 /* ══════════════════════════════════════════════════ */
-const ScopeList = ({ scopes, activeScope, scopeToggles, unreadDots, onSelect, onToggle }: {
+const ScopeList = ({ scopes, activeScope, unreadDots, onSelect, onToggle }: {
   scopes: ScopeDef[]; activeScope: { type: string; key: string };
-  scopeToggles: Record<string, number>; unreadDots: Record<string, boolean>;
+  unreadDots: Record<string, boolean>;
   onSelect: (type: string, key: string) => void;
   onToggle: (scopeId: string, idx: number) => void;
 }) => {
@@ -2336,56 +2335,14 @@ const ScopeList = ({ scopes, activeScope, scopeToggles, unreadDots, onSelect, on
       {recommended.length > 0 && (
         <>
           <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-4 pt-2 pb-2">For You</p>
-          {recommended.map(s => <ScopeItem key={s.id} scope={s} activeScope={activeScope} scopeToggles={scopeToggles} unreadDots={unreadDots} onSelect={onSelect} onToggle={onToggle} />)}
+          {recommended.map(s => <ScopeNavigationItem key={s.id} scope={s} activeScope={activeScope} unreadDots={unreadDots} onSelect={onSelect} onToggle={onToggle} />)}
         </>
       )}
       {all.length > 0 && (
         <>
           <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-4 pt-5 pb-2">All Channels</p>
-          {all.map(s => <ScopeItem key={s.id} scope={s} activeScope={activeScope} scopeToggles={scopeToggles} unreadDots={unreadDots} onSelect={onSelect} onToggle={onToggle} />)}
+          {all.map(s => <ScopeNavigationItem key={s.id} scope={s} activeScope={activeScope} unreadDots={unreadDots} onSelect={onSelect} onToggle={onToggle} />)}
         </>
-      )}
-    </div>
-  );
-};
-
-const ScopeItem = ({ scope, activeScope, scopeToggles, unreadDots, onSelect, onToggle }: {
-  scope: ScopeDef; activeScope: { type: string; key: string }; scopeToggles: Record<string, number>;
-  unreadDots: Record<string, boolean>;
-  onSelect: (type: string, key: string) => void; onToggle: (scopeId: string, idx: number) => void;
-}) => {
-  const toggleIdx = scopeToggles[scope.id] ?? 0;
-  const activeOpt = scope.hasToggle && scope.toggleOptions ? scope.toggleOptions[toggleIdx] : undefined;
-  const effectiveType = activeOpt ? activeOpt.type : scope.type;
-  const effectiveKey = activeOpt ? activeOpt.key : scope.key;
-  const isActive = activeScope.type === effectiveType && activeScope.key === effectiveKey;
-  const hasUnread = unreadDots[`${effectiveType}_${effectiveKey}`];
-
-  return (
-    <div className={`mx-2 rounded-md transition-all ${isActive ? "bg-primary/8 border-l-[3px] border-primary" : ""}`}>
-      <button onClick={() => onSelect(effectiveType, effectiveKey)}
-        className={`w-full flex items-start gap-2.5 px-3 py-2.5 text-[14px] transition-all rounded-md ${isActive ? "text-primary font-semibold" : "text-foreground hover:bg-accent/60"}`}>
-        <Hash className={`w-4 h-4 flex-shrink-0 mt-0.5 ${isActive ? "text-primary" : "text-muted-foreground"}`} />
-        <div className="flex-1 min-w-0 text-left">
-          <span className="block truncate flex items-center gap-1.5">
-            {(isActive && activeOpt?.scopeLabel) || scope.label}
-            {/* Unread dot (FIX 10) */}
-            {hasUnread && !isActive && (
-              <span className="w-2 h-2 rounded-full bg-primary flex-shrink-0 inline-block" />
-            )}
-          </span>
-          {((isActive && activeOpt?.subtitle) || scope.subtitle) && <span className="block text-[11px] text-muted-foreground font-normal truncate mt-0.5">{(isActive && activeOpt?.subtitle) || scope.subtitle}</span>}
-        </div>
-      </button>
-      {scope.hasToggle && scope.toggleOptions && isActive && (
-        <div className="flex items-center gap-1.5 px-4 pl-9 pb-2 pt-0">
-          {scope.toggleOptions.map((opt, i) => (
-            <button key={opt.id} onClick={(e) => { e.stopPropagation(); onToggle(scope.id, i); }}
-              className={`text-[11px] font-semibold px-3 py-1 rounded-full transition-colors ${toggleIdx === i ? "bg-primary text-primary-foreground" : "bg-accent text-muted-foreground hover:text-foreground"}`}>
-              {opt.label}
-            </button>
-          ))}
-        </div>
       )}
     </div>
   );
