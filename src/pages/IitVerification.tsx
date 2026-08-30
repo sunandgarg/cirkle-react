@@ -21,7 +21,6 @@ const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) 
   const [source, setSource] = useState(customUrl || officialUrl);
   const [failed, setFailed] = useState(false);
   const [wide, setWide] = useState(false);
-  const usesWhiteOfficialMark = source === officialUrl && iit.studentDomain === "iitd.ac.in";
   const initials = iit.name
     .replace("IIT ", "")
     .replace(" (ISM)", "")
@@ -38,7 +37,7 @@ const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) 
   }, [customUrl, officialUrl]);
 
   return (
-    <div className={`relative w-11 h-11 rounded-xl border border-border/70 shadow-sm flex items-center justify-center overflow-hidden shrink-0 ${usesWhiteOfficialMark ? "bg-[#5b1734]" : "bg-white"}`}>
+    <div className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border/70 bg-white shadow-sm">
       {failed ? (
         <span className="text-sm font-black tracking-tight text-primary">{initials}</span>
       ) : (

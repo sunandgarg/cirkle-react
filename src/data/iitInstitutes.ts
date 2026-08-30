@@ -63,4 +63,12 @@ const IIT_LOGOS: Record<string, string> = {
   "iitism.ac.in": "/iit-logos/iit-dhanbad.webp",
 };
 
-export const defaultIitLogo = (domain: string) => IIT_LOGOS[domain] || "/cirkle-logo.png";
+// Version local logo URLs when bundled artwork changes. The image service
+// worker is intentionally cache-first, so a versioned request prevents a
+// returning member from seeing an older institute mark on the first load.
+const IIT_LOGO_ASSET_VERSION = "20260830-2";
+
+export const defaultIitLogo = (domain: string) => {
+  const logo = IIT_LOGOS[domain];
+  return logo ? `${logo}?v=${IIT_LOGO_ASSET_VERSION}` : "/cirkle-logo.png";
+};
