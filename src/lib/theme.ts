@@ -18,8 +18,12 @@ const resolveTheme = (theme: ThemePreference): "light" | "dark" => {
 
 const renderTheme = (theme: ThemePreference) => {
   const resolvedTheme = resolveTheme(theme);
+  const themeColor = resolvedTheme === "dark" ? "#0d0e10" : "#f5f7f9";
   document.documentElement.classList.toggle("dark", resolvedTheme === "dark");
   document.documentElement.style.colorScheme = resolvedTheme;
+  document.documentElement.style.backgroundColor = themeColor;
+  document.body.style.backgroundColor = themeColor;
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", themeColor);
 };
 
 export const applyThemePreference = (theme: ThemePreference) => {

@@ -96,21 +96,32 @@ const Auth = () => {
 
   const handleGoogleLogin = async () => {
     setLoading(true);
+    let timeoutId: number | undefined;
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: `${window.location.origin}/iit-verify`,
-          queryParams: {
-            access_type: "offline",
-            prompt: "select_account",
+      const { error } = await Promise.race([
+        supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo: `${window.location.origin}/iit-verify`,
+            queryParams: {
+              access_type: "offline",
+              prompt: "select_account",
+            },
           },
-        },
-      });
+        }),
+        new Promise<never>((_, reject) => {
+          timeoutId = window.setTimeout(
+            () => reject(new Error("Google sign-in could not start. Please try again or use email verification.")),
+            12_000,
+          );
+        }),
+      ]);
       if (error) throw error;
     } catch (error: any) {
-      setLoading(false);
       toast.error(error.message || "Google login is not available yet. Please try email verification.");
+    } finally {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      setLoading(false);
     }
   };
 
