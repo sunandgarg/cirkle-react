@@ -31,6 +31,9 @@ verify_jwt = true
 [functions.verify-iit-email]
 verify_jwt = true
 
+[functions.notify-verification-decision]
+verify_jwt = true
+
 [functions.seed-data]
 verify_jwt = true
 

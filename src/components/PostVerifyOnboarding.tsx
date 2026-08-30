@@ -1,32 +1,34 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
-import { CheckCircle2, ArrowRight, ArrowLeft, User, GraduationCap, Briefcase, Sparkles, Clock3, RefreshCw, LogOut } from "lucide-react";
+import { CheckCircle2, ArrowRight, ArrowLeft, GraduationCap, Briefcase, Sparkles, Clock3, RefreshCw, LogOut } from "lucide-react";
 import SearchableSelect from "@/components/SearchableSelect";
 import { locations } from "@/data/locationsList";
 import { companies } from "@/data/companiesList";
 import { ALL_COURSES, getSpecialisations } from "@/data/courseSpecialisations";
 import { clearMobileTestCourseRequest, clearMobileTestSession, readMobileTestSession, saveMobileTestCourseRequest, updateMobileTestSession, withdrawMobileTestCourseRequest } from "@/lib/mobileVerification";
 import { useQuery } from "@tanstack/react-query";
-import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
+import { clearOnboardingProgress, loadOnboardingProgress, saveOnboardingProgress } from "@/lib/onboardingProgress";
 
 const YEARS = Array.from({ length: 56 }, (_, i) => String(2035 - i));
 
-type Step = "name" | "degree" | "specialisation" | "year" | "optional" | "course_pending" | "done";
-const STEP_ORDER: Step[] = ["name", "degree", "specialisation", "year", "optional"];
+type Step = "degree" | "specialisation" | "year" | "optional" | "course_pending" | "done";
+const STEP_ORDER: Step[] = ["degree", "specialisation", "year", "optional"];
 
 interface PostVerifyOnboardingProps {
   derivedIit?: string;
   onComplete: () => void;
+  onBack?: () => void;
   academicRecovery?: boolean;
 }
 
-const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false }: PostVerifyOnboardingProps) => {
+const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery = false }: PostVerifyOnboardingProps) => {
   const { user, profile, refetchProfile } = useAuth();
-  const [step, setStep] = useState<Step>(() => academicRecovery ? "degree" : "name");
+  const restoredProgressRef = useRef(false);
+  const [step, setStep] = useState<Step>("degree");
   const [loading, setLoading] = useState(false);
 
   const [name, setName] = useState(profile?.name || "");
@@ -36,13 +38,21 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
   const [specialisation, setSpecialisation] = useState("");
   const [year, setYear] = useState("");
   const [location, setLocation] = useState(profile?.location || "");
-  const [country, setCountry] = useState<CountryOption>(COUNTRY_CODES[0]);
-  const [phone, setPhone] = useState((profile as any)?.phone_number || "");
   const [linkedin, setLinkedin] = useState("");
   const [company, setCompany] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [termsText, setTermsText] = useState("I agree to the Cirkle Terms of Service and Privacy Policy.");
   const mobileTestSession = readMobileTestSession();
+  const phone = (profile as any)?.phone_number || "";
+  const phoneCountryCode = (profile as any)?.phone_country_code || "+91";
+
+  const { data: savedProgress, isFetched: progressFetched } = useQuery({
+    queryKey: ["onboarding-progress", user?.id],
+    queryFn: () => loadOnboardingProgress(user!.id),
+    enabled: !!user && !mobileTestSession,
+    staleTime: 0,
+    retry: 1,
+  });
 
   const { data: courseRequest, refetch: refetchCourseRequest, isFetching: checkingCourse } = useQuery({
     queryKey: ["my-course-verification", user?.id],
@@ -74,10 +84,40 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
   const specialisations = useMemo(() => getSpecialisations(degree), [degree]);
 
   useEffect(() => {
-    if (profile?.name && step === "name") {
-      setName(profile.name);
-    }
-  }, [profile, step]);
+    if (!user || mobileTestSession || !progressFetched || restoredProgressRef.current) return;
+    restoredProgressRef.current = true;
+    const saved = savedProgress?.progress_data;
+    if (!saved) return;
+    if (saved.name) setName(saved.name);
+    if (saved.degree) setDegree(saved.degree);
+    if (saved.otherCourse) setOtherCourse(saved.otherCourse);
+    if (saved.specialisation) setSpecialisation(saved.specialisation);
+    if (saved.year) setYear(saved.year);
+    if (saved.location) setLocation(saved.location);
+    if (saved.linkedin) setLinkedin(saved.linkedin);
+    if (saved.company) setCompany(saved.company);
+    if (saved.acceptedTerms) setAcceptedTerms(true);
+    const savedStep = savedProgress?.flow_step?.replace(/^profile:/, "") as Step | undefined;
+    if (savedStep && STEP_ORDER.includes(savedStep)) setStep(savedStep);
+  }, [mobileTestSession, progressFetched, savedProgress, user]);
+
+  useEffect(() => {
+    if (!user || mobileTestSession || !restoredProgressRef.current || step === "done") return;
+    const timeout = window.setTimeout(() => {
+      void saveOnboardingProgress(user.id, `profile:${step}`, {
+        name: name.trim(),
+        degree,
+        otherCourse: otherCourse.trim(),
+        specialisation,
+        year,
+        location,
+        linkedin: linkedin.trim(),
+        company,
+        acceptedTerms,
+      }).catch((error) => console.warn("Could not save profile checkpoint", error));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [acceptedTerms, company, degree, linkedin, location, mobileTestSession, name, otherCourse, specialisation, step, user, year]);
 
   useEffect(() => {
     if (mobileTestSession?.courseApprovalStatus === "pending" && mobileTestSession.customCourseName) {
@@ -98,18 +138,12 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
     }
   }, [courseRequest, mobileTestSession?.courseApprovalStatus, mobileTestSession?.customCourseName]);
 
-  // Reset specialisation when degree changes
-  useEffect(() => {
-    setSpecialisation("");
-  }, [degree]);
-
   const canProceed = () => {
     switch (step) {
-      case "name": return name.trim().length >= 2;
       case "degree": return !!degree && (degree !== "Other" || otherCourse.trim().length >= 2);
       case "specialisation": return !!specialisation;
       case "year": return !!year;
-      case "optional": return acceptedTerms && (!phone || phone.length === 10);
+      case "optional": return acceptedTerms;
       default: return true;
     }
   };
@@ -201,6 +235,12 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
         window.location.replace("/auth");
         return;
       }
+      if (user) {
+        await saveOnboardingProgress(user.id, `profile:${step}`, {
+          name: name.trim(), degree, otherCourse: otherCourse.trim(), specialisation, year,
+          location, linkedin: linkedin.trim(), company, acceptedTerms,
+        });
+      }
       const { error } = await supabase.auth.signOut({ scope: "local" });
       if (error) throw error;
       window.location.replace("/auth");
@@ -212,6 +252,8 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
 
   const handleBack = () => {
     if (stepIdx > 0) setStep(activeStepOrder[stepIdx - 1]);
+    else if (onBack) onBack();
+    else window.history.back();
   };
 
   const handleComplete = async () => {
@@ -245,11 +287,12 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
         p_location: location || null,
         p_linkedin: linkedin.trim() || null,
         p_company: company.trim() || null,
-        p_phone_country_code: phone ? country.code : null,
+        p_phone_country_code: phone ? phoneCountryCode : null,
         p_phone: phone || null,
       });
       if (onboardingError) throw onboardingError;
 
+      await clearOnboardingProgress(user.id);
       await refetchProfile();
       toast.success("Profile complete! Welcome to Cirkle 🎉");
       onComplete();
@@ -264,6 +307,15 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
     const rejected = courseRequest?.status === "rejected";
     return (
       <div className="onboarding-shell fixed inset-0 z-50">
+        <header className="onboarding-topbar">
+          <button aria-label="Go back" onClick={() => void handleChooseAnotherCourse()} disabled={loading} className="flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50">
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <div className="min-w-0 flex-1 text-center text-xs font-bold text-foreground">Course verification</div>
+          <button aria-label="Log out" title="Log out" onClick={() => void handleReturnToLogin()} disabled={loading} className="flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50">
+            <LogOut className="h-5 w-5" />
+          </button>
+        </header>
         <div className="onboarding-scroll flex items-center">
         <div className="onboarding-stage my-auto text-center animate-fade-in">
           <div className={`w-20 h-20 rounded-3xl flex items-center justify-center mx-auto mb-6 ${rejected ? "bg-destructive/10" : "bg-primary/10"}`}>
@@ -328,12 +380,9 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
     <div className="onboarding-shell fixed inset-0 z-50">
       {/* Progress */}
       <header className="onboarding-topbar">
-        {stepIdx > 0 && (
-          <button aria-label="Go back" onClick={handleBack} className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-        )}
-        {stepIdx === 0 && <div className="h-11 w-11 flex-shrink-0" aria-hidden="true" />}
+        <button aria-label="Go back" onClick={handleBack} className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
+          <ArrowLeft className="w-5 h-5" />
+        </button>
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <span className="truncate text-xs font-bold text-foreground">Build your Cirkle profile</span>
@@ -345,6 +394,9 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
           ))}
           </div>
         </div>
+        <button aria-label="Log out" title="Log out" onClick={() => void handleReturnToLogin()} disabled={loading} className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50">
+          <LogOut className="h-5 w-5" />
+        </button>
       </header>
 
       <div className="onboarding-scroll">
@@ -355,17 +407,6 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
               <CheckCircle2 className="w-4 h-4 text-primary" />
               <span className="text-sm font-medium text-primary">{iit}</span>
               <span className="text-xs text-muted-foreground">(verified)</span>
-            </div>
-          )}
-
-          {step === "name" && (
-            <div className="animate-fade-in">
-              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
-                <User className="w-6 h-6 text-primary" />
-              </div>
-              <h2 className="text-2xl font-black tracking-tight text-foreground mb-1">What should people call you?</h2>
-              <p className="text-sm leading-6 text-muted-foreground mb-6">Use the name classmates and alumni will recognize.</p>
-              <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g., Rahul Sharma" className="h-12 rounded-xl bg-secondary border-border text-[16px]" autoComplete="name" />
             </div>
           )}
 
@@ -383,7 +424,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
               <p className="text-sm text-muted-foreground mb-6">{academicRecovery ? "We’ll use this only to place you in the right course, batch, and cohort conversations." : "Choose your primary course of study."}</p>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {ALL_COURSES.map(d => (
-                  <button key={d} onClick={() => setDegree(d)}
+                  <button key={d} onClick={() => { if (degree !== d) setSpecialisation(""); setDegree(d); }}
                     className={`onboarding-option min-h-[52px] text-center text-sm ${
                       degree === d ? "onboarding-option-selected" : ""
                     }`}>
@@ -457,22 +498,6 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, academicRecovery = false
                     allowOther={true}
                     className="rounded-xl"
                   />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-foreground mb-1.5 block">Phone number <span className="font-normal text-muted-foreground">(optional)</span></label>
-                  <div className="flex items-center gap-2">
-                    <CountryCodeSelect value={country} onChange={setCountry} className="h-12 w-[96px] justify-center rounded-xl bg-secondary" />
-                    <Input
-                      value={phone}
-                      onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 10))}
-                      placeholder="10-digit number"
-                      className="h-12 min-w-0 flex-1 rounded-xl bg-secondary border-border text-[16px]"
-                      inputMode="numeric"
-                      autoComplete="tel-national"
-                      maxLength={10}
-                    />
-                  </div>
-                  {!!phone && phone.length !== 10 && <p className="mt-1.5 text-xs text-destructive">Enter a valid 10-digit phone number.</p>}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1.5 block">LinkedIn URL</label>

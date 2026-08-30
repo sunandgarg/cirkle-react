@@ -37,5 +37,30 @@ export const isMatchingIitEmail = (email: string, iit: IitInstitute, status: Iit
 
 export const iitLogoSettingKey = (domain: string) => `iit_logo_${domain.replace(/[^a-z0-9]/gi, "_")}`;
 
-export const defaultIitLogo = (domain: string) =>
-  `https://www.google.com/s2/favicons?domain=${domain}&sz=128`;
+const IIT_LOGOS: Record<string, string> = {
+  "iitb.ac.in": "/iit-logos/iit-bombay.webp",
+  "iitd.ac.in": "/iit-logos/iit-delhi.webp",
+  "iitm.ac.in": "/iit-logos/iit-madras.webp",
+  "iitk.ac.in": "/iit-logos/iit-kanpur.webp",
+  "iitkgp.ac.in": "/iit-logos/iit-kharagpur.webp",
+  "iitr.ac.in": "/iit-logos/iit-roorkee.webp",
+  "iitg.ac.in": "/iit-logos/iit-guwahati.webp",
+  "iith.ac.in": "/iit-logos/iit-hyderabad.webp",
+  "iitbhu.ac.in": "/iit-logos/iit-bhu.webp",
+  "iiti.ac.in": "/iit-logos/iit-indore.webp",
+  "iitrpr.ac.in": "/iit-logos/iit-ropar.webp",
+  "iitp.ac.in": "/iit-logos/iit-patna.webp",
+  "iitbbs.ac.in": "/iit-logos/iit-bhubaneswar.webp",
+  "iitgn.ac.in": "/iit-logos/iit-gandhinagar.webp",
+  "iitj.ac.in": "/iit-logos/iit-jodhpur.webp",
+  "iitmandi.ac.in": "/iit-logos/iit-mandi.webp",
+  "iittp.ac.in": "/iit-logos/iit-tirupati.webp",
+  "iitpkd.ac.in": "/iit-logos/iit-palakkad.webp",
+  "iitdh.ac.in": "/iit-logos/iit-dharwad.webp",
+  "iitbhilai.ac.in": "/iit-logos/iit-bhilai.webp",
+  "iitgoa.ac.in": "/iit-logos/iit-goa.webp",
+  "iitjammu.ac.in": "/iit-logos/iit-jammu.webp",
+  "iitism.ac.in": "/iit-logos/iit-dhanbad.webp",
+};
+
+export const defaultIitLogo = (domain: string) => IIT_LOGOS[domain] || "/cirkle-logo.png";

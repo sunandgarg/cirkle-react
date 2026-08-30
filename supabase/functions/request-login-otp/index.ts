@@ -48,7 +48,7 @@ const sendWithSes = async (params: { to: string; code: string }) => {
   const region = Deno.env.get("AWS_REGION") || Deno.env.get("AWS_SES_REGION") || "ap-south-1";
   const accessKey = Deno.env.get("AWS_ACCESS_KEY_ID");
   const secretKey = Deno.env.get("AWS_SECRET_ACCESS_KEY");
-  const from = SES_FROM_EMAIL;
+  const from = Deno.env.get("VERIFICATION_EMAIL_FROM") || SES_FROM_EMAIL;
 
   if (!accessKey || !secretKey) {
     throw new Error("AWS SES login OTP service is not configured");

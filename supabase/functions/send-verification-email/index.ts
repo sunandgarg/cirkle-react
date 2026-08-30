@@ -146,7 +146,7 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     const pepper = Deno.env.get("VERIFICATION_CODE_PEPPER");
-    const emailFrom = SES_FROM_EMAIL;
+    const emailFrom = Deno.env.get("VERIFICATION_EMAIL_FROM") || SES_FROM_EMAIL;
     if (!supabaseUrl || !serviceKey || !pepper) {
       return json({ error: "Email verification service is not configured" }, 503);
     }

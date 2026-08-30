@@ -88,8 +88,12 @@ Deno.serve(async (req) => {
       return json({ error: "Invalid or expired code. Please try again." }, 400);
     }
 
-    const phone = authData.user.phone || String(authData.user.user_metadata?.phone_full || authData.user.user_metadata?.phone || "");
-    const displayName = String(authData.user.user_metadata?.name || authData.user.email || "Cirkle Member");
+    const { data: memberProfile } = await admin.from("profiles")
+      .select("name,phone_full")
+      .eq("user_id", authData.user.id)
+      .maybeSingle();
+    const phone = String(memberProfile?.phone_full || authData.user.phone || authData.user.user_metadata?.phone_full || authData.user.user_metadata?.phone || "");
+    const displayName = String(memberProfile?.name || authData.user.user_metadata?.name || authData.user.email || "Cirkle Member");
     const { error: completionError } = await admin.rpc("complete_iit_email_verification", {
       p_code_id: codeRow.id,
       p_user_id: authData.user.id,

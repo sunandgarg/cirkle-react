@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -7,15 +7,18 @@ import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search, FileUp, Clock3, LockKeyhole, RefreshCw, User } from "lucide-react";
+import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search, FileUp, Clock3, LockKeyhole, RefreshCw, User, LogOut } from "lucide-react";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, expectedIitEmailDomain, IIT_LIST, iitLogoSettingKey, isMatchingIitEmail, type IitInstitute, type IitMemberStatus } from "@/data/iitInstitutes";
 import { readResumeRoute } from "@/lib/sessionResume";
 import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
+import { loadOnboardingProgress, saveOnboardingProgress } from "@/lib/onboardingProgress";
+import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
 
 const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
   const [failed, setFailed] = useState(false);
+  const [wide, setWide] = useState(false);
   const initials = iit.name
     .replace("IIT ", "")
     .replace(" (ISM)", "")
@@ -26,7 +29,7 @@ const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) 
     .toUpperCase();
 
   return (
-    <div className="w-11 h-11 rounded-xl bg-white border border-border/70 shadow-sm flex items-center justify-center overflow-hidden shrink-0">
+    <div className="relative w-11 h-11 rounded-xl bg-white border border-border/70 shadow-sm flex items-center justify-center overflow-hidden shrink-0">
       {failed ? (
         <span className="text-sm font-black tracking-tight text-primary">{initials}</span>
       ) : (
@@ -37,7 +40,13 @@ const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) 
           decoding="async"
           referrerPolicy="no-referrer"
           onError={() => setFailed(true)}
-          className="w-8 h-8 object-contain"
+          onLoad={(event) => {
+            const image = event.currentTarget;
+            setWide(image.naturalWidth / Math.max(image.naturalHeight, 1) > 1.65);
+          }}
+          className={wide
+            ? `absolute h-9 w-auto max-w-none ${iit.studentDomain === "iitism.ac.in" ? "left-1/2 -translate-x-1/2" : "left-1.5"}`
+            : "w-9 h-9 object-contain"}
         />
       )}
     </div>
@@ -56,7 +65,8 @@ type Step = "account_details" | "select_iit" | "select_status" | "verify_email" 
 
 const IitVerification = () => {
   const navigate = useNavigate();
-  const { user, profile, refetchProfile } = useAuth();
+  const { user, profile, refetchProfile, loading: authLoading } = useAuth();
+  const restoredProgressRef = useRef(false);
   const [step, setStep] = useState<Step>("account_details");
   const [selectedIit, setSelectedIit] = useState<IitInstitute | null>(null);
   const [studentStatus, setStudentStatus] = useState<string>("");
@@ -66,7 +76,6 @@ const IitVerification = () => {
   const [accountName, setAccountName] = useState(() => profile?.name || (user?.user_metadata as any)?.full_name || (user?.user_metadata as any)?.name || "");
   const [country, setCountry] = useState<CountryOption>(COUNTRY_CODES[0]);
   const [phone, setPhone] = useState((profile as any)?.phone_number || "");
-  const [editingAccountDetails, setEditingAccountDetails] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [existingRecordMessage, setExistingRecordMessage] = useState("");
   const [documentType, setDocumentType] = useState("student_id");
@@ -83,7 +92,15 @@ const IitVerification = () => {
     gcTime: 24 * 60 * 60 * 1000,
   });
 
-  const { data: latestDocumentSubmission, refetch: refetchDocumentSubmission, isFetching: checkingDocumentStatus } = useQuery({
+  const { data: savedProgress, isFetched: progressFetched } = useQuery({
+    queryKey: ["onboarding-progress", user?.id],
+    queryFn: () => loadOnboardingProgress(user!.id),
+    enabled: !!user,
+    staleTime: 0,
+    retry: 1,
+  });
+
+  const { data: latestDocumentSubmission, refetch: refetchDocumentSubmission, isFetching: checkingDocumentStatus, isFetched: documentStatusFetched } = useQuery({
     queryKey: ["my-document-verification", user?.id],
     queryFn: async () => {
       const { data, error } = await (supabase as any)
@@ -102,6 +119,23 @@ const IitVerification = () => {
   });
 
   useEffect(() => {
+    if (authLoading || !user || !progressFetched || !documentStatusFetched || restoredProgressRef.current) return;
+    restoredProgressRef.current = true;
+
+    const saved = savedProgress?.progress_data;
+    if (saved?.selectedIit) {
+      const restoredIit = IIT_LIST.find((iit) => iit.name === saved.selectedIit);
+      if (restoredIit) setSelectedIit(restoredIit);
+    }
+    if (saved?.studentStatus === "current_student" || saved?.studentStatus === "alumni") setStudentStatus(saved.studentStatus);
+    if (saved?.iitEmail) setEmail(saved.iitEmail);
+    if (saved?.accountName) setAccountName(saved.accountName);
+    if (saved?.phone) setPhone(saved.phone);
+    if (saved?.phoneCountryCode) {
+      const savedCountry = COUNTRY_CODES.find((item) => item.code === saved.phoneCountryCode);
+      if (savedCountry) setCountry(savedCountry);
+    }
+
     if (profile?.is_verified && profile?.onboarding_completed && user?.id) {
       navigate(readResumeRoute(user.id), { replace: true });
       return;
@@ -115,14 +149,53 @@ const IitVerification = () => {
       setStep("documents_pending");
       return;
     }
+    if (latestDocumentSubmission?.status === "rejected") {
+      setStep("upload_documents");
+      return;
+    }
+    const accountComplete = !!profile?.name && !!(profile as any)?.phone_number;
+    if (!accountComplete) {
+      setStep("account_details");
+      return;
+    }
     if (profile?.is_verified && !profile.onboarding_completed) {
       setStep("onboarding");
       return;
     }
-    if (!editingAccountDetails && !profile?.is_verified && profile?.name && step === "account_details") {
-      setStep("select_iit");
+
+    const savedStep = savedProgress?.flow_step?.replace(/^verification:/, "") as Step | undefined;
+    const validSteps: Step[] = ["select_iit", "select_status", "verify_email", "verify_otp", "upload_documents", "documents_pending"];
+    const restoredIitName = saved?.selectedIit || latestDocumentSubmission?.iit_name;
+    const restoredStatus = saved?.studentStatus || latestDocumentSubmission?.student_status;
+    if (savedStep && validSteps.includes(savedStep)) {
+      if ((savedStep === "select_status" || savedStep === "verify_email" || savedStep === "verify_otp" || savedStep === "upload_documents") && !restoredIitName) {
+        setStep("select_iit");
+      } else if ((savedStep === "verify_email" || savedStep === "verify_otp" || savedStep === "upload_documents") && !restoredStatus) {
+        setStep("select_status");
+      } else if (savedStep === "documents_pending") {
+        setStep("verify_email");
+      } else {
+        setStep(savedStep);
+      }
+      return;
     }
-  }, [editingAccountDetails, latestDocumentSubmission, navigate, profile?.is_verified, profile?.name, profile?.onboarding_completed, step, user?.id]);
+    setStep("select_iit");
+  }, [authLoading, documentStatusFetched, latestDocumentSubmission, navigate, profile, progressFetched, savedProgress, user]);
+
+  useEffect(() => {
+    if (!user || !restoredProgressRef.current || step === "onboarding" || profile?.onboarding_completed) return;
+    const timeout = window.setTimeout(() => {
+      void saveOnboardingProgress(user.id, `verification:${step}`, {
+        selectedIit: selectedIit?.name,
+        studentStatus: studentStatus as "current_student" | "alumni" | "",
+        iitEmail: email.trim().toLowerCase(),
+        accountName: accountName.trim(),
+        phoneCountryCode: country.code,
+        phone,
+      }).catch((error) => console.warn("Could not save onboarding checkpoint", error));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [accountName, country.code, email, phone, profile?.onboarding_completed, selectedIit?.name, step, studentStatus, user]);
 
   useEffect(() => {
     if (profile?.name) {
@@ -153,21 +226,20 @@ const IitVerification = () => {
       toast.error("Enter your name");
       return;
     }
-    if (cleanPhone && cleanPhone.length !== 10) {
-      toast.error("Enter a valid 10-digit phone number");
+    if (cleanPhone.length !== 10) {
+      toast.error("A valid 10-digit phone number is required");
       return;
     }
     setLoading(true);
     try {
       const { error } = await (supabase as any).rpc("save_account_details", {
         p_name: accountName.trim(),
-        p_phone_country_code: cleanPhone ? country.code : null,
-        p_phone: cleanPhone || null,
+        p_phone_country_code: country.code,
+        p_phone: cleanPhone,
       });
       if (error) throw error;
       await refetchProfile();
-      setEditingAccountDetails(false);
-      setStep("select_iit");
+      setStep(profile?.is_verified ? "onboarding" : "select_iit");
     } catch (error: any) {
       toast.error(error.message || "Could not save your details");
     } finally {
@@ -209,7 +281,8 @@ const IitVerification = () => {
       
       // Handle errors from edge function (409 etc.)
       if (res.error) {
-        const errMsg = data?.error || "Failed to send code";
+        const parsed = await readEdgeFunctionError(res.error, data, "Could not send the verification code. Please try again.");
+        const errMsg = parsed.message;
         // If user already verified with same email, just go to onboarding
         if (data?.already_verified) {
           await refetchProfile();
@@ -218,7 +291,7 @@ const IitVerification = () => {
           setLoading(false);
           return;
         }
-        if (data?.code === "EMAIL_ALREADY_LINKED" || data?.code === "USER_ALREADY_VERIFIED") {
+        if (parsed.code === "EMAIL_ALREADY_LINKED" || parsed.code === "USER_ALREADY_VERIFIED") {
           setExistingRecordMessage(errMsg);
           setLoading(false);
           return;
@@ -272,7 +345,11 @@ const IitVerification = () => {
           code: otp,
         },
       });
-      if (error || data?.error) throw new Error(data?.error || error?.message || "Verification failed");
+      if (error) {
+        const parsed = await readEdgeFunctionError(error, data, "Could not verify this code. Request a new code and try again.");
+        throw new Error(parsed.message);
+      }
+      if (data?.error) throw new Error(data.error);
       await completeEmailVerification();
     } catch (err: any) {
       toast.error(err.message || "Verification failed");
@@ -353,6 +430,16 @@ const IitVerification = () => {
     if (loading) return;
     setLoading(true);
     try {
+      if (user) {
+        await saveOnboardingProgress(user.id, `verification:${step}`, {
+          selectedIit: selectedIit?.name,
+          studentStatus: studentStatus as "current_student" | "alumni" | "",
+          iitEmail: email.trim().toLowerCase(),
+          accountName: accountName.trim(),
+          phoneCountryCode: country.code,
+          phone,
+        });
+      }
       const { error } = await supabase.auth.signOut({ scope: "local" });
       if (error) throw error;
       navigate("/auth", { replace: true });
@@ -390,6 +477,7 @@ const IitVerification = () => {
     return (
       <PostVerifyOnboarding
         derivedIit={selectedIit?.name || profile?.iit_name || latestDocumentSubmission?.iit_name || deriveIitFromEmail(email)}
+        onBack={() => setStep("verify_email")}
         onComplete={async () => {
           // Ensure profile is fresh before navigating
           await refetchProfile();
@@ -407,14 +495,11 @@ const IitVerification = () => {
         <button
           aria-label="Go back"
           onClick={() => {
-            if (step === "documents_pending") void handleReturnToLogin();
+            if (step === "documents_pending") void handleTryAnotherWay();
             else if (step === "upload_documents" || step === "verify_otp") setStep("verify_email");
             else if (step === "verify_email") setStep("select_status");
             else if (step === "select_status") setStep("select_iit");
-            else if (step === "select_iit") {
-              setEditingAccountDetails(true);
-              setStep("account_details");
-            }
+            else if (step === "select_iit") setStep("account_details");
             else navigate(-1);
           }}
           className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
@@ -432,6 +517,15 @@ const IitVerification = () => {
           ))}
           </div>
         </div>
+        <button
+          aria-label="Log out"
+          title="Log out"
+          onClick={() => void handleReturnToLogin()}
+          disabled={loading}
+          className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50"
+        >
+          <LogOut className="h-5 w-5" />
+        </button>
       </header>
 
       <div className="onboarding-scroll touch-pan-y">
@@ -443,11 +537,11 @@ const IitVerification = () => {
             <span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Account verified</span>
             <h1 className="text-2xl font-black tracking-tight text-foreground mt-2 mb-2">Add your basic details</h1>
             <p className="text-sm leading-6 text-muted-foreground mb-6">
-              We use this to create your profile before IIT verification. Your phone number is optional and never shown publicly.
+              We use these required details to create your profile before IIT verification. Your phone number is never shown publicly.
             </p>
             <div className="space-y-4">
               <div>
-                <label htmlFor="account-name" className="mb-1.5 block text-sm font-semibold text-foreground">Full name</label>
+                <label htmlFor="account-name" className="mb-1.5 block text-sm font-semibold text-foreground">Full name <span className="text-destructive" aria-hidden="true">*</span></label>
                 <Input
                   id="account-name"
                   value={accountName}
@@ -460,7 +554,7 @@ const IitVerification = () => {
               </div>
               <div>
                 <label htmlFor="account-phone" className="mb-1.5 block text-sm font-semibold text-foreground">
-                  Phone number <span className="font-normal text-muted-foreground">(optional)</span>
+                  Phone number <span className="text-destructive" aria-hidden="true">*</span>
                 </label>
                 <div className="flex items-center gap-2">
                   <CountryCodeSelect value={country} onChange={setCountry} className="h-12 w-[96px] justify-center rounded-xl bg-secondary" />
@@ -479,7 +573,8 @@ const IitVerification = () => {
                 </div>
               </div>
             </div>
-            <Button className="mt-6 h-12 w-full rounded-xl font-bold" onClick={handleSaveAccountDetails} disabled={loading || accountName.trim().length < 2 || (!!phone && phone.length !== 10)}>
+            <p className="mt-3 text-xs text-muted-foreground"><span className="text-destructive">*</span> Required fields</p>
+            <Button className="mt-4 h-12 w-full rounded-xl font-bold" onClick={handleSaveAccountDetails} disabled={loading || accountName.trim().length < 2 || phone.length !== 10}>
               {loading ? "Saving..." : "Continue to IIT verification"}
             </Button>
           </div>
@@ -597,6 +692,12 @@ const IitVerification = () => {
               </div>
             </div>
             <div className="space-y-4 mt-7">
+              {latestDocumentSubmission?.status === "rejected" && (
+                <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">
+                  <p className="font-semibold">Your previous document was not approved.</p>
+                  <p className="mt-1 text-xs leading-5">{latestDocumentSubmission.review_notes || "Upload a clearer institute document or go back to verify with your IIT email."}</p>
+                </div>
+              )}
               <div>
                 <label htmlFor="document-type" className="text-sm font-semibold text-foreground">Document type</label>
                 <select id="document-type" value={documentType} onChange={(event) => setDocumentType(event.target.value)} className="mt-2 w-full h-12 rounded-xl bg-secondary border border-border px-3 text-sm text-foreground">

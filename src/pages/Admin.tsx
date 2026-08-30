@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, BarChart3, Shield, TrendingUp, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays, Mail, RotateCcw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,6 +15,7 @@ import { convertToWebP } from "@/lib/imageUtils";
 import { defaultIitLogo, IIT_LIST, iitLogoSettingKey } from "@/data/iitInstitutes";
 import AdminEvents from "@/components/admin/AdminEvents";
 import AdminJobs from "@/components/admin/AdminJobs";
+import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
 
 const NAV_KEYS = [
   { key: "forum", label: "Cirkle" },
@@ -180,6 +181,30 @@ const Admin = () => {
     window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   };
 
+  const sendDocumentDecisionEmail = async (submissionId: string) => {
+    const { data, error } = await supabase.functions.invoke("notify-verification-decision", {
+      body: { submission_id: submissionId },
+    });
+    if (error) {
+      const parsed = await readEdgeFunctionError(error, data, "The review was saved, but the decision email could not be delivered.");
+      throw new Error(parsed.message);
+    }
+    if (data?.error) throw new Error(data.error);
+  };
+
+  const resendDocumentDecisionEmail = async (submission: any) => {
+    setReviewingDocument(submission.id);
+    try {
+      await sendDocumentDecisionEmail(submission.id);
+      await queryClient.invalidateQueries({ queryKey: ["admin-document-verifications"] });
+      toast.success("Decision email sent to the member’s login email");
+    } catch (error: any) {
+      toast.error(error.message || "Could not send the decision email");
+    } finally {
+      setReviewingDocument(null);
+    }
+  };
+
   const reviewDocument = async (submission: any, status: "approved" | "rejected") => {
     const notes = (reviewNotes[submission.id] || "").trim();
     if (status === "rejected" && !notes) {
@@ -194,12 +219,22 @@ const Admin = () => {
         p_notes: notes || null,
       });
       if (error) throw error;
+      let notificationError = "";
+      try {
+        await sendDocumentDecisionEmail(submission.id);
+      } catch (error: any) {
+        notificationError = error.message || "Decision email could not be delivered";
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["admin-document-verifications"] }),
         queryClient.invalidateQueries({ queryKey: ["admin-users"] }),
       ]);
       setReviewNotes((current) => ({ ...current, [submission.id]: "" }));
-      toast.success(status === "approved" ? "Document approved and user verified" : "Submission rejected");
+      if (notificationError) {
+        toast.warning(`${status === "approved" ? "Document approved" : "Submission rejected"}, but email delivery failed. Use “Send email” to retry.`);
+      } else {
+        toast.success(status === "approved" ? "Approved and notification email sent" : "Rejected and notification email sent");
+      }
     } catch (error: any) {
       toast.error(error.message || "Could not review this submission");
     } finally {
@@ -348,6 +383,21 @@ const Admin = () => {
       toast.success("Institute logo updated");
     } catch (error: any) {
       toast.error(error.message || "Could not upload institute logo");
+    } finally {
+      setUploadingIitLogo(null);
+    }
+  };
+
+  const handleResetIitLogo = async (domain: string) => {
+    setUploadingIitLogo(domain);
+    try {
+      const { error } = await supabase.from("app_settings").delete().eq("key", iitLogoSettingKey(domain));
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ["admin-app-settings"] });
+      await queryClient.invalidateQueries({ queryKey: ["iit-logos"] });
+      toast.success("Official institute logo restored");
+    } catch (error: any) {
+      toast.error(error.message || "Could not restore the official logo");
     } finally {
       setUploadingIitLogo(null);
     }
@@ -586,7 +636,23 @@ const Admin = () => {
                       </>
                     ) : submission.status === "withdrawn" ? (
                       <p className="text-xs font-medium text-primary">Withdrawn by the member to try another verification method.</p>
-                    ) : submission.review_notes ? <p className="text-xs text-muted-foreground"><span className="font-semibold text-foreground">Review note:</span> {submission.review_notes}</p> : null}
+                    ) : (
+                      <>
+                        {submission.review_notes && <p className="text-xs text-muted-foreground"><span className="font-semibold text-foreground">Review note:</span> {submission.review_notes}</p>}
+                        <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-secondary/40 p-2.5">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <Mail className="h-4 w-4 shrink-0 text-primary" />
+                            <span className="truncate text-[11px] text-muted-foreground">
+                              {submission.decision_notified_at ? `Email sent ${new Date(submission.decision_notified_at).toLocaleString()}` : "Decision email not sent"}
+                            </span>
+                          </div>
+                          <Button size="sm" variant="outline" className="h-8 shrink-0 text-[11px]" onClick={() => void resendDocumentDecisionEmail(submission)} disabled={isReviewing}>
+                            {submission.decision_notified_at ? "Resend email" : "Send email"}
+                          </Button>
+                        </div>
+                        {submission.decision_notification_error && !submission.decision_notified_at && <p className="text-[10px] text-destructive">Last delivery failed. Retry after checking SES status.</p>}
+                      </>
+                    )}
                     <p className="text-[10px] text-muted-foreground">Submitted {new Date(submission.created_at).toLocaleString()}</p>
                   </div>
                 );
@@ -675,6 +741,18 @@ const Admin = () => {
                         <img src={logoUrl} alt={`${iit.name} logo`} className="w-8 h-8 object-contain" />
                       </div>
                       <span className="text-xs font-semibold text-foreground flex-1 min-w-0 truncate">{iit.name}</span>
+                      {appSettings?.[iitLogoSettingKey(iit.studentDomain)] && (
+                        <button
+                          type="button"
+                          title="Restore official logo"
+                          aria-label={`Restore official ${iit.name} logo`}
+                          className="h-8 w-8 rounded-lg border border-border bg-background flex items-center justify-center hover:border-primary disabled:opacity-60"
+                          disabled={uploading}
+                          onClick={() => void handleResetIitLogo(iit.studentDomain)}
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                       <label className={`h-8 px-2.5 rounded-lg border border-border bg-background text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer hover:border-primary ${uploading ? "opacity-60 pointer-events-none" : ""}`}>
                         <Upload className="w-3.5 h-3.5" /> {uploading ? "Uploading" : "Upload"}
                         <input
