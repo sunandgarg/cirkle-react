@@ -1005,7 +1005,14 @@ const Forum = () => {
         void queryClient.invalidateQueries({ queryKey: ["canonical-academic-identity", user?.id] });
         return;
       }
-      toast.error("Message could not be sent. Check your connection and try again.");
+      const message = String(err?.message || "");
+      if (/poll options|question before sending/i.test(message)) {
+        toast.error(message);
+        return;
+      }
+      toast.error(navigator.onLine
+        ? "Message could not be saved right now. Tap the failed message to retry."
+        : "You are offline. Your message is saved and will retry automatically.");
     },
   });
   const createPostRef = useRef(createPost);
@@ -1630,7 +1637,7 @@ const Forum = () => {
     scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" });
     setNewMsgCount(0);
   };
-  const selectScope = (type: string, key: string) => {
+  const selectScope = (type: string, key: string, keepSidebarOpen = false) => {
     const scrollOffset = scrollContainerRef.current?.scrollTop || 0;
     setForumDraft(activeScope.type, activeScope.key, content);
     setForumScroll(activeScope.type, activeScope.key, scrollOffset);
@@ -1645,7 +1652,7 @@ const Forum = () => {
     setContent(getForumDraft(type, key));
     setActiveScope({ type, key });
     if (user?.id) setLastForumRoom(user.id, { type, key });
-    setSidebarOpen(false);
+    if (!keepSidebarOpen) setSidebarOpen(false);
     setActiveTab("feed");
     setThreadPost(null);
   };
@@ -1758,7 +1765,7 @@ const Forum = () => {
             scopes={scopes} activeScope={activeScope}
             unreadDots={unreadDots}
             onSelect={selectScope}
-            onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key); }}
+            onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key, true); }}
           />
         </div>
         <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
@@ -1778,7 +1785,7 @@ const Forum = () => {
               scopes={scopes} activeScope={activeScope}
               unreadDots={unreadDots}
               onSelect={selectScope}
-              onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key); }}
+              onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key, true); }}
             />
           </div>
           <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">

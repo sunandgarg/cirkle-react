@@ -19,7 +19,7 @@ const cohortScope: ForumScope = {
 };
 
 describe("forum grouped-room navigation", () => {
-  it("expands My Cohort without changing chat, then waits for a room choice", () => {
+  it("selects the campus room by default without showing an extra dropdown", () => {
     const onSelect = vi.fn();
     const onToggle = vi.fn();
     render(
@@ -34,7 +34,23 @@ describe("forum grouped-room navigation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /my cohort/i }));
     expect(onSelect).not.toHaveBeenCalled();
-    expect(screen.getByRole("group", { name: /choose my cohort room/i })).toBeInTheDocument();
+    expect(onToggle).toHaveBeenCalledWith("cohort", 0);
+    expect(screen.queryByText(/choose a room/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps campus and all-IIT choices visible for the active grouped room", () => {
+    const onToggle = vi.fn();
+    render(
+      <ScopeNavigationItem
+        scope={cohortScope}
+        activeScope={{ type: "COHORT", key: "IIT_DELHI|MBA|GENERAL|2026" }}
+        unreadDots={{}}
+        onSelect={vi.fn()}
+        onToggle={onToggle}
+      />,
+    );
+
+    expect(screen.getByRole("group", { name: /my cohort rooms/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Campus" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "All IITs" })).toBeInTheDocument();
 

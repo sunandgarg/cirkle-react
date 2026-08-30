@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveForumSendIdentity, type ForumSendSnapshot } from "@/lib/forumSend";
+import { forumPostContent, normalizeForumPoll, resolveForumSendIdentity, type ForumSendSnapshot } from "@/lib/forumSend";
 
 const snapshot: ForumSendSnapshot = {
   scopeType: "COHORT",
@@ -24,5 +24,22 @@ describe("forum send identity", () => {
     const first = resolveForumSendIdentity(null, snapshot, () => "message-1");
     const changed = resolveForumSendIdentity(first, { ...snapshot, content: "changed" }, () => "message-2");
     expect(changed.id).toBe("message-2");
+  });
+});
+
+describe("forum poll delivery", () => {
+  it("creates non-empty persisted content for a poll-only message", () => {
+    expect(forumPostContent({
+      content: "",
+      pollQuestion: "Where should we meet?",
+      pollOptions: ["Library", "Cafe"],
+    })).toBe("📊 Where should we meet?");
+  });
+
+  it("requires a question and at least two non-empty options", () => {
+    expect(() => normalizeForumPoll({ pollQuestion: "", pollOptions: ["One"] }))
+      .toThrow("Add a question");
+    expect(() => normalizeForumPoll({ pollQuestion: "Pick one", pollOptions: ["One", " "] }))
+      .toThrow("at least two");
   });
 });

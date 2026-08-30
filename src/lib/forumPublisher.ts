@@ -1,8 +1,10 @@
 import { supabase } from "@/integrations/supabase/client";
 import { createForumMediaSignedUrl } from "@/lib/forumMedia";
 import type { ForumOutboxItem } from "@/lib/forumOutbox";
+import { forumPostContent, normalizeForumPoll } from "@/lib/forumSend";
 
 export const publishForumOutboxItem = async (item: ForumOutboxItem) => {
+  const poll = normalizeForumPoll(item);
   let imagePath = item.imagePath || null;
   let imageUrl = item.imageUrl || null;
   let filePath: string | null = null;
@@ -35,7 +37,7 @@ export const publishForumOutboxItem = async (item: ForumOutboxItem) => {
     p_id: item.id,
     p_scope_type: item.scopeType,
     p_scope_key: item.scopeKey,
-    p_content: item.content || (item.image ? "📷" : item.file ? `📎 ${item.file.name}` : item.voicePath ? "🎤 Voice message" : ""),
+    p_content: forumPostContent(item),
     p_is_anonymous: item.isAnonymous,
     p_reply_to_id: item.replyToId,
     p_image_path: imagePath,
@@ -48,10 +50,9 @@ export const publishForumOutboxItem = async (item: ForumOutboxItem) => {
   });
   if (error || !post) throw error || new Error("Message could not be persisted");
 
-  const validOptions = (item.pollOptions || []).map((option) => option.trim()).filter(Boolean);
-  if (item.pollQuestion?.trim() && validOptions.length >= 2) {
+  if (poll.question) {
     const { error: pollError } = await supabase.from("polls").upsert({
-      post_id: post.id, question: item.pollQuestion.trim(), options: validOptions,
+      post_id: post.id, question: poll.question, options: poll.options,
     }, { onConflict: "post_id" });
     if (pollError) throw pollError;
   }

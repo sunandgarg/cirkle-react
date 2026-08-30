@@ -300,6 +300,15 @@ serve(async (request) => {
   let sourceId: string | null = null;
   try {
     const body = await request.json();
+    if (body.action === "status") {
+      const configuredProviders = [
+        Deno.env.get("GEMINI_API_KEY") ? "gemini" : null,
+        Deno.env.get("OPENAI_API_KEY") ? "openai" : null,
+        Deno.env.get("ANTHROPIC_API_KEY") ? "anthropic" : null,
+        Deno.env.get("CUSTOM_AI_API_KEY") && Deno.env.get("CUSTOM_AI_BASE_URL") ? "custom" : null,
+      ].filter(Boolean);
+      return json({ configured_providers: configuredProviders });
+    }
     sourceId = typeof body.source_id === "string" ? body.source_id : null;
     let savedSource: any = null;
     if (sourceId) {

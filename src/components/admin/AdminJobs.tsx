@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Archive, BriefcaseBusiness, CheckCircle2, ExternalLink, Loader2, Pencil,
-  Plus, Radar, RefreshCw, ShieldCheck, Trash2, X, XCircle,
+  Archive, Bot, CheckCircle2, ExternalLink, Loader2, Pencil,
+  Plus, Radar, RefreshCw, ShieldCheck, Sparkles, Trash2, X, XCircle,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
@@ -124,6 +124,21 @@ const AdminJobs = () => {
     retry: false,
   });
 
+  const { data: scannerStatus, isLoading: isScannerStatusLoading } = useQuery({
+    queryKey: ["admin-job-scanner-status"],
+    queryFn: async () => {
+      const { data, error } = await supabase.functions.invoke("scan-jobs", { body: { action: "status" } });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      return data as { configured_providers?: Provider[] };
+    },
+    enabled: !!user,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+  const configuredProviders = scannerStatus?.configured_providers || [];
+  const scannerReady = configuredProviders.length > 0;
+
   const refreshJobs = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ["admin-jobs"] }),
     queryClient.invalidateQueries({ queryKey: ["jobs"] }),
@@ -236,6 +251,7 @@ const AdminJobs = () => {
     },
     onError: (error: Error) => toast.error(error.message || "Career scan failed"),
   });
+  const agentStatus = runScan.isPending ? "Running" : isScannerStatusLoading ? "Checking" : scannerReady ? "Ready" : "Setup needed";
 
   const updateSource = async (id: string, patch: Record<string, unknown>) => {
     const { error } = await (supabase as any).from("job_scan_sources").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
@@ -264,17 +280,27 @@ const AdminJobs = () => {
         <p className="mt-1 text-xs">Apply the latest Supabase migration and deploy the scan-jobs function, then refresh.</p>
       </div>}
 
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        <Button className="h-11 shrink-0 rounded-full px-5 font-bold" onClick={() => setShowScanner(true)}>
+          <Sparkles className="h-4 w-4" /> AI Job Studio
+        </Button>
+        <Button variant="outline" className="h-11 shrink-0 rounded-full px-5 font-bold" onClick={() => { setForm(emptyJob()); setShowEditor(true); }}>
+          <Plus className="h-4 w-4" /> Add manually
+        </Button>
+      </div>
+
       <section className="rounded-2xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h3 className="flex items-center gap-2 font-bold"><BriefcaseBusiness className="h-5 w-5 text-primary" /> Jobs control center</h3>
-            <p className="mt-1 text-xs text-muted-foreground">Review every listing, publish manually, or scan trusted company career pages with a server-side AI provider.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="flex items-center gap-2 font-bold"><Bot className="h-5 w-5 text-primary" /> Auto Job Agent</h3>
+              <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${runScan.isPending || !scannerReady ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"}`}>{agentStatus}</span>
+            </div>
+            <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">Search and securely scrape trusted public company career pages, extract real openings with AI, remove duplicates, and push reviewed drafts or approved listings into Cirkle Jobs.</p>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" className="flex-1 rounded-xl sm:flex-none" onClick={() => setShowScanner(true)}><Radar className="h-4 w-4" /> Scan careers</Button>
-            <Button className="flex-1 rounded-xl sm:flex-none" onClick={() => { setForm(emptyJob()); setShowEditor(true); }}><Plus className="h-4 w-4" /> Add job</Button>
-          </div>
+          <Button variant="outline" className="shrink-0 rounded-xl" onClick={() => setShowScanner(true)}><Radar className="h-4 w-4" /> Search sources</Button>
         </div>
+        {!isScannerStatusLoading && !scannerReady && <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-200">AI provider setup is required. Configure `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or a custom compatible provider in Supabase secrets.</div>}
         <div className="mt-4 grid grid-cols-4 gap-2">
           {(["draft", "published", "closed", "archived"] as JobStatus[]).map((status) => <button key={status} onClick={() => setStatusFilter(statusFilter === status ? "all" : status)} className={`rounded-xl p-3 text-center transition-colors ${statusFilter === status ? "bg-primary/10 ring-1 ring-primary" : "bg-secondary/55"}`}>
             <p className="text-lg font-bold">{jobs.filter((job) => job.status === status).length}</p><p className="truncate text-[9px] uppercase tracking-wide text-muted-foreground sm:text-[10px]">{status}</p>
@@ -371,7 +397,7 @@ const AdminJobs = () => {
 
       {showScanner && <div className="fixed inset-0 z-[70] flex items-end justify-center bg-background/80 backdrop-blur-sm sm:items-center">
         <div className="max-h-[92dvh] w-full max-w-xl overflow-y-auto rounded-t-3xl border border-border bg-card p-5 sm:rounded-3xl sm:p-6">
-          <div className="mb-5 flex items-start justify-between"><div><h3 className="flex items-center gap-2 font-bold"><Radar className="h-5 w-5 text-primary" /> Scan company careers</h3><p className="text-xs text-muted-foreground">Fetch up to five public pages, extract real openings, deduplicate, and audit the run.</p></div><button onClick={() => setShowScanner(false)} className="rounded-full p-2 hover:bg-secondary"><X className="h-5 w-5" /></button></div>
+          <div className="mb-5 flex items-start justify-between"><div><h3 className="flex items-center gap-2 font-bold"><Sparkles className="h-5 w-5 text-primary" /> AI Job Studio</h3><p className="text-xs text-muted-foreground">Search up to five trusted public career sources, extract real openings, deduplicate, and push them into Cirkle.</p></div><button onClick={() => setShowScanner(false)} className="rounded-full p-2 hover:bg-secondary"><X className="h-5 w-5" /></button></div>
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2"><Field label="AI provider"><select value={provider} onChange={(e) => { const next = e.target.value as Provider; setProvider(next); setModel(MODEL_DEFAULTS[next]); }} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="custom">Any OpenAI-compatible API</option></select></Field><Field label="Model"><Input value={model} onChange={(e) => setModel(e.target.value)} /></Field></div>
             <Field label="Company"><Input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Optional fallback company name" /></Field>
@@ -380,7 +406,7 @@ const AdminJobs = () => {
             <div className="grid grid-cols-2 gap-2"><button onClick={() => setPublishMode("draft")} className={`min-h-12 rounded-xl border text-xs font-semibold ${publishMode === "draft" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}>Import as drafts<br /><span className="font-normal">Recommended</span></button><button onClick={() => setPublishMode("published")} className={`min-h-12 rounded-xl border text-xs font-semibold ${publishMode === "published" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}>Publish automatically<br /><span className="font-normal">Use trusted sources only</span></button></div>
             <label className="flex items-center justify-between gap-3 rounded-xl border border-border p-3 text-xs font-semibold">Save these sources for future scans <Switch checked={saveSources} onCheckedChange={setSaveSources} /></label>
             <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-[11px] leading-relaxed text-muted-foreground"><p className="flex items-center gap-1 font-bold text-foreground"><ShieldCheck className="h-3.5 w-3.5 text-primary" /> Verified-source AI workflow</p><p className="mt-1">AI extracts only real openings found on the career URLs, imports drafts by default, deduplicates them, and keeps API keys on the server. It never invents a vacancy.</p></div>
-            <Button className="h-11 w-full rounded-xl" disabled={runScan.isPending} onClick={() => runScan.mutate(undefined)}>{runScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />}{runScan.isPending ? "Scanning and validating…" : "Scan now"}</Button>
+            <Button className="h-11 w-full rounded-xl" disabled={runScan.isPending} onClick={() => runScan.mutate(undefined)}>{runScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{runScan.isPending ? "Searching and validating…" : "Search, extract and import"}</Button>
           </div>
         </div>
       </div>}

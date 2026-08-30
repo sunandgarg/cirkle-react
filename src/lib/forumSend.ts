@@ -15,6 +15,33 @@ export type ForumSendIdentity = {
   fingerprint: string;
 };
 
+export type ForumPostContentSource = {
+  content?: string | null;
+  image?: unknown;
+  file?: { name: string } | null;
+  voicePath?: string | null;
+  pollQuestion?: string | null;
+  pollOptions?: string[] | null;
+};
+
+export const normalizeForumPoll = (source: ForumPostContentSource) => {
+  const question = source.pollQuestion?.trim() || "";
+  const options = (source.pollOptions || []).map((option) => option.trim()).filter(Boolean);
+  if (!question && options.length) throw new Error("Add a question before sending this poll.");
+  if (question && options.length < 2) throw new Error("Add at least two poll options.");
+  return { question, options };
+};
+
+export const forumPostContent = (source: ForumPostContentSource) => {
+  const content = source.content?.trim();
+  if (content) return content;
+  if (source.image) return "📷";
+  if (source.file) return `📎 ${source.file.name}`;
+  if (source.voicePath) return "🎤 Voice message";
+  const { question } = normalizeForumPoll(source);
+  return question ? `📊 ${question}` : "";
+};
+
 export const forumSendFingerprint = (snapshot: ForumSendSnapshot) => JSON.stringify({
   ...snapshot,
   content: snapshot.content.trim(),

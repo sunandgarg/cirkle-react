@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { ChevronDown, Hash } from "lucide-react";
+import { Hash } from "lucide-react";
 import type { ForumScope } from "@/lib/forumScopes";
 
 interface ScopeNavigationItemProps {
@@ -11,7 +10,6 @@ interface ScopeNavigationItemProps {
 }
 
 const ScopeNavigationItem = ({ scope, activeScope, unreadDots, onSelect, onToggle }: ScopeNavigationItemProps) => {
-  const [expanded, setExpanded] = useState(false);
   const options = scope.hasToggle ? scope.toggleOptions : undefined;
   const activeOptionIndex = options?.findIndex(
     (option) => option.type === activeScope.type && option.key === activeScope.key,
@@ -21,13 +19,13 @@ const ScopeNavigationItem = ({ scope, activeScope, unreadDots, onSelect, onToggl
   const hasUnread = options?.length
     ? options.some((option) => unreadDots[`${option.type}_${option.key}`])
     : unreadDots[`${scope.type}_${scope.key}`];
-  const showOptions = !!options?.length && (expanded || isActive);
+  const showOptions = !!options?.length && isActive;
 
   const handleScopeClick = () => {
     if (options?.length) {
-      // Grouped channels are folders. Changing chat requires an explicit room
-      // choice, which also keeps the mobile sidebar open at this stage.
-      setExpanded((current) => !current);
+      // Campus is the predictable default for grouped channels. The sidebar
+      // remains open so the member can still switch to the all-IIT room.
+      onToggle(scope.id, 0);
       return;
     }
     onSelect(scope.type, scope.key);
@@ -38,7 +36,7 @@ const ScopeNavigationItem = ({ scope, activeScope, unreadDots, onSelect, onToggl
       <button
         type="button"
         onClick={handleScopeClick}
-        aria-expanded={options?.length ? showOptions : undefined}
+        aria-current={isActive ? "page" : undefined}
         className={`flex w-full items-start gap-2.5 rounded-md px-3 py-2.5 text-[14px] transition-all ${isActive ? "font-semibold text-primary" : "text-foreground hover:bg-accent/60"}`}
       >
         <Hash className={`mt-0.5 h-4 w-4 shrink-0 ${isActive ? "text-primary" : "text-muted-foreground"}`} />
@@ -53,14 +51,10 @@ const ScopeNavigationItem = ({ scope, activeScope, unreadDots, onSelect, onToggl
             </span>
           )}
         </div>
-        {!!options?.length && (
-          <ChevronDown className={`mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform ${showOptions ? "rotate-180" : ""}`} />
-        )}
       </button>
 
       {showOptions && options && (
-        <div className="px-4 pb-3 pl-9 pt-0" role="group" aria-label={`Choose ${scope.label} room`}>
-          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Choose a room</p>
+        <div className="px-4 pb-3 pl-9 pt-0" role="group" aria-label={`${scope.label} rooms`}>
           <div className="flex items-center gap-1.5">
             {options.map((option, index) => (
               <button
