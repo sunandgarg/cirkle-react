@@ -23,6 +23,10 @@ import { getForumBroadcastRow } from "@/lib/forumRealtime";
 import { createRealtimeRecoveryController } from "@/lib/realtimeRecovery";
 import { mergeChatTimeline, uniqueChatMessages as uniqueMessages } from "@/lib/chatMessages";
 import VoiceRecorder from "@/components/forum/VoiceRecorder";
+import {
+  appSyncRealtimeEnabled, chatAppSyncChannels, publishAppSync,
+  requestRealtimeDispatch, subscribeAppSync,
+} from "@/lib/appsyncEvents";
 
 const PAGE_SIZE = 50;
 const INBOX_CACHE_KEY = "cirkle:chat-inbox";
@@ -141,7 +145,7 @@ const Chats = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const roomChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const roomChannelRef = useRef<{ send: (message: { payload: Record<string, unknown> }) => Promise<unknown> | void } | null>(null);
   const typingStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingBroadcastRef = useRef(0);
@@ -210,6 +214,8 @@ const Chats = () => {
     let fallbackHealthy = false;
     let fallbackRestartTimer: ReturnType<typeof setTimeout> | null = null;
     let recoveryController: ReturnType<typeof createRealtimeRecoveryController> | null = null;
+    let unsubscribeAppSyncMessage: (() => void) | null = null;
+    let unsubscribeAppSyncTyping: (() => void) | null = null;
     setMessages([]);
     messagesRef.current = [];
     setHasOlder(false);
@@ -336,7 +342,30 @@ const Chats = () => {
         if (!broadcastHealthy && !fallbackHealthy) startFallback();
       },
     });
-    void (async () => {
+    if (appSyncRealtimeEnabled) {
+      const channels = chatAppSyncChannels(activeRoom.id);
+      unsubscribeAppSyncMessage = subscribeAppSync(channels.message_channel, (event: any) => {
+        const eventType = String(event.eventType || "INSERT");
+        void applyMessage(eventType, (eventType === "DELETE" ? event.old : event.new) as ChatMessage);
+      }, (status) => {
+        if (cancelled) return;
+        if (status === "SUBSCRIBED") {
+          broadcastHealthy = true;
+          void (recoveryController?.recoverNow() || recoverMissedMessages());
+        } else if (status === "CHANNEL_ERROR" || status === "CLOSED") {
+          broadcastHealthy = false;
+          startFallback();
+          void recoveryController?.recoverNow();
+        }
+      });
+      unsubscribeAppSyncTyping = subscribeAppSync(channels.typing_channel, (payload: any) => {
+        if (!payload?.userId || payload.userId === user.id) return;
+        const name = payload.name || "Someone";
+        setTypingUsers((current) => payload.typing ? [...new Set([...current, name])] : current.filter((value) => value !== name));
+        if (payload.typing) setTimeout(() => setTypingUsers((current) => current.filter((value) => value !== name)), 3000);
+      });
+      roomChannelRef.current = { send: ({ payload }) => publishAppSync(channels.typing_channel, payload) };
+    } else void (async () => {
       const { data: broadcastReady } = await (supabase as any).rpc("chat_broadcast_ready");
       if (cancelled || broadcastReady !== true) { startFallback(); return; }
       await supabase.realtime.setAuth();
@@ -368,6 +397,8 @@ const Chats = () => {
       if (broadcastChannel) void supabase.removeChannel(broadcastChannel);
       if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
       if (readTimerRef.current) clearTimeout(readTimerRef.current);
+      unsubscribeAppSyncMessage?.();
+      unsubscribeAppSyncTyping?.();
     };
   }, [activeRoom, markReadSoon, queryClient, user]);
 
@@ -477,6 +508,7 @@ const Chats = () => {
         error = existing.error;
       }
       if (error || !data) throw error || new Error("Message could not be persisted");
+      requestRealtimeDispatch();
       const [delivered] = await hydrateChatMedia([data as ChatMessage]);
       await deleteChatOutboxItem(item.id);
       const preview = outboxPreviewUrlsRef.current.get(item.id);

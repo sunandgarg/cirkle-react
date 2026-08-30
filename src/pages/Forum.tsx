@@ -56,6 +56,9 @@ import {
   MAX_ROOM_HISTORY, mergeForumHistoryPosts, persistForumHistory, readForumHistory,
 } from "@/lib/forumHistoryCache";
 import { createRealtimeRecoveryController } from "@/lib/realtimeRecovery";
+import {
+  appSyncRealtimeEnabled, getForumAppSyncChannels, publishAppSync, subscribeAppSync,
+} from "@/lib/appsyncEvents";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
@@ -1235,6 +1238,7 @@ const Forum = () => {
     let fallbackHealthy = false;
     let fallbackRestartTimer: ReturnType<typeof setTimeout> | null = null;
     let recoveryController: ReturnType<typeof createRealtimeRecoveryController> | null = null;
+    let unsubscribeAppSync: (() => void) | null = null;
     let disposed = false;
     const recoverMissedMessages = async () => {
       if (disposed) return;
@@ -1303,9 +1307,31 @@ const Forum = () => {
       },
     });
 
-    // Broadcast is Supabase's recommended scalable path. The capability RPC
-    // prevents a silent no-event state on databases that have not migrated yet.
-    void (async () => {
+    // AppSync is the primary low-latency fan-out when configured. Supabase
+    // remains the durable history and automatically takes over on any failure.
+    if (appSyncRealtimeEnabled) void (async () => {
+      const channels = await getForumAppSyncChannels(activeScope.type, activeScope.key);
+      if (disposed) return;
+      unsubscribeAppSync = subscribeAppSync(channels.message_channel, (event: any) => {
+        const eventType = String(event.eventType || "INSERT") as ForumRealtimeEvent["eventType"];
+        if (eventType === "DELETE") applyRoomEvent({ eventType, old: event.old || {} });
+        else applyHydratedRoomEvent({ eventType, new: event.new || {} });
+      }, (status) => {
+        if (disposed) return;
+        if (status === "SUBSCRIBED") {
+          broadcastHealthy = true;
+          void (recoveryController?.recoverNow() || recoverMissedMessages());
+        } else if (status === "CHANNEL_ERROR" || status === "CLOSED") {
+          broadcastHealthy = false;
+          startPostgresFallback();
+          void recoveryController?.recoverNow();
+        }
+      });
+    })().catch(() => {
+      broadcastHealthy = false;
+      startPostgresFallback();
+    });
+    else void (async () => {
       const { data: broadcastReady } = await (supabase as any).rpc("forum_broadcast_ready");
       if (disposed) return;
       if (broadcastReady !== true) {
@@ -1357,6 +1383,7 @@ const Forum = () => {
       }
       if (broadcastChannel) supabase.removeChannel(broadcastChannel);
       if (fallbackChannel) supabase.removeChannel(fallbackChannel);
+      unsubscribeAppSync?.();
     };
   }, [queryClient, activeScope.type, activeScope.key, enrichPosts, profileMap, user?.id]);
 
@@ -1368,6 +1395,37 @@ const Forum = () => {
     const typingEnabled = activeScope.type === "COHORT" || activeScope.type === "COHORT_GLOBAL";
     if (!user?.id || readMobileTestSession() || !typingEnabled) return;
     const typingTimers = remoteTypingTimersRef.current;
+    if (appSyncRealtimeEnabled) {
+      let disposed = false;
+      let unsubscribe: (() => void) | null = null;
+      void getForumAppSyncChannels(activeScope.type, activeScope.key).then((channels) => {
+        if (disposed) return;
+        const handleTyping = (payload: any) => {
+          const remoteUserId = payload?.userId;
+          const name = payload?.name;
+          if (!remoteUserId || remoteUserId === user.id || !name) return;
+          setTypingUsers((current) => [...new Set([...current, name])].slice(0, 3));
+          const previousTimer = typingTimers.get(remoteUserId);
+          if (previousTimer) clearTimeout(previousTimer);
+          typingTimers.set(remoteUserId, setTimeout(() => {
+            setTypingUsers((current) => current.filter((item) => item !== name));
+            typingTimers.delete(remoteUserId);
+          }, 2500));
+        };
+        unsubscribe = subscribeAppSync(channels.typing_channel, handleTyping);
+        presenceChannelRef.current = {
+          send: ({ payload }: any) => publishAppSync(channels.typing_channel, payload),
+        };
+      }).catch(() => { /* Message delivery has its own durable fallback. */ });
+      return () => {
+        disposed = true;
+        unsubscribe?.();
+        presenceChannelRef.current = null;
+        typingTimers.forEach(clearTimeout);
+        typingTimers.clear();
+        setTypingUsers([]);
+      };
+    }
     const presenceChannel = supabase.channel(`typing-${activeScope.type}-${activeScope.key}`, {
       config: { broadcast: { self: false } },
     });

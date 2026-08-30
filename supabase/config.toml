@@ -77,3 +77,6 @@ verify_jwt = true
 
 [functions.create-consult-chat]
 verify_jwt = true
+
+[functions.dispatch-realtime-outbox]
+verify_jwt = false

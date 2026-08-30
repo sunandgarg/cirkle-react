@@ -22,6 +22,7 @@ import {
 } from "@/lib/forumOutbox";
 import { getForumBroadcastRow } from "@/lib/forumRealtime";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { appSyncRealtimeEnabled, subscribeAppSync } from "@/lib/appsyncEvents";
 
 const THREAD_PAGE_SIZE = 50;
 
@@ -290,6 +291,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
     };
     let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
     let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
+    let unsubscribeAppSync: (() => void) | null = null;
     let fallbackStarted = false;
     let disposed = false;
     const recoverMissedReplies = async () => {
@@ -313,7 +315,15 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
         }, (payload: any) => applyReplyEvent(payload.eventType, payload.eventType === "DELETE" ? payload.old : payload.new))
         .subscribe((status) => { if (status === "SUBSCRIBED") void recoverMissedReplies(); });
     };
-    void (async () => {
+    if (appSyncRealtimeEnabled) {
+      unsubscribeAppSync = subscribeAppSync(`/thread/${parentPost.id}`, (event: any) => {
+        const eventType = String(event.eventType || "INSERT");
+        applyReplyEvent(eventType, eventType === "DELETE" ? event.old : event.new);
+      }, (status) => {
+        if (status === "SUBSCRIBED") void recoverMissedReplies();
+        if (status === "CHANNEL_ERROR" || status === "CLOSED") startFallback();
+      });
+    } else void (async () => {
       await supabase.realtime.setAuth();
       if (disposed) return;
       broadcastChannel = supabase.channel(`forum-thread:${parentPost.id}`, { config: { private: true } })
@@ -329,6 +339,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
       disposed = true;
       if (broadcastChannel) void supabase.removeChannel(broadcastChannel);
       if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
+      unsubscribeAppSync?.();
     };
   }, [parentPost.id, profileMap, queryClient, testSession]);
 

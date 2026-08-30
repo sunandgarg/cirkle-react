@@ -2,6 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { createForumMediaSignedUrl } from "@/lib/forumMedia";
 import type { ForumOutboxItem } from "@/lib/forumOutbox";
 import { forumPostContent, normalizeForumPoll } from "@/lib/forumSend";
+import { requestRealtimeDispatch } from "@/lib/appsyncEvents";
 
 export const publishForumOutboxItem = async (item: ForumOutboxItem) => {
   const poll = normalizeForumPoll(item);
@@ -56,6 +57,7 @@ export const publishForumOutboxItem = async (item: ForumOutboxItem) => {
     }, { onConflict: "post_id" });
     if (pollError) throw pollError;
   }
+  requestRealtimeDispatch();
   return {
     ...post, image_url: imageUrl, file_url: fileUrl,
     voice_url: item.voiceUrl, replyCount: 0, reactions: {}, myReactions: [],

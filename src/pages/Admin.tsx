@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, Shield, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays, Mail, RotateCcw, LayoutDashboard, UserPlus } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, Shield, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays, Mail, RotateCcw, LayoutDashboard, UserPlus, Phone, Clock3 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -55,7 +55,8 @@ const Admin = () => {
   const { data: users } = useQuery({
     queryKey: ["admin-users"],
     queryFn: async () => {
-      const { data } = await supabase.from("profiles").select("*").order("created_at", { ascending: false }).limit(200);
+      const { data, error } = await (supabase as any).rpc("get_admin_users_detailed", { p_limit: 500 });
+      if (error) throw error;
       return data ?? [];
     },
     enabled: !!isAdmin,
@@ -471,6 +472,9 @@ const Admin = () => {
   const filteredUsers = users?.filter((u: any) =>
     !userSearch || (u.name || "").toLowerCase().includes(userSearch.toLowerCase()) ||
     (u.iit_name || "").toLowerCase().includes(userSearch.toLowerCase()) ||
+    (u.login_email || "").toLowerCase().includes(userSearch.toLowerCase()) ||
+    (u.iit_email || "").toLowerCase().includes(userSearch.toLowerCase()) ||
+    (u.phone_full || "").includes(userSearch) ||
     (u.user_id || "").includes(userSearch)
   );
 
@@ -486,7 +490,7 @@ const Admin = () => {
   }
 
   return (
-    <div className="bg-background min-h-screen">
+    <div className="h-[100dvh] overflow-y-auto overscroll-contain bg-background [scrollbar-gutter:stable]">
       <header className="sticky top-0 z-40 bg-card border-b border-border px-4 py-4">
         <div className="flex items-center gap-3 max-w-6xl mx-auto">
           <button onClick={() => navigate(-1)} className="p-1 text-foreground hover-scale"><ArrowLeft className="w-5 h-5" /></button>
@@ -497,7 +501,7 @@ const Admin = () => {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-4">
+      <main className="max-w-6xl mx-auto px-4 py-4 pb-[calc(2rem+env(safe-area-inset-bottom))]">
         <Tabs defaultValue="dashboard">
           <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-3 sm:grid-cols-9 gap-1 p-1">
             <TabsTrigger value="dashboard" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><LayoutDashboard className="w-3.5 h-3.5 mr-1" /> Dashboard</TabsTrigger>
@@ -520,7 +524,7 @@ const Admin = () => {
             <div className="flex gap-2">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input placeholder="Search users..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="pl-9 h-10 rounded-xl bg-secondary border-0" />
+                <Input placeholder="Search name, login email, IIT email or phone…" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="pl-9 h-10 rounded-xl bg-secondary border-0" />
               </div>
               <Button className="h-10 rounded-xl gap-2" onClick={() => setMemberDialogOpen(true)}>
                 <UserPlus className="h-4 w-4" /> <span className="hidden sm:inline">Add member</span>
@@ -529,13 +533,19 @@ const Admin = () => {
             <p className="text-xs text-muted-foreground">{filteredUsers?.length || 0} users found</p>
             <div className="grid gap-2 lg:grid-cols-2">
               {filteredUsers?.map((u: any) => (
-                <div key={u.user_id} className="bg-card border border-border rounded-xl p-3 flex items-center gap-3">
+                <div key={u.user_id} className="bg-card border border-border rounded-2xl p-3.5 flex items-start gap-3 shadow-sm">
                   {u.avatar_url ? <img src={u.avatar_url} className="w-10 h-10 rounded-full object-cover" alt="" />
                     : <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center"><span className="text-sm font-bold text-primary">{(u.name || "?")[0]}</span></div>}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-foreground truncate">{u.name || "Unnamed"}</p>
                     <p className="text-xs text-muted-foreground truncate">{u.headline || "No headline"}</p>
-                    <p className="text-[10px] text-muted-foreground">{u.iit_name || "No IIT"} · {u.role} · {u.location || "Unknown"}</p>
+                    <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
+                      <p className="flex items-center gap-1.5 truncate" title={u.login_email || ""}><Mail className="h-3 w-3 shrink-0 text-primary" /><span className="font-medium text-foreground/80">Login:</span> {u.login_email || "Not available"}</p>
+                      <p className="flex items-center gap-1.5 truncate" title={u.iit_email || ""}><GraduationCap className="h-3 w-3 shrink-0 text-primary" /><span className="font-medium text-foreground/80">IIT:</span> {u.iit_email || "Not verified by IIT email"}</p>
+                      <p className="flex items-center gap-1.5"><Phone className="h-3 w-3 shrink-0 text-primary" /><span className="font-medium text-foreground/80">Mobile:</span> {u.phone_full || "Not provided"}</p>
+                      <p className="flex items-center gap-1.5"><Clock3 className="h-3 w-3 shrink-0 text-primary" />Last sign-in: {u.last_sign_in_at ? new Date(u.last_sign_in_at).toLocaleString() : "Never"}</p>
+                      <p>{u.iit_name || "No IIT"} · {u.degree || "No course"}{u.specialisation ? ` · ${u.specialisation}` : ""}{u.passing_year ? ` · ${u.passing_year}` : ""}</p>
+                    </div>
                   </div>
                   <div className="flex flex-col items-end gap-2">
                     <button onClick={() => toggleVerify(u.user_id, u.is_verified)}
