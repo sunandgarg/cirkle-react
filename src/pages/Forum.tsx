@@ -55,6 +55,7 @@ import {
 import {
   MAX_ROOM_HISTORY, mergeForumHistoryPosts, persistForumHistory, readForumHistory,
 } from "@/lib/forumHistoryCache";
+import { createRealtimeRecoveryController } from "@/lib/realtimeRecovery";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
@@ -1230,31 +1231,48 @@ const Forum = () => {
     let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
     let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
     let fallbackStarted = false;
+    let broadcastHealthy = false;
+    let fallbackHealthy = false;
+    let fallbackRestartTimer: ReturnType<typeof setTimeout> | null = null;
+    let recoveryController: ReturnType<typeof createRealtimeRecoveryController> | null = null;
     let disposed = false;
     const recoverMissedMessages = async () => {
       if (disposed) return;
       const current = queryClient.getQueryData<any>(roomQueryKey);
-      const latest = current?.posts?.[current.posts.length - 1];
-      if (!latest?.created_at) return;
-      const { data, error } = await supabase.from("posts")
+      const latest = [...(current?.posts || [])].reverse().find((post: any) =>
+        post?.created_at && !isDemoId(post.id));
+      let query = supabase.from("posts")
         .select(LEGACY_FORUM_POST_COLUMNS)
         .eq("scope_type", activeScope.type)
         .eq("scope_key", activeScope.key)
         .is("reply_to_id", null)
         .is("deleted_at", null)
-        .gte("created_at", latest.created_at)
         .order("created_at", { ascending: false })
         .order("id", { ascending: false })
-        .limit(MAX_ROOM_HISTORY);
+        .limit(latest ? MAX_ROOM_HISTORY : PAGE_SIZE) as any;
+      if (latest?.created_at) query = query.gte("created_at", latest.created_at);
+      const { data, error } = await query;
       if (disposed || error || !data?.length) return;
       const enriched = await hydrateForumMediaUrls(await enrichPosts(data as any[]));
       enriched.forEach((post) => applyRoomEvent({ eventType: "INSERT", new: post }));
       flushRoomEvents();
     };
-    const startPostgresFallback = () => {
+    function scheduleFallbackRestart() {
+      if (disposed || fallbackRestartTimer !== null) return;
+      fallbackHealthy = false;
+      const previous = fallbackChannel;
+      fallbackChannel = null;
+      fallbackStarted = false;
+      if (previous) void supabase.removeChannel(previous);
+      fallbackRestartTimer = setTimeout(() => {
+        fallbackRestartTimer = null;
+        startPostgresFallback();
+      }, 1_500);
+    }
+    function startPostgresFallback() {
       if (fallbackStarted || disposed) return;
       fallbackStarted = true;
-      fallbackChannel = supabase.channel(`forum-pg-${activeScope.type}-${activeScope.key}`)
+      const channel = supabase.channel(`forum-pg-${activeScope.type}-${activeScope.key}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts', filter }, (payload: any) => {
         applyHydratedRoomEvent({ eventType: "INSERT", new: payload.new || {} });
       })
@@ -1265,9 +1283,25 @@ const Forum = () => {
         applyRoomEvent({ eventType: "DELETE", old: payload.old || {} });
       })
       .subscribe((status) => {
-        if (status === "SUBSCRIBED") void recoverMissedMessages();
+        if (disposed || fallbackChannel !== channel) return;
+        if (status === "SUBSCRIBED") {
+          fallbackHealthy = true;
+          void (recoveryController?.recoverNow() || recoverMissedMessages());
+          return;
+        }
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          scheduleFallbackRestart();
+        }
       });
-    };
+      fallbackChannel = channel;
+    }
+
+    recoveryController = createRealtimeRecoveryController({
+      recover: recoverMissedMessages,
+      ensureConnected: () => {
+        if (!broadcastHealthy && !fallbackHealthy) startPostgresFallback();
+      },
+    });
 
     // Broadcast is Supabase's recommended scalable path. The capability RPC
     // prevents a silent no-event state on databases that have not migrated yet.
@@ -1293,18 +1327,27 @@ const Forum = () => {
           applyRoomEvent({ eventType: "DELETE", old: getForumBroadcastRow(payload, "old") || {} });
         })
         .subscribe((status) => {
+          if (disposed) return;
           if (status === "SUBSCRIBED") {
-            void recoverMissedMessages();
+            broadcastHealthy = true;
+            void (recoveryController?.recoverNow() || recoverMissedMessages());
             return;
           }
           if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            broadcastHealthy = false;
             startPostgresFallback();
+            void recoveryController?.recoverNow();
           }
         });
-    })();
+    })().catch(() => {
+      broadcastHealthy = false;
+      startPostgresFallback();
+    });
 
     return () => {
       disposed = true;
+      recoveryController?.dispose();
+      if (fallbackRestartTimer !== null) clearTimeout(fallbackRestartTimer);
       if (flushFrame !== null) cancelAnimationFrame(flushFrame);
       if (flushTimer !== null) clearTimeout(flushTimer);
       flushRoomEvents();

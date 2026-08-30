@@ -20,6 +20,8 @@ import {
   putChatOutboxItem, subscribeChatOutbox, type ChatOutboxItem,
 } from "@/lib/chatOutbox";
 import { getForumBroadcastRow } from "@/lib/forumRealtime";
+import { createRealtimeRecoveryController } from "@/lib/realtimeRecovery";
+import { mergeChatTimeline, uniqueChatMessages as uniqueMessages } from "@/lib/chatMessages";
 import VoiceRecorder from "@/components/forum/VoiceRecorder";
 
 const PAGE_SIZE = 50;
@@ -90,17 +92,6 @@ const readInboxCache = (): ChatRoom[] => {
   catch { return []; }
 };
 
-const uniqueMessages = (items: ChatMessage[]) => {
-  const byKey = new Map<string, ChatMessage>();
-  for (const message of items) {
-    const key = message.client_id || message.id;
-    const previous = byKey.get(key);
-    if (!previous || previous.id.startsWith("optimistic-")) byKey.set(key, message);
-  }
-  return [...byKey.values()].sort((a, b) =>
-    a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
-};
-
 const chatMediaUrlCache = new Map<string, { url: string; expiresAt: number }>();
 const hydrateChatMedia = async (items: ChatMessage[]): Promise<ChatMessage[]> => {
   const now = Date.now();
@@ -158,6 +149,7 @@ const Chats = () => {
   const followLiveRef = useRef(true);
   const processingOutboxRef = useRef(false);
   const outboxPreviewUrlsRef = useRef(new Map<string, string>());
+  const messagesRef = useRef<ChatMessage[]>([]);
 
   const { data: friendIds = [] } = useQuery({
     queryKey: ["friend-ids-chat", user?.id],
@@ -214,14 +206,19 @@ const Chats = () => {
     let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
     let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
     let fallbackStarted = false;
+    let broadcastHealthy = false;
+    let fallbackHealthy = false;
+    let fallbackRestartTimer: ReturnType<typeof setTimeout> | null = null;
+    let recoveryController: ReturnType<typeof createRealtimeRecoveryController> | null = null;
     setMessages([]);
+    messagesRef.current = [];
     setHasOlder(false);
     setNewMessageCount(0);
     followLiveRef.current = true;
 
     void getCachedMessages<ChatMessage>(activeRoom.id).then((cached) => {
       if (!cancelled && cached.length) void hydrateChatMedia(cached).then((hydrated) => {
-        if (!cancelled) setMessages(uniqueMessages(hydrated));
+        if (!cancelled) setMessages((current) => mergeChatTimeline(current, hydrated, activeRoom.id));
       });
     });
 
@@ -235,7 +232,10 @@ const Chats = () => {
       if (error) { toast.error("Could not refresh messages"); return; }
       const page = await hydrateChatMedia(((data || []) as ChatMessage[]).reverse());
       if (cancelled) return;
-      setMessages(page);
+      // Cache hydration, the server query and Realtime all run concurrently.
+      // Merge instead of replacing so a message arriving during initial load
+      // can never be erased by a slower response.
+      setMessages((current) => mergeChatTimeline(current, page, activeRoom.id));
       setHasOlder(page.length === PAGE_SIZE);
       void cacheMessages(activeRoom.id, page);
       markReadSoon(activeRoom.id);
@@ -257,14 +257,36 @@ const Chats = () => {
       void queryClient.invalidateQueries({ queryKey: ["chat-rooms", user.id] });
     };
     const recoverMissedMessages = async () => {
-      const current = await getCachedMessages<ChatMessage>(activeRoom.id);
-      const latest = uniqueMessages(current)[current.length - 1];
-      let query = supabase.from("messages").select("*").eq("room_id", activeRoom.id)
-        .order("created_at", { ascending: true }).order("id", { ascending: true }).limit(PAGE_SIZE) as any;
-      if (latest) query = query.or(`created_at.gt.${latest.created_at},and(created_at.eq.${latest.created_at},id.gt.${latest.id})`);
-      const { data, error } = await query;
-      if (cancelled || error || !data?.length) return;
-      const recovered = await hydrateChatMedia(data as ChatMessage[]);
+      if (cancelled) return;
+      const roomMessages = uniqueMessages(messagesRef.current.filter((message) => message.room_id === activeRoom.id));
+      let cursor = roomMessages[roomMessages.length - 1];
+      const recoveredRows: ChatMessage[] = [];
+
+      if (!cursor) {
+        const { data, error } = await supabase.from("messages").select("*")
+          .eq("room_id", activeRoom.id)
+          .order("created_at", { ascending: false }).order("id", { ascending: false })
+          .limit(PAGE_SIZE);
+        if (cancelled || error || !data?.length) return;
+        recoveredRows.push(...((data as ChatMessage[]).reverse()));
+      } else {
+        // A sleeping mobile browser can miss more than one page of events.
+        // Walk the deterministic (created_at, id) cursor until caught up.
+        for (let page = 0; page < 100 && !cancelled; page += 1) {
+          const { data, error } = await supabase.from("messages").select("*")
+            .eq("room_id", activeRoom.id)
+            .or(`created_at.gt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.gt.${cursor.id})`)
+            .order("created_at", { ascending: true }).order("id", { ascending: true })
+            .limit(100);
+          if (error || !data?.length) break;
+          const pageRows = data as ChatMessage[];
+          recoveredRows.push(...pageRows);
+          cursor = pageRows[pageRows.length - 1];
+          if (pageRows.length < 100) break;
+        }
+      }
+      if (cancelled || recoveredRows.length === 0) return;
+      const recovered = await hydrateChatMedia(recoveredRows);
       if (!cancelled) setMessages((existing) => uniqueMessages([...existing, ...recovered]));
     };
     const bindTyping = (channel: ReturnType<typeof supabase.channel>) => channel.on("broadcast", { event: "typing" }, ({ payload }) => {
@@ -275,16 +297,45 @@ const Chats = () => {
           : current.filter((value) => value !== name));
         if (payload.typing) setTimeout(() => setTypingUsers((current) => current.filter((value) => value !== name)), 3000);
       });
-    const startFallback = () => {
+    function scheduleFallbackRestart() {
+      if (cancelled || fallbackRestartTimer !== null) return;
+      fallbackHealthy = false;
+      const previous = fallbackChannel;
+      fallbackChannel = null;
+      fallbackStarted = false;
+      if (previous) void supabase.removeChannel(previous);
+      fallbackRestartTimer = setTimeout(() => {
+        fallbackRestartTimer = null;
+        startFallback();
+      }, 1_500);
+    }
+    function startFallback() {
       if (fallbackStarted || cancelled) return;
       fallbackStarted = true;
-      fallbackChannel = bindTyping(supabase.channel(`room-${activeRoom.id}`, { config: { broadcast: { self: false } } }))
+      const channel = bindTyping(supabase.channel(`room-${activeRoom.id}`, { config: { broadcast: { self: false } } }))
         .on("postgres_changes", {
           event: "*", schema: "public", table: "messages", filter: `room_id=eq.${activeRoom.id}`,
         }, (payload: any) => { void applyMessage(payload.eventType, (payload.eventType === "DELETE" ? payload.old : payload.new) as ChatMessage); })
-        .subscribe((status) => { if (status === "SUBSCRIBED") void recoverMissedMessages(); });
-      roomChannelRef.current = fallbackChannel;
-    };
+        .subscribe((status) => {
+          if (cancelled || fallbackChannel !== channel) return;
+          if (status === "SUBSCRIBED") {
+            fallbackHealthy = true;
+            void (recoveryController?.recoverNow() || recoverMissedMessages());
+            return;
+          }
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            scheduleFallbackRestart();
+          }
+        });
+      fallbackChannel = channel;
+      roomChannelRef.current = channel;
+    }
+    recoveryController = createRealtimeRecoveryController({
+      recover: recoverMissedMessages,
+      ensureConnected: () => {
+        if (!broadcastHealthy && !fallbackHealthy) startFallback();
+      },
+    });
     void (async () => {
       const { data: broadcastReady } = await (supabase as any).rpc("chat_broadcast_ready");
       if (cancelled || broadcastReady !== true) { startFallback(); return; }
@@ -295,14 +346,24 @@ const Chats = () => {
         .on("broadcast", { event: "UPDATE" }, (payload: any) => { void applyMessage("UPDATE", getForumBroadcastRow(payload, "new") as ChatMessage); })
         .on("broadcast", { event: "DELETE" }, (payload: any) => { void applyMessage("DELETE", getForumBroadcastRow(payload, "old") as ChatMessage); })
         .subscribe((status) => {
-          if (status === "SUBSCRIBED") void recoverMissedMessages();
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") startFallback();
+          if (cancelled) return;
+          if (status === "SUBSCRIBED") {
+            broadcastHealthy = true;
+            void (recoveryController?.recoverNow() || recoverMissedMessages());
+          }
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            broadcastHealthy = false;
+            startFallback();
+            void recoveryController?.recoverNow();
+          }
         });
       roomChannelRef.current = broadcastChannel;
     })().catch(startFallback);
 
     return () => {
       cancelled = true;
+      recoveryController?.dispose();
+      if (fallbackRestartTimer !== null) clearTimeout(fallbackRestartTimer);
       roomChannelRef.current = null;
       if (broadcastChannel) void supabase.removeChannel(broadcastChannel);
       if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
@@ -312,6 +373,7 @@ const Chats = () => {
 
   useEffect(() => {
     if (!activeRoom || !messages.length) return;
+    messagesRef.current = messages;
     void cacheMessages(activeRoom.id, messages);
     if (!prependRef.current && followLiveRef.current) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     prependRef.current = false;
