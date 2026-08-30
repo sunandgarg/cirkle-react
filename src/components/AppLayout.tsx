@@ -1,5 +1,5 @@
 import { Outlet, useLocation, Navigate } from "react-router-dom";
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import BottomNav from "./BottomNav";
 import AppHeader from "./AppHeader";
 import DesktopSidebar from "./DesktopSidebar";
@@ -12,10 +12,9 @@ import GlobalSearchOverlay from "./GlobalSearchOverlay";
 import { useEffect } from "react";
 
 const AppLayout = () => {
-  const { user, profile, isVerified, refetchProfile } = useAuth();
+  const { user, profile, isVerified, refetchProfile, profileResolved } = useAuth();
   const location = useLocation();
   const [searchOpen, setSearchOpen] = useState(false);
-  const [profileReady, setProfileReady] = useState(false);
 
   // Prefetch all critical data on login
   usePrefetch(user?.id, profile);
@@ -32,26 +31,13 @@ const AppLayout = () => {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  // Always refetch profile on mount to ensure fresh verification state
-  useEffect(() => {
-    let cancelled = false;
-    if (user) {
-      refetchProfile().then(() => {
-        if (!cancelled) setProfileReady(true);
-      });
-    } else {
-      setProfileReady(true);
-    }
-    return () => { cancelled = true; };
-  }, [user, refetchProfile]);
-
   // If verified but onboarding not completed, show onboarding wizard
-  const needsOnboarding = profileReady && user && isVerified && profile && !profile.onboarding_completed;
+  const needsOnboarding = profileResolved && user && isVerified && profile && !profile.onboarding_completed;
 
   // Block unverified users on all pages except settings/profile/iit-verify
   const allowedUnverified = ["/settings", "/profile", "/iit-verify"];
   const isProtectedPage = !allowedUnverified.some(p => location.pathname.startsWith(p));
-  const showLockedOverlay = profileReady && user && !isVerified && isProtectedPage;
+  const showLockedOverlay = profileResolved && user && !isVerified && isProtectedPage;
 
   // Show onboarding wizard if verified but not onboarded
   if (needsOnboarding) {
@@ -66,7 +52,7 @@ const AppLayout = () => {
   }
 
   // Show loading while profile is being fetched to prevent flash
-  if (!profileReady && user) {
+  if (!profileResolved && user) {
     return (
       <div className="fixed inset-0 bg-background flex items-center justify-center">
         <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />

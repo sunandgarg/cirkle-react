@@ -11,6 +11,7 @@ import { readResumeRoute } from "@/lib/sessionResume";
 import { applyThemePreference, readThemePreference, type ThemePreference } from "@/lib/theme";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
+import { resolveMemberAccessState } from "@/lib/memberAccess";
 
 const GoogleMark = () => (
   <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 shrink-0">
@@ -40,7 +41,7 @@ const Auth = () => {
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { user, profile, loading: authLoading } = useAuth();
+  const { user, profile, loading: authLoading, profileResolved } = useAuth();
 
   useEffect(() => {
     applyThemePreference(theme);
@@ -55,14 +56,15 @@ const Auth = () => {
 
   // Redirect already-logged-in users
   useEffect(() => {
-    if (!authLoading && user) {
-      if (!profile?.is_verified || !profile?.onboarding_completed) {
+    const accessState = resolveMemberAccessState(profile, profileResolved);
+    if (!authLoading && user && accessState !== "pending") {
+      if (accessState !== "ready") {
         navigate("/iit-verify", { replace: true });
       } else {
         navigate(readResumeRoute(user.id), { replace: true });
       }
     }
-  }, [user, profile?.is_verified, profile?.onboarding_completed, authLoading, navigate]);
+  }, [user, profile, profileResolved, authLoading, navigate]);
 
   const handleEmailChange = (value: string) => {
     setEmail(value.trim().toLowerCase());

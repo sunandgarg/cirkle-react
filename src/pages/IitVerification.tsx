@@ -81,7 +81,7 @@ type Step = "account_details" | "select_iit" | "select_status" | "verify_email" 
 
 const IitVerification = () => {
   const navigate = useNavigate();
-  const { user, profile, refetchProfile, loading: authLoading } = useAuth();
+  const { user, profile, refetchProfile, loading: authLoading, profileResolved, profileError } = useAuth();
   const restoredProgressRef = useRef(false);
   const [step, setStep] = useState<Step>("account_details");
   const [selectedIit, setSelectedIit] = useState<IitInstitute | null>(null);
@@ -135,7 +135,7 @@ const IitVerification = () => {
   });
 
   useEffect(() => {
-    if (authLoading || !user || !progressFetched || !documentStatusFetched || restoredProgressRef.current) return;
+    if (authLoading || !profileResolved || !user || !progressFetched || !documentStatusFetched || restoredProgressRef.current) return;
     restoredProgressRef.current = true;
 
     const saved = savedProgress?.progress_data;
@@ -196,7 +196,7 @@ const IitVerification = () => {
       return;
     }
     setStep("select_iit");
-  }, [authLoading, documentStatusFetched, latestDocumentSubmission, navigate, profile, progressFetched, savedProgress, user]);
+  }, [authLoading, documentStatusFetched, latestDocumentSubmission, navigate, profile, profileResolved, progressFetched, savedProgress, user]);
 
   useEffect(() => {
     if (!user || !restoredProgressRef.current || step === "onboarding" || profile?.onboarding_completed) return;
@@ -487,6 +487,26 @@ const IitVerification = () => {
       setLoading(false);
     }
   };
+
+  if (user && !profileResolved) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-background px-6">
+        <div className="w-full max-w-sm text-center">
+          {profileError ? (
+            <>
+              <h1 className="text-xl font-bold text-foreground">Could not load your verification</h1>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{profileError}</p>
+              <Button className="mt-5 rounded-xl" onClick={() => { void refetchProfile().catch(() => undefined); }}>
+                Try again
+              </Button>
+            </>
+          ) : (
+            <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // Show onboarding wizard after verification
   if (step === "onboarding") {
