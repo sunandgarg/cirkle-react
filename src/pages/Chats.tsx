@@ -14,9 +14,17 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { cacheMessages, getCachedMessages } from "@/lib/chatCache";
 import { convertToWebP } from "@/lib/imageUtils";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  deleteChatOutboxItem, listChatOutboxItems, markChatOutboxFailed,
+  putChatOutboxItem, subscribeChatOutbox, type ChatOutboxItem,
+} from "@/lib/chatOutbox";
+import { getForumBroadcastRow } from "@/lib/forumRealtime";
+import VoiceRecorder from "@/components/forum/VoiceRecorder";
 
 const PAGE_SIZE = 50;
 const INBOX_CACHE_KEY = "cirkle:chat-inbox";
+const CALLS_ENABLED = import.meta.env.VITE_DAILY_CALLS_ENABLED === "true";
 const CallModal = lazy(() => import("@/components/CallModal"));
 
 type ChatMessage = {
@@ -25,7 +33,10 @@ type ChatMessage = {
   content: string;
   created_at: string;
   media_url?: string | null;
+  media_path?: string | null;
+  media_bucket?: string | null;
   message_type?: string;
+  voice_duration?: number | null;
   read_by?: string[] | null;
   reply_to_message_id?: string | null;
   room_id: string;
@@ -90,6 +101,32 @@ const uniqueMessages = (items: ChatMessage[]) => {
     a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
 };
 
+const chatMediaUrlCache = new Map<string, { url: string; expiresAt: number }>();
+const hydrateChatMedia = async (items: ChatMessage[]): Promise<ChatMessage[]> => {
+  const now = Date.now();
+  const byBucket = new Map<string, Set<string>>();
+  items.forEach((item) => {
+    if (!item.media_path) return;
+    const bucket = item.media_bucket || "chat-media";
+    const key = `${bucket}:${item.media_path}`;
+    const cached = chatMediaUrlCache.get(key);
+    if (!cached || cached.expiresAt <= now) {
+      if (!byBucket.has(bucket)) byBucket.set(bucket, new Set());
+      byBucket.get(bucket)!.add(item.media_path);
+    }
+  });
+  await Promise.all([...byBucket.entries()].map(async ([bucket, pathSet]) => {
+    const paths = [...pathSet];
+    const { data } = await supabase.storage.from(bucket).createSignedUrls(paths, 3600);
+    (data || []).forEach((entry, index) => {
+      if (entry.signedUrl) chatMediaUrlCache.set(`${bucket}:${paths[index]}`, { url: entry.signedUrl, expiresAt: now + 50 * 60_000 });
+    });
+  }));
+  return items.map((item) => item.media_path
+    ? { ...item, media_url: chatMediaUrlCache.get(`${item.media_bucket || "chat-media"}:${item.media_path}`)?.url || item.media_url }
+    : item);
+};
+
 const Chats = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -106,6 +143,10 @@ const Chats = () => {
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [callMode, setCallMode] = useState<"audio" | "video" | null>(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
+  const [showConversationInfo, setShowConversationInfo] = useState(false);
+  const [newMessageCount, setNewMessageCount] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -114,6 +155,9 @@ const Chats = () => {
   const readTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingBroadcastRef = useRef(0);
   const prependRef = useRef(false);
+  const followLiveRef = useRef(true);
+  const processingOutboxRef = useRef(false);
+  const outboxPreviewUrlsRef = useRef(new Map<string, string>());
 
   const { data: friendIds = [] } = useQuery({
     queryKey: ["friend-ids-chat", user?.id],
@@ -167,11 +211,18 @@ const Chats = () => {
   useEffect(() => {
     if (!activeRoom || !user) return;
     let cancelled = false;
+    let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
+    let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
+    let fallbackStarted = false;
     setMessages([]);
     setHasOlder(false);
+    setNewMessageCount(0);
+    followLiveRef.current = true;
 
     void getCachedMessages<ChatMessage>(activeRoom.id).then((cached) => {
-      if (!cancelled && cached.length) setMessages(uniqueMessages(cached));
+      if (!cancelled && cached.length) void hydrateChatMedia(cached).then((hydrated) => {
+        if (!cancelled) setMessages(uniqueMessages(hydrated));
+      });
     });
 
     void (async () => {
@@ -182,38 +233,79 @@ const Chats = () => {
         .limit(PAGE_SIZE);
       if (cancelled) return;
       if (error) { toast.error("Could not refresh messages"); return; }
-      const page = ((data || []) as ChatMessage[]).reverse();
+      const page = await hydrateChatMedia(((data || []) as ChatMessage[]).reverse());
+      if (cancelled) return;
       setMessages(page);
       setHasOlder(page.length === PAGE_SIZE);
       void cacheMessages(activeRoom.id, page);
       markReadSoon(activeRoom.id);
     })();
 
-    const channel = supabase
-      .channel(`room-${activeRoom.id}`, { config: { broadcast: { self: false } } })
-      .on("postgres_changes", {
-        event: "INSERT", schema: "public", table: "messages", filter: `room_id=eq.${activeRoom.id}`,
-      }, (payload) => {
-        const incoming = payload.new as ChatMessage;
-        setMessages((current) => uniqueMessages([...current, incoming]));
-        if (incoming.sender_id !== user.id) markReadSoon(activeRoom.id);
-        queryClient.invalidateQueries({ queryKey: ["chat-rooms", user.id] });
-      })
-      .on("broadcast", { event: "typing" }, ({ payload }) => {
+    const applyMessage = async (eventType: string, row: ChatMessage | undefined) => {
+      if (!row?.id || cancelled) return;
+      if (eventType === "DELETE") {
+        setMessages((current) => current.filter((item) => item.id !== row.id));
+        return;
+      }
+      const [incoming] = await hydrateChatMedia([row]);
+      if (cancelled) return;
+      setMessages((current) => uniqueMessages([...current.filter((item) => item.id !== incoming.id), incoming]));
+      if (eventType === "INSERT" && incoming.sender_id !== user.id) {
+        if (!followLiveRef.current) setNewMessageCount((count) => Math.min(99, count + 1));
+        markReadSoon(activeRoom.id);
+      }
+      void queryClient.invalidateQueries({ queryKey: ["chat-rooms", user.id] });
+    };
+    const recoverMissedMessages = async () => {
+      const current = await getCachedMessages<ChatMessage>(activeRoom.id);
+      const latest = uniqueMessages(current)[current.length - 1];
+      let query = supabase.from("messages").select("*").eq("room_id", activeRoom.id)
+        .order("created_at", { ascending: true }).order("id", { ascending: true }).limit(PAGE_SIZE) as any;
+      if (latest) query = query.or(`created_at.gt.${latest.created_at},and(created_at.eq.${latest.created_at},id.gt.${latest.id})`);
+      const { data, error } = await query;
+      if (cancelled || error || !data?.length) return;
+      const recovered = await hydrateChatMedia(data as ChatMessage[]);
+      if (!cancelled) setMessages((existing) => uniqueMessages([...existing, ...recovered]));
+    };
+    const bindTyping = (channel: ReturnType<typeof supabase.channel>) => channel.on("broadcast", { event: "typing" }, ({ payload }) => {
         if (!payload?.userId || payload.userId === user.id) return;
         const name = payload.name || "Someone";
         setTypingUsers((current) => payload.typing
           ? [...new Set([...current, name])]
           : current.filter((value) => value !== name));
         if (payload.typing) setTimeout(() => setTypingUsers((current) => current.filter((value) => value !== name)), 3000);
-      })
-      .subscribe();
-    roomChannelRef.current = channel;
+      });
+    const startFallback = () => {
+      if (fallbackStarted || cancelled) return;
+      fallbackStarted = true;
+      fallbackChannel = bindTyping(supabase.channel(`room-${activeRoom.id}`, { config: { broadcast: { self: false } } }))
+        .on("postgres_changes", {
+          event: "*", schema: "public", table: "messages", filter: `room_id=eq.${activeRoom.id}`,
+        }, (payload: any) => { void applyMessage(payload.eventType, (payload.eventType === "DELETE" ? payload.old : payload.new) as ChatMessage); })
+        .subscribe((status) => { if (status === "SUBSCRIBED") void recoverMissedMessages(); });
+      roomChannelRef.current = fallbackChannel;
+    };
+    void (async () => {
+      const { data: broadcastReady } = await (supabase as any).rpc("chat_broadcast_ready");
+      if (cancelled || broadcastReady !== true) { startFallback(); return; }
+      await supabase.realtime.setAuth();
+      if (cancelled) return;
+      broadcastChannel = bindTyping(supabase.channel(`chat:${activeRoom.id}`, { config: { private: true, broadcast: { self: false } } }))
+        .on("broadcast", { event: "INSERT" }, (payload: any) => { void applyMessage("INSERT", getForumBroadcastRow(payload, "new") as ChatMessage); })
+        .on("broadcast", { event: "UPDATE" }, (payload: any) => { void applyMessage("UPDATE", getForumBroadcastRow(payload, "new") as ChatMessage); })
+        .on("broadcast", { event: "DELETE" }, (payload: any) => { void applyMessage("DELETE", getForumBroadcastRow(payload, "old") as ChatMessage); })
+        .subscribe((status) => {
+          if (status === "SUBSCRIBED") void recoverMissedMessages();
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") startFallback();
+        });
+      roomChannelRef.current = broadcastChannel;
+    })().catch(startFallback);
 
     return () => {
       cancelled = true;
       roomChannelRef.current = null;
-      void supabase.removeChannel(channel);
+      if (broadcastChannel) void supabase.removeChannel(broadcastChannel);
+      if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
       if (readTimerRef.current) clearTimeout(readTimerRef.current);
     };
   }, [activeRoom, markReadSoon, queryClient, user]);
@@ -221,7 +313,7 @@ const Chats = () => {
   useEffect(() => {
     if (!activeRoom || !messages.length) return;
     void cacheMessages(activeRoom.id, messages);
-    if (!prependRef.current) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!prependRef.current && followLiveRef.current) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     prependRef.current = false;
   }, [activeRoom, messages]);
 
@@ -230,14 +322,15 @@ const Chats = () => {
     setLoadingOlder(true);
     const container = scrollRef.current;
     const oldHeight = container?.scrollHeight || 0;
+    const oldest = messages[0];
     const { data, error } = await supabase.from("messages").select("*")
       .eq("room_id", activeRoom.id)
-      .lt("created_at", messages[0].created_at)
+      .or(`created_at.lt.${oldest.created_at},and(created_at.eq.${oldest.created_at},id.lt.${oldest.id})`)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(PAGE_SIZE);
     if (!error) {
-      const page = ((data || []) as ChatMessage[]).reverse();
+      const page = await hydrateChatMedia(((data || []) as ChatMessage[]).reverse());
       prependRef.current = true;
       setMessages((current) => uniqueMessages([...page, ...current]));
       setHasOlder(page.length === PAGE_SIZE);
@@ -262,60 +355,107 @@ const Chats = () => {
     }, 1600);
   };
 
-  const persistMessage = async (optimistic: ChatMessage) => {
-    const { data, error } = await supabase.from("messages").insert({
-      room_id: optimistic.room_id,
-      sender_id: optimistic.sender_id,
-      content: optimistic.content,
-      reply_to_message_id: optimistic.reply_to_message_id || null,
-      client_id: optimistic.client_id,
-      message_type: optimistic.message_type || "text",
-      media_url: optimistic.media_url || null,
-      status: "sent",
-      read_by: [optimistic.sender_id],
-    }).select().single();
-
-    if (error) {
-      setMessages((current) => current.map((item) => item.client_id === optimistic.client_id ? { ...item, status: "failed" } : item));
-      toast.error("Message not sent. Tap retry.");
-      return;
+  const optimisticFromOutbox = useCallback((item: ChatOutboxItem): ChatMessage => {
+    let previewUrl = item.mediaUrl || null;
+    if (!previewUrl && item.media) {
+      previewUrl = outboxPreviewUrlsRef.current.get(item.id) || URL.createObjectURL(item.media.blob);
+      outboxPreviewUrlsRef.current.set(item.id, previewUrl);
     }
-    setMessages((current) => uniqueMessages(current.map((item) => item.client_id === optimistic.client_id ? data as ChatMessage : item)));
-    queryClient.invalidateQueries({ queryKey: ["chat-rooms", user?.id] });
-  };
+    return {
+      id: `optimistic-${item.id}`,
+      client_id: item.id,
+      content: item.content,
+      created_at: item.createdAt,
+      media_url: previewUrl,
+      media_path: item.mediaPath,
+      media_bucket: "chat-media",
+      message_type: item.messageType,
+      voice_duration: item.voiceDuration,
+      read_by: [item.userId],
+      reply_to_message_id: item.replyToMessageId,
+      room_id: item.roomId,
+      sender_id: item.userId,
+      status: item.lastError ? "failed" : "sending",
+    };
+  }, []);
+
+  const persistOutboxItem = useCallback(async (source: ChatOutboxItem) => {
+    let item = source;
+    try {
+      if (item.media && !item.mediaPath) {
+        const extension = item.messageType === "image" ? "webp" : item.media.type.includes("webm") ? "webm" : "m4a";
+        const path = `${item.userId}/${item.roomId}/${item.id}.${extension}`;
+        const { error: uploadError } = await supabase.storage.from("chat-media").upload(path, item.media.blob, {
+          contentType: item.media.type,
+          cacheControl: "31536000",
+          upsert: true,
+        });
+        if (uploadError) throw uploadError;
+        item = { ...item, mediaPath: path };
+        await putChatOutboxItem(item);
+      }
+      let { data, error } = await supabase.from("messages").insert({
+        room_id: item.roomId,
+        sender_id: item.userId,
+        content: item.content,
+        reply_to_message_id: item.replyToMessageId || null,
+        client_id: item.id,
+        message_type: item.messageType,
+        media_url: null,
+        media_path: item.mediaPath || null,
+        media_bucket: "chat-media",
+        voice_duration: item.voiceDuration || null,
+        status: "sent",
+        read_by: [item.userId],
+      } as any).select().single();
+      if (error?.code === "23505") {
+        const existing = await supabase.from("messages").select("*").eq("sender_id", item.userId)
+          .eq("client_id", item.id).maybeSingle();
+        data = existing.data;
+        error = existing.error;
+      }
+      if (error || !data) throw error || new Error("Message could not be persisted");
+      const [delivered] = await hydrateChatMedia([data as ChatMessage]);
+      await deleteChatOutboxItem(item.id);
+      const preview = outboxPreviewUrlsRef.current.get(item.id);
+      if (preview) { URL.revokeObjectURL(preview); outboxPreviewUrlsRef.current.delete(item.id); }
+      setMessages((current) => uniqueMessages(current.map((message) => message.client_id === item.id ? delivered : message)));
+      void queryClient.invalidateQueries({ queryKey: ["chat-rooms", user?.id] });
+      return delivered;
+    } catch (error) {
+      await markChatOutboxFailed(item, error);
+      setMessages((current) => current.map((message) => message.client_id === item.id ? { ...message, status: "failed" } : message));
+      throw error;
+    }
+  }, [queryClient, user?.id]);
 
   const sendMessage = async () => {
     const content = newMessage.trim();
     if (!content || !user || !activeRoom) return;
-    const clientId = crypto.randomUUID();
-    const optimistic: ChatMessage = {
-      id: `optimistic-${clientId}`,
-      client_id: clientId,
-      content,
-      created_at: new Date().toISOString(),
-      message_type: "text",
-      read_by: [user.id],
-      reply_to_message_id: replyTo?.id.startsWith("optimistic-") ? null : replyTo?.id || null,
-      room_id: activeRoom.id,
-      sender_id: user.id,
-      status: "sending",
+    const item: ChatOutboxItem = {
+      id: crypto.randomUUID(), userId: user.id, roomId: activeRoom.id, content,
+      createdAt: new Date().toISOString(), messageType: "text",
+      replyToMessageId: replyTo?.id.startsWith("optimistic-") ? null : replyTo?.id || null,
+      attempts: 0, nextAttemptAt: Date.now() + 30_000,
     };
     setNewMessage("");
     setReplyTo(null);
-    setMessages((current) => uniqueMessages([...current, optimistic]));
-    await persistMessage(optimistic);
+    setShowEmojiPicker(false);
+    followLiveRef.current = true;
+    await putChatOutboxItem(item);
+    setMessages((current) => uniqueMessages([...current, optimisticFromOutbox(item)]));
+    try { await persistOutboxItem(item); } catch { toast.error("Message queued. It will retry automatically."); }
   };
 
   const retryMessage = async (message: ChatMessage) => {
     if (message.status !== "failed") return;
-    setMessages((current) => current.map((item) => item.id === message.id ? { ...item, status: "sending" } : item));
-    const { data: existing } = await supabase.from("messages").select("*").eq("sender_id", message.sender_id)
-      .eq("client_id", message.client_id!).maybeSingle();
-    if (existing) {
-      setMessages((current) => uniqueMessages(current.map((item) => item.client_id === message.client_id ? existing as ChatMessage : item)));
-      return;
-    }
-    await persistMessage({ ...message, status: "sending" });
+    const queued = await listChatOutboxItems(message.sender_id);
+    const item = queued.find((candidate) => candidate.id === message.client_id);
+    if (!item) { toast.error("This retry is no longer available"); return; }
+    const retry = { ...item, nextAttemptAt: 0, lastError: null };
+    await putChatOutboxItem(retry);
+    setMessages((current) => current.map((entry) => entry.client_id === retry.id ? { ...entry, status: "sending" } : entry));
+    try { await persistOutboxItem(retry); } catch { toast.error("Still offline. Retry is scheduled."); }
   };
 
   const sendImage = async (file: File) => {
@@ -324,35 +464,70 @@ const Chats = () => {
     setSendingImage(true);
     try {
       const optimized = await convertToWebP(file, 0.76, 1600);
-      const clientId = crypto.randomUUID();
-      const path = `${user.id}/${activeRoom.id}/${clientId}.webp`;
-      const { error: uploadError } = await supabase.storage.from("post-images").upload(path, optimized, {
-        contentType: "image/webp",
-        cacheControl: "31536000",
-        upsert: false,
-      });
-      if (uploadError) throw uploadError;
-      const { data: urlData } = supabase.storage.from("post-images").getPublicUrl(path);
-      const optimistic: ChatMessage = {
-        id: `optimistic-${clientId}`,
-        client_id: clientId,
-        content: "Photo",
-        created_at: new Date().toISOString(),
-        media_url: urlData.publicUrl,
-        message_type: "image",
-        read_by: [user.id],
-        room_id: activeRoom.id,
-        sender_id: user.id,
-        status: "sending",
+      const item: ChatOutboxItem = {
+        id: crypto.randomUUID(), userId: user.id, roomId: activeRoom.id,
+        content: "Photo", createdAt: new Date().toISOString(), messageType: "image",
+        media: { blob: optimized, name: `${file.name}.webp`, type: "image/webp" },
+        attempts: 0, nextAttemptAt: Date.now() + 30_000,
       };
-      setMessages((current) => uniqueMessages([...current, optimistic]));
-      await persistMessage(optimistic);
+      followLiveRef.current = true;
+      await putChatOutboxItem(item);
+      setMessages((current) => uniqueMessages([...current, optimisticFromOutbox(item)]));
+      try { await persistOutboxItem(item); } catch { toast.error("Photo queued. It will retry automatically."); }
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : "Image upload failed");
     } finally {
       setSendingImage(false);
     }
   };
+
+  const sendVoiceMessage = async (voiceUrl: string, duration: number, voicePath?: string) => {
+    if (!user || !activeRoom || !voicePath) throw new Error("Voice note could not be prepared");
+    const item: ChatOutboxItem = {
+      id: crypto.randomUUID(), userId: user.id, roomId: activeRoom.id,
+      content: "Voice message", createdAt: new Date().toISOString(), messageType: "voice",
+      mediaPath: voicePath, mediaUrl: voiceUrl, voiceDuration: duration,
+      attempts: 0, nextAttemptAt: Date.now() + 30_000,
+    };
+    followLiveRef.current = true;
+    await putChatOutboxItem(item);
+    setMessages((current) => uniqueMessages([...current, optimisticFromOutbox(item)]));
+    setShowVoiceRecorder(false);
+    try { await persistOutboxItem(item); } catch { toast.error("Voice note queued. It will retry automatically."); }
+  };
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let disposed = false;
+    const sync = async () => {
+      const queued = await listChatOutboxItems(user.id);
+      if (disposed) return;
+      if (activeRoom) {
+        const roomItems = queued.filter((item) => item.roomId === activeRoom.id).map(optimisticFromOutbox);
+        setMessages((current) => uniqueMessages([...current, ...roomItems]));
+      }
+      const due = queued.find((item) => item.nextAttemptAt <= Date.now());
+      if (!due || !navigator.onLine || processingOutboxRef.current) return;
+      processingOutboxRef.current = true;
+      try { await persistOutboxItem(due); } catch { /* failure state is persisted by persistOutboxItem */ }
+      finally { processingOutboxRef.current = false; }
+    };
+    void sync();
+    const unsubscribe = subscribeChatOutbox(() => void sync());
+    const timer = window.setInterval(() => void sync(), 5_000);
+    window.addEventListener("online", sync);
+    return () => {
+      disposed = true;
+      unsubscribe();
+      window.clearInterval(timer);
+      window.removeEventListener("online", sync);
+    };
+  }, [activeRoom, optimisticFromOutbox, persistOutboxItem, user?.id]);
+
+  useEffect(() => () => {
+    outboxPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    outboxPreviewUrlsRef.current.clear();
+  }, []);
 
   const startDM = useCallback(async (peerId: string) => {
     if (!user || !friendIds.includes(peerId)) return;
@@ -380,13 +555,43 @@ const Chats = () => {
     });
   }, [friendIds, searchParams, setSearchParams, startDM]);
 
-  const groupedMessages = messages.reduce<{ date: string; items: ChatMessage[] }[]>((groups, message) => {
-    const date = formatMessageDate(message.created_at);
-    const last = groups[groups.length - 1];
-    if (last?.date === date) last.items.push(message);
-    else groups.push({ date, items: [message] });
-    return groups;
-  }, []);
+  const timelineRows = useMemo(() => {
+    const rows: Array<{ type: "date"; key: string; label: string } | { type: "message"; key: string; message: ChatMessage }> = [];
+    let previousDate = "";
+    messages.forEach((message) => {
+      const date = formatMessageDate(message.created_at);
+      if (date !== previousDate) {
+        rows.push({ type: "date", key: `date-${date}`, label: date });
+        previousDate = date;
+      }
+      rows.push({ type: "message", key: message.client_id || message.id, message });
+    });
+    return rows;
+  }, [messages]);
+  const messageVirtualizer = useVirtualizer({
+    count: timelineRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) => {
+      const row = timelineRows[index];
+      if (row?.type === "date") return 44;
+      if (row?.message.message_type === "image") return 260;
+      if (row?.message.message_type === "voice") return 84;
+      return 66;
+    },
+    getItemKey: (index) => timelineRows[index]?.key || index,
+    overscan: 14,
+  });
+  const scrollToLatest = useCallback(() => {
+    if (!timelineRows.length) return;
+    followLiveRef.current = true;
+    setNewMessageCount(0);
+    messageVirtualizer.scrollToIndex(timelineRows.length - 1, { align: "end", behavior: "smooth" });
+  }, [messageVirtualizer, timelineRows.length]);
+
+  useEffect(() => {
+    if (!activeRoom || !timelineRows.length || prependRef.current || !followLiveRef.current) return;
+    requestAnimationFrame(() => messageVirtualizer.scrollToIndex(timelineRows.length - 1, { align: "end" }));
+  }, [activeRoom, messageVirtualizer, timelineRows.length]);
 
   if (activeRoom) {
     return (
@@ -400,26 +605,41 @@ const Chats = () => {
             <p className="text-sm font-semibold text-primary-foreground truncate">{activeRoom.displayName}</p>
             <p className="text-[11px] text-primary-foreground/70">{typingUsers.length ? `${typingUsers.join(", ")} typing…` : activeRoom.is_group ? "Group chat" : "Connected"}</p>
           </div>
-          <button onClick={() => setCallMode("video")} className="p-2 text-primary-foreground/80" aria-label="Video call"><Video className="w-5 h-5" /></button>
-          <button onClick={() => setCallMode("audio")} className="p-2 text-primary-foreground/80" aria-label="Audio call"><Phone className="w-5 h-5" /></button>
-          <button className="p-2 text-primary-foreground/80" aria-label="Conversation options"><MoreVertical className="w-5 h-5" /></button>
+          {CALLS_ENABLED && <button onClick={() => setCallMode("video")} className="p-2 text-primary-foreground/80" aria-label="Video call"><Video className="w-5 h-5" /></button>}
+          {CALLS_ENABLED && <button onClick={() => setCallMode("audio")} className="p-2 text-primary-foreground/80" aria-label="Audio call"><Phone className="w-5 h-5" /></button>}
+          <button onClick={() => setShowConversationInfo(true)} className="p-2 text-primary-foreground/80" aria-label="Conversation options"><MoreVertical className="w-5 h-5" /></button>
         </header>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4 chat-wallpaper overscroll-contain">
+        <div ref={scrollRef} onScroll={(event) => {
+          const element = event.currentTarget;
+          const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 140;
+          followLiveRef.current = nearBottom;
+          if (nearBottom) setNewMessageCount(0);
+        }} className="relative flex-1 overflow-y-auto px-3 py-4 chat-wallpaper overscroll-contain">
           {hasOlder && <div className="flex justify-center mb-3"><Button size="sm" variant="secondary" disabled={loadingOlder} onClick={loadOlder}>{loadingOlder && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}Load earlier messages</Button></div>}
-          {groupedMessages.map((group) => (
-            <div key={group.date}>
-              <div className="flex items-center justify-center my-3"><span className="text-[11px] bg-card/90 text-muted-foreground px-3 py-1 rounded-lg shadow-sm font-medium">{group.date}</span></div>
-              {group.items.map((message) => {
+          <div style={{ height: `${messageVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+            {messageVirtualizer.getVirtualItems().map((virtualRow) => {
+              const row = timelineRows[virtualRow.index];
+              if (!row) return null;
+              return (
+                <div key={row.key} data-index={virtualRow.index} ref={messageVirtualizer.measureElement}
+                  style={{ position: "absolute", left: 0, top: 0, width: "100%", transform: `translateY(${virtualRow.start}px)` }}>
+                  {row.type === "date" ? (
+                    <div className="flex items-center justify-center py-3"><span className="text-[11px] bg-card/90 text-muted-foreground px-3 py-1 rounded-lg shadow-sm font-medium">{row.label}</span></div>
+                  ) : (() => {
+                const message = row.message;
                 const isMine = message.sender_id === user?.id;
                 const legacyImage = message.content.startsWith("📷 http") ? message.content.replace("📷 ", "") : null;
                 const imageUrl = message.message_type === "image" ? message.media_url : legacyImage;
                 const replied = message.reply_to_message_id ? messages.find((item) => item.id === message.reply_to_message_id) : null;
                 return (
-                  <div key={message.client_id || message.id} className={`flex ${isMine ? "justify-end" : "justify-start"} mb-1`}>
+                  <div className={`flex ${isMine ? "justify-end" : "justify-start"} pb-1`}>
                     <button onClick={() => retryMessage(message)} disabled={message.status !== "failed"} className={`text-left max-w-[80%] rounded-2xl px-3.5 py-2 shadow-sm relative group ${isMine ? "bg-primary text-primary-foreground rounded-br-md" : "bg-card text-foreground rounded-bl-md"} ${message.status === "failed" ? "opacity-70" : ""}`}>
                       {replied && <div className={`text-[11px] mb-1 px-2 py-1 rounded-lg border-l-2 truncate ${isMine ? "bg-white/10 border-white/30" : "bg-muted border-primary/30"}`}>{replied.message_type === "image" ? "Photo" : replied.content}</div>}
-                      {imageUrl ? <img src={imageUrl} alt="Shared" className="rounded-xl max-h-64 object-cover" loading="lazy" decoding="async" /> : <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{message.content}</p>}
+                      {imageUrl ? <img src={imageUrl} alt="Shared" className="rounded-xl max-h-64 object-cover" loading="lazy" decoding="async" />
+                        : message.message_type === "voice" && message.media_url
+                          ? <audio controls preload="metadata" src={message.media_url} className="h-10 max-w-full" aria-label="Voice message" />
+                          : <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{message.content}</p>}
                       <div className={`flex items-center justify-end gap-1 mt-0.5 ${isMine ? "text-primary-foreground/60" : "text-muted-foreground"}`}>
                         {message.status === "failed" && <><RotateCcw className="w-3 h-3" /><span className="text-[10px]">Retry</span></>}
                         <span className="text-[10px]">{new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
@@ -429,21 +649,34 @@ const Chats = () => {
                     </button>
                   </div>
                 );
-              })}
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
+                  })()}
+                </div>
+              );
+            })}
+          </div>
+          <div ref={messagesEndRef} className="h-px" />
         </div>
 
+        {newMessageCount > 0 && <button onClick={scrollToLatest} className="absolute bottom-24 right-4 z-30 rounded-full bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground shadow-lg">{newMessageCount} new {newMessageCount === 1 ? "message" : "messages"}</button>}
+
         {replyTo && <div className="bg-muted/50 px-4 py-2 flex items-center gap-2 border-t border-border"><Reply className="w-4 h-4 text-primary" /><p className="text-xs text-muted-foreground flex-1 truncate">{replyTo.message_type === "image" ? "Photo" : replyTo.content}</p><button onClick={() => setReplyTo(null)}><X className="w-4 h-4" /></button></div>}
+        {showEmojiPicker && <div className="flex flex-wrap gap-1 border-t border-border bg-card px-3 py-2">
+          {["😀","😂","😍","🥳","😢","😮","👍","👏","🙏","❤️","🔥","🎉"].map((emoji) => <button key={emoji} onClick={() => { setNewMessage((value) => `${value}${emoji}`); setShowEmojiPicker(false); }} className="h-9 w-9 rounded-lg text-xl hover:bg-muted" aria-label={`Add ${emoji}`}>{emoji}</button>)}
+        </div>}
+        {showVoiceRecorder && user && <div className="border-t border-border bg-card px-3 py-2"><VoiceRecorder userId={user.id} bucket="chat-media" pathPrefix={activeRoom.id} onSend={sendVoiceMessage} onCancel={() => setShowVoiceRecorder(false)} /></div>}
         <div className="flex-shrink-0 bg-card border-t border-border px-2 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex items-center gap-2">
-          <button className="p-2 text-muted-foreground" aria-label="Emoji"><Smile className="w-5 h-5" /></button>
+          <button onClick={() => { setShowEmojiPicker((value) => !value); setShowVoiceRecorder(false); }} className="p-2 text-muted-foreground" aria-label="Emoji"><Smile className="w-5 h-5" /></button>
           <button onClick={() => fileInputRef.current?.click()} disabled={sendingImage} className="p-2 text-muted-foreground" aria-label="Attach image">{sendingImage ? <Loader2 className="w-5 h-5 animate-spin" /> : <Paperclip className="w-5 h-5" />}</button>
           <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void sendImage(file); event.target.value = ""; }} />
           <Input placeholder="Type a message" value={newMessage} onChange={(event) => { setNewMessage(event.target.value); handleTyping(); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} className="flex-1 h-10 rounded-full bg-secondary border-0" />
-          {newMessage.trim() ? <button onClick={() => void sendMessage()} className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground" aria-label="Send"><Send className="w-4 h-4" /></button> : <button className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground" aria-label="Voice message"><Mic className="w-4 h-4" /></button>}
+          {newMessage.trim() ? <button onClick={() => void sendMessage()} className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground" aria-label="Send"><Send className="w-4 h-4" /></button> : <button onClick={() => { setShowVoiceRecorder((value) => !value); setShowEmojiPicker(false); }} className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground" aria-label="Voice message"><Mic className="w-4 h-4" /></button>}
         </div>
         {callMode && <Suspense fallback={null}><CallModal roomId={activeRoom.id} mode={callMode} onClose={() => setCallMode(null)} /></Suspense>}
+        <Dialog open={showConversationInfo} onOpenChange={setShowConversationInfo}>
+          <DialogContent className="max-w-sm"><DialogHeader><DialogTitle>Conversation details</DialogTitle></DialogHeader>
+            <div className="flex items-center gap-3 py-2"><div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-primary/10">{activeRoom.displayAvatar ? <img src={activeRoom.displayAvatar} alt="" className="h-full w-full object-cover" /> : <span className="font-bold text-primary">{getInitials(activeRoom.displayName)}</span>}</div><div><p className="font-semibold">{activeRoom.displayName}</p><p className="text-xs text-muted-foreground">{activeRoom.is_group ? "System-managed group" : "Connected member"}</p></div></div>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }

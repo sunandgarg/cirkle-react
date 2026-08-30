@@ -31,42 +31,21 @@ export const publishForumOutboxItem = async (item: ForumOutboxItem) => {
     fileUrl = await createForumMediaSignedUrl("forum-files", filePath);
   }
 
-  const postData: any = {
-    id: item.id, community_id: "default", scope_type: item.scopeType, scope_key: item.scopeKey,
-    channel: item.scopeType.toLowerCase().replace(/_/g, "-"),
-    content: item.content || (item.image ? "📷" : item.file ? `📎 ${item.file.name}` : item.voicePath ? "🎤 Voice message" : ""),
-    is_anonymous: item.isAnonymous, author_id: item.userId, reply_to_id: item.replyToId,
-    image_url: imagePath ? null : imageUrl, image_path: imagePath,
-    file_url: null, file_path: filePath,
-    file_name: item.file?.name || null, file_size: item.file?.blob.size || null, file_type: item.file?.type || null,
-    voice_url: item.voicePath ? null : item.voiceUrl, voice_path: item.voicePath || null, voice_duration: item.voiceDuration || null,
-  };
-  let { data: post, error } = await supabase.from("posts").insert(postData).select("*").single();
-  // Keep delivery working during a rolling deployment where the frontend can
-  // reach an older schema for a few minutes before the migration is applied.
-  if (error?.code === "42703") {
-    const legacyPostData = { ...postData };
-    delete legacyPostData.image_path;
-    delete legacyPostData.file_path;
-    delete legacyPostData.voice_path;
-    legacyPostData.image_url = imagePath
-      ? supabase.storage.from("post-images").getPublicUrl(imagePath).data.publicUrl
-      : imageUrl;
-    legacyPostData.file_url = filePath
-      ? supabase.storage.from("forum-files").getPublicUrl(filePath).data.publicUrl
-      : null;
-    legacyPostData.voice_url = item.voicePath
-      ? supabase.storage.from("voice-notes").getPublicUrl(item.voicePath).data.publicUrl
-      : item.voiceUrl;
-    const legacyInsert = await supabase.from("posts").insert(legacyPostData).select("*").single();
-    post = legacyInsert.data;
-    error = legacyInsert.error;
-  }
-  if (error?.code === "23505") {
-    const existing = await supabase.from("posts").select("*").eq("id", item.id).single();
-    post = existing.data;
-    error = existing.error;
-  }
+  const { data: post, error } = await (supabase as any).rpc("create_forum_post", {
+    p_id: item.id,
+    p_scope_type: item.scopeType,
+    p_scope_key: item.scopeKey,
+    p_content: item.content || (item.image ? "📷" : item.file ? `📎 ${item.file.name}` : item.voicePath ? "🎤 Voice message" : ""),
+    p_is_anonymous: item.isAnonymous,
+    p_reply_to_id: item.replyToId,
+    p_image_path: imagePath,
+    p_file_path: filePath,
+    p_file_name: item.file?.name || null,
+    p_file_size: item.file?.blob.size || null,
+    p_file_type: item.file?.type || null,
+    p_voice_path: item.voicePath || null,
+    p_voice_duration: item.voiceDuration || null,
+  });
   if (error || !post) throw error || new Error("Message could not be persisted");
 
   const validOptions = (item.pollOptions || []).map((option) => option.trim()).filter(Boolean);

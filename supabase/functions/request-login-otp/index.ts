@@ -110,7 +110,8 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (!supabaseUrl || !serviceKey) return json({ error: "Login OTP service is not configured" }, 503);
+    const pepper = Deno.env.get("VERIFICATION_CODE_PEPPER");
+    if (!supabaseUrl || !serviceKey || !pepper) return json({ error: "Login OTP service is not configured" }, 503);
 
     const body = await req.json().catch(() => ({}));
     const email = normalizeEmail(body.email);
@@ -120,6 +121,13 @@ Deno.serve(async (req) => {
     const admin = createClient(supabaseUrl, serviceKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
+    const forwardedFor = req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+    const { data: allowed, error: rateError } = await admin.rpc("reserve_login_otp_attempt", {
+      p_email_hash: await sha256Hex(`${pepper}:email:${email}`),
+      p_ip_hash: await sha256Hex(`${pepper}:ip:${forwardedFor}`),
+    });
+    if (rateError) throw new Error("Login code rate limiter is unavailable");
+    if (allowed !== true) return json({ error: "Too many code requests. Wait 15 minutes and try again." }, 429);
     const { data, error } = await admin.auth.admin.generateLink({
       type: "magiclink",
       email,

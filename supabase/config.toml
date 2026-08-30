@@ -42,3 +42,12 @@ verify_jwt = true
 
 [functions.scan-jobs]
 verify_jwt = true
+
+[functions.giphy-search]
+verify_jwt = true
+
+[functions.daily-create-room]
+verify_jwt = true
+
+[functions.create-consult-chat]
+verify_jwt = true

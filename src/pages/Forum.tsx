@@ -534,7 +534,8 @@ const Forum = () => {
       const q = buildScopeQuery(activeScope.type, activeScope.key);
       const { data: posts } = await q;
       if (!posts?.length) return [];
-      const authorIds = [...new Set((posts as any[]).map((p: any) => p.author_id))].slice(0, 30) as string[];
+      const authorIds = [...new Set((posts as any[]).map((p: any) => p.author_id).filter(Boolean))].slice(0, 30) as string[];
+      if (!authorIds.length) return [];
       const { data: profiles } = await supabase.from("profiles").select("user_id, name, avatar_url, headline, iit_name, is_verified, slug").in("user_id", authorIds);
       return profiles || [];
     },
@@ -899,83 +900,23 @@ const Forum = () => {
         return { localPost, serverPost: null, scopeType: activeScope.type, scopeKey: activeScope.key, sendIdentity };
       }
 
-      if (queuedItem) {
-        const serverPost = await publishForumOutboxItem(queuedItem);
+      const deliveryItem = queuedItem || buildCurrentOutboxItem();
+      if (!deliveryItem) throw new Error("Message could not be prepared for delivery");
+      await putForumOutboxItem(deliveryItem);
+      try {
+        const serverPost = await publishForumOutboxItem(deliveryItem);
+        await deleteForumOutboxItem(deliveryItem.id);
         return {
-          localPost: null, serverPost: { ...serverPost, profile: queuedItem.isAnonymous ? null : profile },
-          scopeType: queuedItem.scopeType, scopeKey: queuedItem.scopeKey,
-          sendIdentity: { id: queuedItem.id, fingerprint: sendIdentity.fingerprint },
+          localPost: null,
+          serverPost: { ...serverPost, profile: deliveryItem.isAnonymous ? null : profile },
+          scopeType: deliveryItem.scopeType,
+          scopeKey: deliveryItem.scopeKey,
+          sendIdentity: { id: deliveryItem.id, fingerprint: sendIdentity.fingerprint },
         };
+      } catch (error) {
+        await markForumOutboxFailed(deliveryItem, error);
+        throw error;
       }
-
-      let imageUrl: string | null = null;
-      if (imageFile) {
-        const { convertToWebP } = await import("@/lib/imageUtils");
-        const optimized = await convertToWebP(imageFile, 0.75, 800);
-        const path = `${user.id}/${sendIdentity.id}.webp`;
-        const { error: uploadError } = await supabase.storage.from("post-images").upload(path, optimized, { upsert: true });
-        if (uploadError) throw new Error("Failed to upload image.");
-        const { data: urlData } = supabase.storage.from("post-images").getPublicUrl(path);
-        imageUrl = urlData.publicUrl;
-      }
-
-      let fileUrl: string | null = null;
-      let fileName: string | null = null;
-      let fileSize: number | null = null;
-      let fileType: string | null = null;
-      if (attachedFile) {
-        const path = `${user.id}/${sendIdentity.id}-${attachedFile.name}`;
-        const { error: uploadError } = await supabase.storage.from("forum-files").upload(path, attachedFile, { upsert: true });
-        if (uploadError) throw new Error("Failed to upload file.");
-        const { data: urlData } = supabase.storage.from("forum-files").getPublicUrl(path);
-        fileUrl = urlData.publicUrl;
-        fileName = attachedFile.name;
-        fileSize = attachedFile.size;
-        fileType = attachedFile.type;
-      }
-
-      const postData: any = {
-        id: sendIdentity.id,
-        community_id: "default", scope_type: activeScope.type, scope_key: activeScope.key,
-        channel: activeScope.type.toLowerCase().replace(/_/g, "-"),
-        content: content || (imageUrl ? "📷" : fileUrl ? `📎 ${fileName}` : showPollCreator ? `📊 ${pollQuestion}` : ""),
-        is_anonymous: isAnonymous, author_id: user.id, image_url: imageUrl,
-        reply_to_id: replyTo?.id || null,
-        file_url: fileUrl, file_name: fileName, file_size: fileSize, file_type: fileType,
-      };
-
-      let { data: newPost, error } = await supabase.from("posts").insert(postData).select("*").single();
-      if (error?.code === "23505") {
-        const existing = await supabase.from("posts").select("*").eq("id", sendIdentity.id).single();
-        newPost = existing.data;
-        error = existing.error;
-      }
-      if (error || !newPost) {
-        const insertError = new Error(error?.message || "Failed to send message.") as Error & { code?: string };
-        insertError.code = error?.code;
-        throw insertError;
-      }
-
-      if (showPollCreator && pollQuestion.trim() && newPost) {
-        const validOptions = pollOptions.filter(o => o.trim());
-        if (validOptions.length >= 2) {
-          const { error: pollError } = await supabase.from("polls").upsert(
-            { post_id: newPost.id, question: pollQuestion.trim(), options: validOptions },
-            { onConflict: "post_id" },
-          );
-          if (pollError) throw pollError;
-        }
-      }
-      const optimisticPost = {
-        ...newPost,
-        profile: isAnonymous ? null : profile,
-        poll: showPollCreator && pollQuestion.trim() ? {
-          id: `pending-poll-${newPost.id}`, question: pollQuestion.trim(),
-          options: pollOptions.filter((option) => option.trim()),
-        } : null,
-        replyCount: 0, reactions: {}, myReactions: [],
-      };
-      return { localPost: null, serverPost: optimisticPost, scopeType: activeScope.type, scopeKey: activeScope.key, sendIdentity };
     },
     onMutate: async (queuedItem?: ForumOutboxItem) => {
       if (!user) return { pendingId: null };
@@ -1008,7 +949,7 @@ const Forum = () => {
         setTestRoomPosts(appendForumTestPost(
           result.scopeType, result.scopeKey, result.localPost,
         ));
-      } else if (result?.serverPost) {
+      } else if (result?.serverPost && !result.serverPost.reply_to_id) {
         queryClient.setQueryData(
           ["forum-posts", user?.id, result.scopeType, result.scopeKey],
           (current: any) => {
@@ -1019,6 +960,21 @@ const Forum = () => {
             return { ...current, posts: nextPosts, isDemo: false, demos: [] };
           },
         );
+      } else if (result?.serverPost?.reply_to_id) {
+        const parentId = result.serverPost.reply_to_id;
+        queryClient.setQueryData(["thread-replies", parentId], (current: any) => {
+          if (!current?.pages) return current;
+          const pages = current.pages.map((page: any[]) => page.filter((reply) => reply.id !== result.serverPost.id));
+          pages[0] = [result.serverPost, ...(pages[0] || [])].sort((left: any, right: any) =>
+            String(right.created_at).localeCompare(String(left.created_at)) || String(right.id).localeCompare(String(left.id)));
+          return { ...current, pages };
+        });
+        queryClient.setQueriesData({ queryKey: ["forum-posts"] }, (current: any) => current?.posts ? {
+          ...current,
+          posts: current.posts.map((post: any) => post.id === parentId
+            ? { ...post, replyCount: Math.max(post.replyCount || 0, (post.replyCount || 0) + 1) }
+            : post),
+        } : current);
       }
       if (context?.pendingId) {
         setOutboxPosts((current) => current.filter((post) => post.id !== context.pendingId));
@@ -1045,7 +1001,6 @@ const Forum = () => {
           ? { ...post, is_pending: false, is_failed: true }
           : post));
       }
-      if (queuedItem) void markForumOutboxFailed(queuedItem, err);
       if (err?.code === "42501" || /row-level security|permission denied/i.test(err?.message || "")) {
         toast.error("Your verified community access is still syncing. Refresh once, then try again.");
         void queryClient.invalidateQueries({ queryKey: ["canonical-academic-identity", user?.id] });
@@ -1117,7 +1072,7 @@ const Forum = () => {
       if (isDemoId(editingPost.id)) { toast("This is a demo message"); return; }
       const { error } = await supabase.from("posts")
         .update({ content: editContent.trim(), edited_at: new Date().toISOString() } as any)
-        .eq("id", editingPost.id).eq("author_id", user.id);
+        .eq("id", editingPost.id);
       if (error) throw new Error("Could not edit message");
     },
     onSuccess: () => {
@@ -1135,7 +1090,7 @@ const Forum = () => {
       if (forEveryone) {
         const { error } = await supabase.from("posts")
           .update({ is_deleted_for_everyone: true } as any)
-          .eq("id", postId).eq("author_id", user.id);
+          .eq("id", postId);
         if (error) {
           if (error.message.includes("3 minutes")) throw new Error("Cannot delete for everyone after 3 minutes");
           if (error.message.includes("sender")) throw new Error("Only the sender can delete for everyone");
@@ -1207,7 +1162,7 @@ const Forum = () => {
   /* ─── Realtime: subscribe only to the open room ─── */
   useEffect(() => {
     if (readMobileTestSession()) return;
-    const filter = `scope_key=eq.${activeScope.key}`;
+    const filter = `scope_identity=eq.${activeScope.type}:${activeScope.key}`;
     const roomQueryKey = ["forum-posts", user?.id, activeScope.type, activeScope.key] as const;
     const pendingEvents: ForumRealtimeEvent[] = [];
     let flushFrame: number | null = null;
@@ -2594,7 +2549,7 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
   const [swipeOffset, setSwipeOffset] = useState(0);
   const swipeThreshold = 60;
 
-  const isMine = post.author_id === userId;
+  const isMine = post.viewer_is_author === true || post.author_id === userId;
   const displayName = post.is_anonymous ? (isMine ? "You · Anonymous" : "Anonymous") : (post.profile?.name || "User");
   const avatar = post.is_anonymous ? null : post.profile?.avatar_url;
   const colors = getUserColor(post.is_anonymous ? "anon" : post.author_id);

@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.3";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -10,6 +11,18 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader) return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+    status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+  const authClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
+    global: { headers: { Authorization: authHeader } }, auth: { persistSession: false },
+  });
+  const { data: { user } } = await authClient.auth.getUser();
+  if (!user) return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+    status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+
   const GIPHY_API_KEY = Deno.env.get('GIPHY_API_KEY');
   if (!GIPHY_API_KEY) {
     return new Response(JSON.stringify({ error: 'GIPHY_API_KEY not configured' }), {
@@ -19,14 +32,17 @@ serve(async (req) => {
 
   try {
     const { q, type = 'gifs', limit = 20, offset = 0 } = await req.json();
+    const safeQuery = typeof q === 'string' ? q.trim().slice(0, 80) : '';
+    const safeLimit = Math.max(1, Math.min(30, Number(limit) || 20));
+    const safeOffset = Math.max(0, Math.min(5000, Number(offset) || 0));
 
     // Support both 'gifs' and 'stickers' types
     const apiType = type === 'stickers' ? 'stickers' : 'gifs';
     let url: string;
-    if (q && q.trim()) {
-      url = `https://api.giphy.com/v1/${apiType}/search?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}&rating=pg-13&lang=en`;
+    if (safeQuery) {
+      url = `https://api.giphy.com/v1/${apiType}/search?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(safeQuery)}&limit=${safeLimit}&offset=${safeOffset}&rating=pg-13&lang=en`;
     } else {
-      url = `https://api.giphy.com/v1/${apiType}/trending?api_key=${GIPHY_API_KEY}&limit=${limit}&offset=${offset}&rating=pg-13`;
+      url = `https://api.giphy.com/v1/${apiType}/trending?api_key=${GIPHY_API_KEY}&limit=${safeLimit}&offset=${safeOffset}&rating=pg-13`;
     }
 
     const response = await fetch(url);

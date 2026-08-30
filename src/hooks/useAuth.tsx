@@ -73,7 +73,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setIsAdmin(false);
         setLoading(false);
         void clearChatCache();
-        if ("caches" in window) void caches.delete("cirkle-images-v1");
+        if ("caches" in window) {
+          void caches.delete("cirkle-images-v1");
+          void caches.delete("cirkle-images-v2");
+        }
         return;
       }
 

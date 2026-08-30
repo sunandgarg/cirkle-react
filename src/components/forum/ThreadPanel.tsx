@@ -16,8 +16,12 @@ import {
 } from "@/lib/forumSend";
 import { hydrateForumMediaUrls } from "@/lib/forumMedia";
 import { publishForumOutboxItem } from "@/lib/forumPublisher";
-import { deleteForumOutboxItem, markForumOutboxFailed, putForumOutboxItem, type ForumOutboxItem } from "@/lib/forumOutbox";
+import {
+  deleteForumOutboxItem, listForumOutboxItems, markForumOutboxFailed,
+  putForumOutboxItem, subscribeForumOutbox, type ForumOutboxItem,
+} from "@/lib/forumOutbox";
 import { getForumBroadcastRow } from "@/lib/forumRealtime";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 const THREAD_PAGE_SIZE = 50;
 
@@ -58,8 +62,13 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
   const [content, setContent] = useState("");
   const [isAnonymous, setIsAnonymous] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sendIdentityRef = useRef<ForumSendIdentity | null>(null);
+  const followLiveRef = useRef(true);
+  const initialScrollDoneRef = useRef(false);
+  const loadingOlderRef = useRef(false);
+  const [queuedReplies, setQueuedReplies] = useState<ForumOutboxItem[]>([]);
   const testSession = readMobileTestSession();
 
   // Fetch thread replies
@@ -106,7 +115,41 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
     },
     staleTime: 10000,
   });
-  const replies = sortThreadReplies((threadData?.pages || []).flat());
+  const replies = sortThreadReplies([
+    ...(threadData?.pages || []).flat(),
+    ...queuedReplies.map((item) => ({
+      id: `outbox-${item.id}`,
+      send_identity_id: item.id,
+      content: item.content,
+      created_at: item.createdAt,
+      author_id: item.userId,
+      viewer_is_author: true,
+      is_anonymous: item.isAnonymous,
+      reply_to_id: item.replyToId,
+      profile: item.isAnonymous ? null : profile,
+      is_pending: !item.lastError,
+      is_failed: !!item.lastError,
+    })),
+  ]);
+  const threadVirtualizer = useVirtualizer({
+    count: replies.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 72,
+    getItemKey: (index) => replies[index]?.id || index,
+    overscan: 10,
+  });
+
+  useEffect(() => {
+    if (!user?.id || testSession) return;
+    let disposed = false;
+    const sync = async () => {
+      const queued = await listForumOutboxItems(user.id);
+      if (!disposed) setQueuedReplies(queued.filter((item) => item.replyToId === parentPost.id));
+    };
+    void sync();
+    const unsubscribe = subscribeForumOutbox(() => void sync());
+    return () => { disposed = true; unsubscribe(); };
+  }, [parentPost.id, testSession, user?.id]);
 
   const sendReply = useMutation({
     mutationFn: async () => {
@@ -188,8 +231,30 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
   });
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!replies.length || loadingOlderRef.current) return;
+    if (!initialScrollDoneRef.current) {
+      initialScrollDoneRef.current = true;
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      return;
+    }
+    if (followLiveRef.current) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [replies.length]);
+
+  const loadOlderReplies = async () => {
+    const container = scrollRef.current;
+    const previousHeight = container?.scrollHeight || 0;
+    loadingOlderRef.current = true;
+    try {
+      await fetchNextPage();
+      requestAnimationFrame(() => {
+        if (container) container.scrollTop += container.scrollHeight - previousHeight;
+        loadingOlderRef.current = false;
+      });
+    } catch {
+      loadingOlderRef.current = false;
+      toast.error("Older replies could not be loaded");
+    }
+  };
 
   useEffect(() => {
     if (testSession) return;
@@ -223,12 +288,48 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
       });
       updateParentReplyCount(replyCountDelta);
     };
-    const channel = supabase.channel(`forum-thread:${parentPost.id}`, { config: { private: true } })
-      .on("broadcast", { event: "INSERT" }, (payload: any) => applyReplyEvent("INSERT", getForumBroadcastRow(payload, "new")))
-      .on("broadcast", { event: "UPDATE" }, (payload: any) => applyReplyEvent("UPDATE", getForumBroadcastRow(payload, "new")))
-      .on("broadcast", { event: "DELETE" }, (payload: any) => applyReplyEvent("DELETE", getForumBroadcastRow(payload, "old")))
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
+    let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
+    let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
+    let fallbackStarted = false;
+    let disposed = false;
+    const recoverMissedReplies = async () => {
+      const { data, error } = await (supabase as any).rpc("get_forum_thread_page", {
+        p_parent_id: parentPost.id,
+        p_limit: THREAD_PAGE_SIZE,
+        p_before_created_at: null,
+        p_before_id: null,
+      });
+      if (disposed || error) return;
+      const hydrated = await hydrateForumMediaUrls((data || []).map((row: any) => row.post || row));
+      if (disposed) return;
+      hydrated.forEach((reply: any) => applyReplyEvent("INSERT", reply));
+    };
+    const startFallback = () => {
+      if (fallbackStarted || disposed) return;
+      fallbackStarted = true;
+      fallbackChannel = supabase.channel(`forum-thread-pg:${parentPost.id}`)
+        .on("postgres_changes", {
+          event: "*", schema: "public", table: "posts", filter: `reply_to_id=eq.${parentPost.id}`,
+        }, (payload: any) => applyReplyEvent(payload.eventType, payload.eventType === "DELETE" ? payload.old : payload.new))
+        .subscribe((status) => { if (status === "SUBSCRIBED") void recoverMissedReplies(); });
+    };
+    void (async () => {
+      await supabase.realtime.setAuth();
+      if (disposed) return;
+      broadcastChannel = supabase.channel(`forum-thread:${parentPost.id}`, { config: { private: true } })
+        .on("broadcast", { event: "INSERT" }, (payload: any) => applyReplyEvent("INSERT", getForumBroadcastRow(payload, "new")))
+        .on("broadcast", { event: "UPDATE" }, (payload: any) => applyReplyEvent("UPDATE", getForumBroadcastRow(payload, "new")))
+        .on("broadcast", { event: "DELETE" }, (payload: any) => applyReplyEvent("DELETE", getForumBroadcastRow(payload, "old")))
+        .subscribe((status) => {
+          if (status === "SUBSCRIBED") void recoverMissedReplies();
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") startFallback();
+        });
+    })().catch(startFallback);
+    return () => {
+      disposed = true;
+      if (broadcastChannel) void supabase.removeChannel(broadcastChannel);
+      if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
+    };
   }, [parentPost.id, profileMap, queryClient, testSession]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -239,7 +340,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
   };
 
   const parentProfile = parentPost.profile;
-  const parentIsMine = parentPost.author_id === user?.id;
+  const parentIsMine = parentPost.viewer_is_author === true || parentPost.author_id === user?.id;
   const parentName = parentPost.is_anonymous ? (parentIsMine ? "You · Anonymous" : "Anonymous") : parentProfile?.name || "User";
 
   return (
@@ -262,7 +363,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
           {parentProfile?.avatar_url ? (
             <img src={parentProfile.avatar_url} className="w-8 h-8 rounded-full object-cover" alt="" />
           ) : (
-            <div className={`w-8 h-8 rounded-full ${getUserColor(parentPost.author_id)} flex items-center justify-center`}>
+            <div className={`w-8 h-8 rounded-full ${getUserColor(parentPost.is_anonymous ? "anonymous" : parentPost.author_id || "unknown")} flex items-center justify-center`}>
               <span className="text-[9px] font-bold text-white">{getInitials(parentName)}</span>
             </div>
           )}
@@ -281,9 +382,12 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
       </button>
 
       {/* Thread replies */}
-      <div className="flex-1 overflow-y-auto px-4 py-2 space-y-3 min-h-0">
+      <div ref={scrollRef} onScroll={(event) => {
+        const element = event.currentTarget;
+        followLiveRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+      }} className="flex-1 overflow-y-auto px-4 py-2 space-y-3 min-h-0 overscroll-contain">
         {hasNextPage && (
-          <button type="button" onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}
+          <button type="button" onClick={() => void loadOlderReplies()} disabled={isFetchingNextPage}
             className="w-full py-2 text-xs font-semibold text-primary hover:underline disabled:opacity-50">
             {isFetchingNextPage ? "Loading older replies…" : "Load older replies"}
           </button>
@@ -298,11 +402,15 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
             <p className="text-xs text-muted-foreground">No replies yet</p>
           </div>
         ) : (
-          replies.map((reply: any) => {
-            const replyIsMine = reply.author_id === user?.id;
+          <div style={{ height: `${threadVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+          {threadVirtualizer.getVirtualItems().map((virtualReply) => {
+            const reply: any = replies[virtualReply.index];
+            const replyIsMine = reply.viewer_is_author === true || reply.author_id === user?.id;
             const rName = reply.is_anonymous ? (replyIsMine ? "You · Anonymous" : "Anonymous") : reply.profile?.name || "User";
             return (
-              <div key={reply.id} className={`flex items-start gap-2 rounded-xl p-1.5 ${reply.is_anonymous && replyIsMine ? "bg-primary/5 ring-1 ring-primary/10" : ""}`}>
+              <div key={reply.id} data-index={virtualReply.index} ref={threadVirtualizer.measureElement}
+                style={{ position: "absolute", left: 0, top: 0, width: "100%", transform: `translateY(${virtualReply.start}px)` }}
+                className={`flex items-start gap-2 rounded-xl p-1.5 ${reply.is_anonymous && replyIsMine ? "bg-primary/5 ring-1 ring-primary/10" : ""}`}>
                 {reply.profile?.avatar_url ? (
                   <img src={reply.profile.avatar_url} className="w-7 h-7 rounded-full object-cover" alt="" />
                 ) : (
@@ -319,10 +427,13 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
                   <p className="text-xs text-foreground whitespace-pre-wrap mt-0.5">
                     {renderFormattedMessage(reply.content, profileMap, navigate)}
                   </p>
+                  {reply.is_pending && <p className="mt-1 text-[9px] font-medium text-muted-foreground">Sending…</p>}
+                  {reply.is_failed && <p className="mt-1 text-[9px] font-semibold text-destructive">Waiting to retry automatically</p>}
                 </div>
               </div>
             );
-          })
+          })}
+          </div>
         )}
         <div ref={messagesEndRef} />
       </div>

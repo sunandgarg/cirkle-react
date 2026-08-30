@@ -15,6 +15,16 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+    const authClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
+    const { data: { user } } = await authClient.auth.getUser();
+    if (!user) return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
     const supabase = createClient(supabaseUrl, serviceKey);
 
     const { consultation_id } = await req.json();
@@ -36,6 +46,13 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "Consultation not found" }), {
         status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const { data: role } = await supabase.from("user_roles").select("role")
+      .eq("user_id", user.id).eq("role", "admin").maybeSingle();
+    if (user.id !== consult.client_id && user.id !== consult.consultant_id && !role) {
+      return new Response(JSON.stringify({ error: "Forbidden" }), {
+        status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 

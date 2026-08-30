@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -21,37 +21,6 @@ const GoogleMark = () => (
   </svg>
 );
 
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "212611404330-csee4btkmuatmslubjb7fe3etek6f5ng.apps.googleusercontent.com";
-
-declare global {
-  interface Window {
-    google?: {
-      accounts: {
-        id: {
-          initialize: (options: {
-            client_id: string;
-            callback: (response: { credential?: string }) => void;
-            nonce?: string;
-            auto_select?: boolean;
-            cancel_on_tap_outside?: boolean;
-            context?: "signin" | "signup" | "use";
-          }) => void;
-          renderButton: (element: HTMLElement, options: {
-            type: "standard";
-            theme: "outline" | "filled_black";
-            size: "large";
-            text: "continue_with";
-            shape: "rectangular";
-            logo_alignment: "left";
-            width: number;
-          }) => void;
-        };
-      };
-    };
-  }
-}
-
-
 const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 
 const Auth = () => {
@@ -69,9 +38,6 @@ const Auth = () => {
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
-  const [googleButtonReady, setGoogleButtonReady] = useState(false);
-  const googleButtonRef = useRef<HTMLDivElement>(null);
-  const googleNonceRef = useRef("");
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user, profile, loading: authLoading } = useAuth();
@@ -132,98 +98,22 @@ const Auth = () => {
     }
   };
 
-  const handleGoogleCredential = useCallback(async (response: { credential?: string }) => {
-    if (!response.credential) {
-      toast.error("Google did not return a valid sign-in credential. Please try again.");
-      return;
-    }
+  const handleGoogleLogin = async () => {
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithIdToken({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        token: response.credential,
-        nonce: googleNonceRef.current || undefined,
+        options: {
+          redirectTo: `${window.location.origin}/iit-verify`,
+          queryParams: { prompt: "select_account" },
+        },
       });
       if (error) throw error;
     } catch (error: any) {
       toast.error(error.message || "Google sign-in could not be completed. Please use email verification.");
-    } finally {
       setLoading(false);
     }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    let initialized = false;
-    let resizeTimer: number | undefined;
-
-    const renderGoogleButton = () => {
-      const target = googleButtonRef.current;
-      if (cancelled || !initialized || !target || !window.google?.accounts.id) return;
-      const width = Math.max(240, Math.min(400, Math.floor(target.clientWidth || 400)));
-      target.replaceChildren();
-      window.google.accounts.id.renderButton(target, {
-        type: "standard",
-        theme: document.documentElement.classList.contains("dark") ? "filled_black" : "outline",
-        size: "large",
-        text: "continue_with",
-        shape: "rectangular",
-        logo_alignment: "left",
-        width,
-      });
-      setGoogleButtonReady(true);
-    };
-
-    const initializeGoogleButton = async () => {
-      if (cancelled || !window.google?.accounts.id) return;
-      const nonceBytes = crypto.getRandomValues(new Uint8Array(32));
-      const rawNonce = btoa(String.fromCharCode(...nonceBytes));
-      const nonceHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(rawNonce));
-      const hashedNonce = Array.from(new Uint8Array(nonceHash), (byte) => byte.toString(16).padStart(2, "0")).join("");
-      if (cancelled || !window.google?.accounts.id) return;
-      googleNonceRef.current = rawNonce;
-      window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: handleGoogleCredential,
-        nonce: hashedNonce,
-        auto_select: false,
-        cancel_on_tap_outside: true,
-        context: "signin",
-      });
-      initialized = true;
-      renderGoogleButton();
-    };
-
-    const onResize = () => {
-      if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
-      resizeTimer = window.setTimeout(renderGoogleButton, 120);
-    };
-
-    const existing = document.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]');
-    if (window.google?.accounts.id) {
-      void initializeGoogleButton();
-    } else if (existing) {
-      existing.addEventListener("load", initializeGoogleButton, { once: true });
-    } else {
-      const script = document.createElement("script");
-      script.src = "https://accounts.google.com/gsi/client";
-      script.async = true;
-      script.defer = true;
-      script.addEventListener("load", initializeGoogleButton, { once: true });
-      script.addEventListener("error", () => {
-        if (!cancelled) setGoogleButtonReady(false);
-      }, { once: true });
-      document.head.appendChild(script);
-    }
-    window.addEventListener("resize", onResize);
-
-    return () => {
-      cancelled = true;
-      if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
-      window.removeEventListener("resize", onResize);
-      existing?.removeEventListener("load", initializeGoogleButton);
-    };
-  }, [handleGoogleCredential, theme]);
+  };
 
   const handlePasswordLogin = async () => {
     if (!isValidEmail(email)) {
@@ -363,15 +253,15 @@ const Auth = () => {
             Sign up or login to your account
           </p>
 
-          <div className="relative h-12 w-full overflow-hidden rounded-xl" aria-busy={!googleButtonReady}>
-            {!googleButtonReady && (
-              <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-xl border border-black/10 bg-white text-base font-semibold text-[#10161e] shadow-sm dark:border-white/10 dark:bg-[#1a1a22] dark:text-white dark:shadow-none">
-                <GoogleMark />
-                Loading Google sign-in…
-              </div>
-            )}
-            <div ref={googleButtonRef} className={`flex h-12 w-full justify-center [&>div]:!w-full [&_iframe]:!h-12 [&_iframe]:!w-full ${loading ? "pointer-events-none opacity-60" : ""}`} />
-          </div>
+          <button
+            type="button"
+            onClick={() => void handleGoogleLogin()}
+            disabled={loading}
+            className="flex h-12 w-full min-w-0 items-center justify-center gap-2 overflow-hidden rounded-xl border border-black/10 bg-white px-4 text-base font-semibold text-[#10161e] shadow-sm transition-colors hover:bg-black/[0.025] disabled:cursor-wait disabled:opacity-60 dark:border-white/10 dark:bg-[#1a1a22] dark:text-white dark:shadow-none dark:hover:bg-[#212129]"
+          >
+            <GoogleMark />
+            <span className="truncate">Continue with Google</span>
+          </button>
 
           <div className="my-4 flex h-5 items-center gap-4 text-center text-sm leading-5 text-[#637083] dark:text-white/45">
             <span className="h-px flex-1 bg-black/10 dark:bg-white/10" />

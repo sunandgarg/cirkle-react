@@ -8,6 +8,8 @@ interface VoiceRecorderProps {
   onSend: (voiceUrl: string, duration: number, voicePath?: string) => Promise<void> | void;
   onCancel: () => void;
   localOnly?: boolean;
+  bucket?: "voice-notes" | "chat-media";
+  pathPrefix?: string;
 }
 
 const getSupportedVoiceMimeType = () => {
@@ -20,7 +22,7 @@ const getSupportedVoiceMimeType = () => {
   ].find((type) => MediaRecorder.isTypeSupported(type)) || "";
 };
 
-const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRecorderProps) => {
+const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false, bucket = "voice-notes", pathPrefix }: VoiceRecorderProps) => {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -74,27 +76,26 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false }: VoiceRec
         return;
       }
       const ext = blob.type.includes("webm") ? "webm" : "m4a";
-      const path = `${userId}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
-      const { error: uploadError } = await supabase.storage.from("voice-notes").upload(path, blob, {
+      const safePrefix = pathPrefix?.replace(/[^a-zA-Z0-9_-]/g, "");
+      const path = `${userId}/${safePrefix ? `${safePrefix}/` : ""}${Date.now()}-${crypto.randomUUID()}.${ext}`;
+      const { error: uploadError } = await supabase.storage.from(bucket).upload(path, blob, {
         contentType: blob.type || (ext === "webm" ? "audio/webm" : "audio/mp4"),
         cacheControl: "31536000",
         upsert: false,
       });
       if (uploadError) throw uploadError;
-      const { data: urlData, error: signedUrlError } = await supabase.storage.from("voice-notes").createSignedUrl(path, 3600);
+      const { data: urlData, error: signedUrlError } = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
       if (signedUrlError) throw signedUrlError;
-      try {
-        await onSendRef.current(urlData.signedUrl, seconds, path);
-      } catch (error) {
-        await supabase.storage.from("voice-notes").remove([path]);
-        throw error;
-      }
+      // The caller persists the storage path in the durable outbox before it
+      // attempts the database insert. Keep the object when delivery fails so
+      // an automatic retry never produces a message pointing at deleted audio.
+      await onSendRef.current(urlData.signedUrl, seconds, path);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Voice note could not be sent. Please try again.");
     } finally {
       if (mountedRef.current) setIsUploading(false);
     }
-  }, [localOnly, userId]);
+  }, [bucket, localOnly, pathPrefix, userId]);
 
   const startRecording = useCallback(async () => {
     try {
