@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.3";
+import { iitVerificationEmail } from "../_shared/emailTemplate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -203,12 +204,11 @@ Deno.serve(async (req) => {
     if (insertError || !codeRow) throw insertError || new Error("Could not create verification code");
 
     try {
+      const emailContent = iitVerificationEmail(code, iitName);
       await sendWithSes({
         from: emailFrom,
         to: normalizedEmail,
-        subject: "Your Cirkle verification code",
-        text: `Your Cirkle verification code is ${code}. This code expires in 10 minutes.`,
-        html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:24px"><h2>Verify your ${iitName} email</h2><p>Enter this code in Cirkle:</p><p style="font-size:32px;font-weight:700;letter-spacing:8px">${code}</p><p>This code expires in 10 minutes. If you did not request it, ignore this email.</p></div>`,
+        ...emailContent,
       });
     } catch (error) {
       await admin.from("verification_codes").delete().eq("id", codeRow.id);

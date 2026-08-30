@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.3";
+import { documentDecisionEmail } from "../_shared/emailTemplate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -29,10 +30,6 @@ const getSignatureKey = async (secret: string, dateStamp: string, region: string
   const kService = await hmac(kRegion, "ses");
   return hmac(kService, "aws4_request");
 };
-
-const escapeHtml = (value: string) => value.replace(/[&<>'"]/g, (character) => ({
-  "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
-}[character] || character));
 
 const sendWithSes = async (params: { to: string; subject: string; text: string; html: string }) => {
   const region = Deno.env.get("AWS_REGION") || Deno.env.get("AWS_SES_REGION") || "ap-south-1";
@@ -119,13 +116,11 @@ Deno.serve(async (request) => {
 
     const approved = submission.status === "approved";
     const note = submission.review_notes?.trim();
-    const subject = approved ? "Your Cirkle IIT verification is approved" : "Action needed for your Cirkle verification";
-    const text = approved
-      ? `Your ${submission.iit_name} document has been approved. Sign in to Cirkle to finish your profile.`
-      : `Your ${submission.iit_name} document was not approved.${note ? ` Reason: ${note}` : ""} Sign in to Cirkle to submit another document or verify by email.`;
-    const safeIit = escapeHtml(submission.iit_name);
-    const safeNote = note ? escapeHtml(note) : "";
-    const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:24px;color:#111827"><h2>${approved ? "Verification approved" : "Verification needs attention"}</h2><p>Your <strong>${safeIit}</strong> document ${approved ? "has been approved." : "was not approved."}</p>${safeNote ? `<p style="padding:12px;background:#f3f4f6;border-radius:10px"><strong>Admin note:</strong> ${safeNote}</p>` : ""}<p><a href="https://cirkle.world/auth" style="display:inline-block;padding:12px 18px;background:#2563eb;color:#fff;text-decoration:none;border-radius:10px">Open Cirkle</a></p><p style="font-size:12px;color:#6b7280">This email was sent to the login email connected to your Cirkle account.</p></div>`;
+    const { subject, text, html } = documentDecisionEmail({
+      approved,
+      iitName: submission.iit_name,
+      note,
+    });
 
     await sendWithSes({ to: memberData.user.email, subject, text, html });
     await admin.from("document_verifications").update({

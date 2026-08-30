@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.3";
+import { loginCodeEmail } from "../_shared/emailTemplate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -56,9 +57,7 @@ const sendWithSes = async (params: { to: string; code: string }) => {
 
   const host = `email.${region}.amazonaws.com`;
   const endpoint = `https://${host}/v2/email/outbound-emails`;
-  const subject = "Your Cirkle login code";
-  const text = `Your Cirkle login code is ${params.code}. It expires soon. If you did not request it, ignore this email.`;
-  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:24px"><h2>Sign in to Cirkle</h2><p>Enter this code to continue:</p><p style="font-size:32px;font-weight:700;letter-spacing:8px">${params.code}</p><p>This code expires soon. If you did not request it, ignore this email.</p></div>`;
+  const { subject, text, html } = loginCodeEmail(params.code);
   const payload = JSON.stringify({
     FromEmailAddress: from,
     Destination: { ToAddresses: [params.to] },
