@@ -186,31 +186,40 @@ const Auth = () => {
   };
 
   return (
-    <div className="relative min-h-[100svh] overflow-hidden bg-[#f6f7f9] text-[#10161e] supports-[height:100dvh]:min-h-[100dvh]">
-      {/*
-        This is deliberately a cropped, image-only version of the supplied
-        mobile reference. It always renders once across the full viewport at
-        its natural aspect ratio, preventing both desktop tile seams and
-        stretched portraits on 4K displays.
-      */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[min(500px,48svh)] bg-no-repeat bg-top bg-[length:100%_auto] sm:h-[clamp(300px,45svh,480px)]"
-        style={{ backgroundImage: 'url("/auth-community-grid.jpg")' }}
-      />
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[min(500px,48svh)] bg-[linear-gradient(to_bottom,rgba(246,247,249,0)_0%,rgba(246,247,249,0.08)_38%,rgba(246,247,249,0.72)_76%,#f6f7f9_100%)] sm:h-[clamp(300px,45svh,480px)]"
-      />
+    <div className="min-h-[100svh] bg-[#0d0e10] text-white supports-[height:100dvh]:min-h-[100dvh] lg:grid lg:grid-cols-[minmax(0,1.25fr)_minmax(430px,0.75fr)]">
+      <div className="relative h-[38svh] min-h-[250px] max-h-[390px] overflow-hidden bg-[#111214] lg:sticky lg:top-0 lg:h-[100dvh] lg:min-h-0 lg:max-h-none">
+        <picture>
+          <source media="(min-width: 1024px)" srcSet="/auth-community-landscape-v2.webp" />
+          <img
+            src="/auth-community-portrait-v2.webp"
+            alt=""
+            aria-hidden="true"
+            fetchPriority="high"
+            className="absolute inset-0 h-full w-full object-cover object-[center_20%] lg:object-cover lg:object-center"
+          />
+        </picture>
+        <div aria-hidden="true" className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(13,14,16,0.04)_0%,rgba(13,14,16,0.14)_60%,#0d0e10_100%)] lg:bg-[linear-gradient(to_right,rgba(13,14,16,0.08)_0%,rgba(13,14,16,0.12)_55%,rgba(13,14,16,0.72)_100%)]" />
+        <div className="absolute inset-x-8 bottom-10 hidden max-w-lg lg:block">
+          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/55">The verified IIT network</p>
+          <p className="mt-3 text-3xl font-semibold leading-tight tracking-[-0.025em] text-white/90">Your campus community, without the noise.</p>
+        </div>
+      </div>
       <main
         id="main-content"
-        className="relative z-10 flex min-h-[100svh] w-full items-start px-6 pb-[max(24px,env(safe-area-inset-bottom))] pt-[min(45svh,470px)] supports-[height:100dvh]:min-h-[100dvh] sm:items-end sm:pt-0"
+        className="relative z-10 -mt-5 flex min-h-[calc(62svh+20px)] w-full items-start rounded-t-[28px] bg-[#0d0e10] px-6 pb-[max(24px,env(safe-area-inset-bottom))] pt-7 lg:mt-0 lg:min-h-[100dvh] lg:items-center lg:rounded-none lg:px-10 lg:py-12 xl:px-16"
       >
-        <section className="relative w-full bg-[#f6f7f9] before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-12 before:bg-gradient-to-t before:from-[#f6f7f9] before:to-transparent" aria-labelledby="login-title">
-          <h1 id="login-title" className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-[#10161e]">
+        <section className="mx-auto w-full max-w-md" aria-labelledby="login-title">
+          <div className="mb-6 hidden items-center gap-3 lg:flex">
+            <img src="/cirkle-logo.png" alt="Cirkle" className="h-10 w-10 rounded-xl" />
+            <div>
+              <p className="text-lg font-bold tracking-[-0.02em]">Cirkle</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">IIT Community</p>
+            </div>
+          </div>
+          <h1 id="login-title" className="text-[30px] font-bold leading-9 tracking-[-0.025em] text-white lg:text-4xl lg:leading-tight">
             Welcome
           </h1>
-          <p className="mb-4 mt-1 text-sm leading-5 text-[#637083]">
+          <p className="mb-5 mt-1 text-sm leading-5 text-white/55 lg:text-base">
             Sign up or login to your account
           </p>
 
@@ -218,7 +227,7 @@ const Auth = () => {
             type="button"
             variant="outline"
             size="lg"
-            className="h-12 w-full gap-2 rounded-xl border-[#d6dbe1] bg-[#e7ebee] p-0 text-base font-semibold text-[#10161e] shadow-none hover:bg-[#dfe5e9]"
+            className="h-12 w-full gap-2 rounded-xl border-white/10 bg-[#1a1a22] p-0 text-base font-semibold text-white shadow-none hover:border-white/20 hover:bg-[#22222c]"
             onClick={handleGoogleLogin}
             disabled={loading}
           >
@@ -226,10 +235,10 @@ const Auth = () => {
             Google
           </Button>
 
-          <div className="my-4 flex h-5 items-center gap-4 text-center text-sm leading-5 text-[#637083]">
-            <span className="h-px flex-1 bg-[#d6dbe1]" />
+          <div className="my-4 flex h-5 items-center gap-4 text-center text-sm leading-5 text-white/45">
+            <span className="h-px flex-1 bg-white/10" />
             <span>Or</span>
-            <span className="h-px flex-1 bg-[#d6dbe1]" />
+            <span className="h-px flex-1 bg-white/10" />
           </div>
 
           {authStep === "email" ? (
@@ -243,7 +252,7 @@ const Auth = () => {
                 value={email}
                 onChange={(e) => handleEmailChange(e.target.value)}
                 aria-label="Enter your email"
-                className="h-12 w-full rounded-xl border-[#d6dbe1] bg-[#e7ebee] px-3 text-base text-[#10161e] shadow-none placeholder:text-[#637083] focus-visible:border-[#1666b6] focus-visible:ring-2 focus-visible:ring-[#1666b6]/20 sm:text-sm"
+                className="h-12 w-full rounded-xl border-white/10 bg-[#1a1a22] px-4 text-base text-white shadow-none placeholder:text-white/38 focus-visible:border-[#75b7ff]/70 focus-visible:ring-2 focus-visible:ring-[#75b7ff]/15 sm:text-sm"
                 onKeyDown={(event) => {
                   if (event.key !== "Enter") return;
                   if (authMethod === "otp") handleEmailContinue();
@@ -261,13 +270,13 @@ const Auth = () => {
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     aria-label="Enter your password"
-                    className="h-12 w-full rounded-xl border-[#d6dbe1] bg-[#e7ebee] px-3 pr-16 text-base text-[#10161e] shadow-none placeholder:text-[#637083] focus-visible:border-[#1666b6] focus-visible:ring-2 focus-visible:ring-[#1666b6]/20 sm:text-sm"
+                    className="h-12 w-full rounded-xl border-white/10 bg-[#1a1a22] px-4 pr-16 text-base text-white shadow-none placeholder:text-white/38 focus-visible:border-[#75b7ff]/70 focus-visible:ring-2 focus-visible:ring-[#75b7ff]/15 sm:text-sm"
                     onKeyDown={(event) => event.key === "Enter" && handlePasswordLogin()}
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword((current) => !current)}
-                    className="absolute inset-y-0 right-3 text-xs font-semibold text-[#566273]"
+                    className="absolute inset-y-0 right-3 text-xs font-semibold text-white/55 hover:text-white"
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
                     {showPassword ? "Hide" : "Show"}
@@ -275,7 +284,7 @@ const Auth = () => {
                 </div>
               )}
 
-              <p className="mb-2 mt-4 text-xs leading-4 text-[#637083]" aria-live="polite">
+              <p className="mb-2 mt-4 text-xs leading-4 text-white/45" aria-live="polite">
                 {authMethod === "otp"
                   ? "We'll email a 6-digit secure code to verify this account."
                   : "Sign in with your existing account password."}
@@ -283,7 +292,7 @@ const Auth = () => {
 
               <Button
                 size="lg"
-                className="h-12 w-full rounded-xl bg-[#1666b6] px-8 text-base font-semibold text-white shadow-none hover:bg-[#125a9f] disabled:opacity-50"
+                className="h-12 w-full rounded-xl bg-[#343438] px-8 text-base font-semibold text-white shadow-none hover:bg-[#414146] disabled:bg-[#242428] disabled:text-white/35 disabled:opacity-100"
                 onClick={authMethod === "otp" ? handleEmailContinue : handlePasswordLogin}
                 disabled={loading || !isValidEmail(email) || (authMethod === "password" && !password)}
               >
@@ -299,14 +308,14 @@ const Auth = () => {
                     setAuthMethod((current) => current === "otp" ? "password" : "otp");
                     setPassword("");
                   }}
-                  className="text-left text-[#1666b6] underline-offset-2 hover:underline"
+                  className="text-left text-[#75b7ff] underline-offset-2 hover:underline"
                 >
                   {authMethod === "otp" ? "Use password instead" : "Use email code"}
                 </button>
                 <button
                   type="button"
                   onClick={openForgotPassword}
-                  className="text-right text-[#566273] underline-offset-2 hover:underline"
+                  className="text-right text-white/55 underline-offset-2 hover:text-white hover:underline"
                 >
                   Forgot password?
                 </button>
@@ -314,38 +323,38 @@ const Auth = () => {
             </>
           ) : (
             <>
-              <p className="mb-4 text-sm leading-5 text-[#637083]" aria-live="polite">
-                Enter the 6-digit code sent to <span className="font-semibold text-[#10161e]">{email}</span>
-                <button type="button" onClick={handleEditEmail} className="ml-2 font-semibold text-[#1666b6] underline underline-offset-2">Change</button>
+              <p className="mb-4 text-sm leading-5 text-white/55" aria-live="polite">
+                Enter the 6-digit code sent to <span className="font-semibold text-white">{email}</span>
+                <button type="button" onClick={handleEditEmail} className="ml-2 font-semibold text-[#75b7ff] underline underline-offset-2">Change</button>
               </p>
               <div className="flex justify-center overflow-hidden">
                 <InputOTP autoFocus maxLength={6} value={otp} onChange={setOtp}>
                   <InputOTPGroup className="gap-1.5 sm:gap-2">
                     {[0, 1, 2, 3, 4, 5].map((index) => (
-                      <InputOTPSlot key={index} index={index} className="h-12 w-10 rounded-xl border-[#d6dbe1] bg-[#e7ebee] text-lg font-bold text-[#10161e] first:rounded-xl last:rounded-xl sm:w-12" />
+                      <InputOTPSlot key={index} index={index} className="h-12 w-10 rounded-xl border-white/10 bg-[#1a1a22] text-lg font-bold text-white first:rounded-xl last:rounded-xl sm:w-12" />
                     ))}
                   </InputOTPGroup>
                 </InputOTP>
               </div>
               <Button
                 size="lg"
-                className="mt-4 h-12 w-full rounded-xl bg-[#1666b6] px-8 text-base font-semibold text-white shadow-none hover:bg-[#125a9f] disabled:opacity-50"
+                className="mt-4 h-12 w-full rounded-xl bg-[#343438] px-8 text-base font-semibold text-white shadow-none hover:bg-[#414146] disabled:bg-[#242428] disabled:text-white/35 disabled:opacity-100"
                 onClick={handleVerifyEmailOtp}
                 disabled={loading || otp.length !== 6}
               >
                 {loading ? "Verifying..." : "Verify email"}
               </Button>
-              <button type="button" onClick={handleEmailContinue} disabled={loading} className="mt-3 w-full text-center text-xs font-semibold text-[#1666b6] disabled:opacity-50">
+              <button type="button" onClick={handleEmailContinue} disabled={loading} className="mt-3 w-full text-center text-xs font-semibold text-[#75b7ff] disabled:opacity-50">
                 {emailSent ? "Send a new code" : "Resend code"}
               </button>
             </>
           )}
 
-          <p className="mt-4 text-center text-xs leading-4 text-[#637083]">
+          <p className="mt-5 text-center text-xs leading-4 text-white/45">
             By continuing, you agree to our{" "}
-            <button onClick={() => setShowTerms(true)} className="font-medium text-[#566273] underline underline-offset-2">T&C</button>
+            <button onClick={() => setShowTerms(true)} className="font-medium text-white/70 underline decoration-white/30 underline-offset-2 hover:text-white">T&C</button>
             {" "}&{" "}
-            <button onClick={() => setShowPrivacy(true)} className="font-medium text-[#566273] underline underline-offset-2">Privacy policy</button>
+            <button onClick={() => setShowPrivacy(true)} className="font-medium text-white/70 underline decoration-white/30 underline-offset-2 hover:text-white">Privacy policy</button>
           </p>
         </section>
       </main>
