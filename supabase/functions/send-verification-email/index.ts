@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.3";
 import { iitVerificationEmail } from "../_shared/emailTemplate.ts";
-import { prepareEmailBranding } from "../_shared/emailLogo.ts";
+import { sendTransactionalEmail } from "../_shared/emailDelivery.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -8,8 +8,6 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Content-Type": "application/json",
 };
-
-const SES_FROM_EMAIL = "Cirkle <verify@cirkle.world>";
 
 type MemberStatus = "current_student" | "alumni";
 type IitDomains = { student: string; alumni: string };
@@ -67,78 +65,6 @@ const hashCode = async (userId: string, email: string, code: string, pepper: str
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 };
 
-const bytesToHex = (buffer: ArrayBuffer) =>
-  Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
-
-const sha256Hex = async (value: string) =>
-  bytesToHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
-
-const hmac = async (key: ArrayBuffer | Uint8Array, value: string) =>
-  crypto.subtle.sign(
-    "HMAC",
-    await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]),
-    new TextEncoder().encode(value),
-  );
-
-const getSignatureKey = async (secret: string, dateStamp: string, region: string, service: string) => {
-  const kDate = await hmac(new TextEncoder().encode(`AWS4${secret}`), dateStamp);
-  const kRegion = await hmac(kDate, region);
-  const kService = await hmac(kRegion, service);
-  return hmac(kService, "aws4_request");
-};
-
-const amzDate = (date: Date) => date.toISOString().replace(/[:-]|\.\d{3}/g, "");
-
-const sendWithSes = async (params: { to: string; from: string; subject: string; text: string; html: string }) => {
-  const region = Deno.env.get("AWS_REGION") || Deno.env.get("AWS_SES_REGION") || "ap-south-1";
-  const accessKey = Deno.env.get("AWS_ACCESS_KEY_ID");
-  const secretKey = Deno.env.get("AWS_SECRET_ACCESS_KEY");
-  if (!accessKey || !secretKey) throw new Error("AWS SES is not configured");
-
-  const host = `email.${region}.amazonaws.com`;
-  const branded = await prepareEmailBranding(params.html);
-  const payload = JSON.stringify({
-    FromEmailAddress: params.from,
-    Destination: { ToAddresses: [params.to] },
-    Content: {
-      Simple: {
-        Subject: { Data: params.subject, Charset: "UTF-8" },
-        Body: {
-          Text: { Data: params.text, Charset: "UTF-8" },
-          Html: { Data: branded.html, Charset: "UTF-8" },
-        },
-        Attachments: branded.attachments,
-      },
-    },
-  });
-  const dateHeader = amzDate(new Date());
-  const dateStamp = dateHeader.slice(0, 8);
-  const payloadHash = await sha256Hex(payload);
-  const canonicalHeaders = `content-type:application/json\nhost:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${dateHeader}\n`;
-  const signedHeaders = "content-type;host;x-amz-content-sha256;x-amz-date";
-  const canonicalRequest = `POST\n/v2/email/outbound-emails\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
-  const scope = `${dateStamp}/${region}/ses/aws4_request`;
-  const stringToSign = `AWS4-HMAC-SHA256\n${dateHeader}\n${scope}\n${await sha256Hex(canonicalRequest)}`;
-  const signature = bytesToHex(await hmac(await getSignatureKey(secretKey, dateStamp, region, "ses"), stringToSign));
-
-  const delivery = await fetch(`https://${host}/v2/email/outbound-emails`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Host: host,
-      "X-Amz-Content-Sha256": payloadHash,
-      "X-Amz-Date": dateHeader,
-      Authorization: `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
-    },
-    body: payload,
-  });
-  if (!delivery.ok) {
-    const detail = await delivery.text();
-    console.error("AWS SES verification email delivery failed", delivery.status, detail.slice(0, 300));
-    throw new Error("Could not deliver the verification email. Try again shortly.");
-  }
-};
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -150,7 +76,6 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     const pepper = Deno.env.get("VERIFICATION_CODE_PEPPER");
-    const emailFrom = Deno.env.get("VERIFICATION_EMAIL_FROM") || SES_FROM_EMAIL;
     if (!supabaseUrl || !serviceKey || !pepper) {
       return json({ error: "Email verification service is not configured" }, 503);
     }
@@ -208,10 +133,10 @@ Deno.serve(async (req) => {
 
     try {
       const emailContent = iitVerificationEmail(code, iitName);
-      await sendWithSes({
-        from: emailFrom,
+      await sendTransactionalEmail({
         to: normalizedEmail,
         ...emailContent,
+        idempotencyKey: `iit-verification:${codeRow.id}`,
       });
     } catch (error) {
       await admin.from("verification_codes").delete().eq("id", codeRow.id);

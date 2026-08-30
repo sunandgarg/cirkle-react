@@ -159,8 +159,11 @@ const Auth = () => {
 
     setLoading(true);
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-        redirectTo: `${window.location.origin}/reset-password`,
+      const { error } = await supabase.functions.invoke("request-password-reset", {
+        body: {
+          email: normalizedEmail,
+          redirect_to: `${window.location.origin}/reset-password`,
+        },
       });
       if (error) throw error;
       setRecoveryEmail(normalizedEmail);

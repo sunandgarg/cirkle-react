@@ -650,7 +650,7 @@ const Admin = () => {
                             {submission.decision_notified_at ? "Resend email" : "Send email"}
                           </Button>
                         </div>
-                        {submission.decision_notification_error && !submission.decision_notified_at && <p className="text-[10px] text-destructive">Last delivery failed. Retry after checking SES status.</p>}
+                        {submission.decision_notification_error && !submission.decision_notified_at && <p className="text-[10px] text-destructive">Last delivery failed. Retry after checking email delivery status.</p>}
                       </>
                     )}
                     <p className="text-[10px] text-muted-foreground">Submitted {new Date(submission.created_at).toLocaleString()}</p>

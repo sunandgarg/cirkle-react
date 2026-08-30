@@ -21,11 +21,14 @@ supabase db push
 
 ## Verification and test-data functions
 
-The IIT verification flow requires a verified Resend sender and these project
-secrets. Generate a unique pepper; never reuse a frontend or database key.
+The IIT verification flow uses Zavu as the primary transactional provider and
+AWS SES as its fallback. Generate a unique pepper; never reuse a frontend or
+database key.
 
 ```bash
-supabase secrets set RESEND_API_KEY=... VERIFICATION_CODE_PEPPER=... \
+supabase secrets set ZAVU_API_KEY=... ZAVU_SENDER_ID=... \
+  EMAIL_PROVIDER_PRIMARY=zavu EMAIL_PROVIDER_FALLBACK=ses \
+  VERIFICATION_CODE_PEPPER=... \
   'VERIFICATION_EMAIL_FROM=Cirkle <verify@cirkle.world>' SEED_DATA_ENABLED=true
 supabase functions deploy send-verification-email
 supabase functions deploy verify-iit-email

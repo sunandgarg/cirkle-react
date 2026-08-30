@@ -45,6 +45,9 @@ verify_jwt = false
 [functions.verify-login-otp]
 verify_jwt = false
 
+[functions.request-password-reset]
+verify_jwt = false
+
 [functions.send-verification-email]
 verify_jwt = true
 

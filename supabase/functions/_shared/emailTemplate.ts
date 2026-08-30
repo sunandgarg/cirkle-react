@@ -105,6 +105,20 @@ export const loginCodeEmail = (code: string) => ({
   }),
 });
 
+export const passwordResetEmail = (actionUrl: string) => ({
+  subject: "Reset your Cirkle.World password",
+  text: `Use this secure link to reset your Cirkle.World password: ${actionUrl} The link is temporary and can be used only once. If you did not request a reset, ignore this email.`,
+  html: renderCirkleEmail({
+    eyebrow: "Account recovery",
+    title: "Reset your password",
+    intro: "Use the secure button below to choose a new password for your Cirkle.World account.",
+    actionLabel: "Reset password",
+    actionUrl,
+    detail: "For your security, this link is temporary and can be used only once.",
+    securityNote: "If you did not request a password reset, ignore this email and your password will remain unchanged.",
+  }),
+});
+
 export const iitVerificationEmail = (code: string, iitName: string) => ({
   subject: `${code} verifies your ${iitName} email on Cirkle.World`,
   text: `Use code ${code} to verify your ${iitName} email on Cirkle.World. It expires in 10 minutes. Never share this code.`,

@@ -3,6 +3,7 @@ import {
   documentDecisionEmail,
   iitVerificationEmail,
   loginCodeEmail,
+  passwordResetEmail,
 } from "../../supabase/functions/_shared/emailTemplate";
 
 describe("Cirkle email templates", () => {
@@ -29,5 +30,15 @@ describe("Cirkle email templates", () => {
     expect(iitMessage.html).toContain("&lt;img");
     expect(decisionMessage.html).not.toContain("<script>");
     expect(decisionMessage.html).toContain("&lt;script&gt;");
+  });
+
+  it("renders a branded, escaped password recovery link", () => {
+    const message = passwordResetEmail('https://cirkle.world/reset-password?token=a&next=<unsafe>');
+
+    expect(message.subject).toBe("Reset your Cirkle.World password");
+    expect(message.html).toContain("Reset password");
+    expect(message.html).toContain("&amp;next=&lt;unsafe&gt;");
+    expect(message.html).not.toContain("<unsafe>");
+    expect(message.text).toContain("https://cirkle.world/reset-password");
   });
 });
