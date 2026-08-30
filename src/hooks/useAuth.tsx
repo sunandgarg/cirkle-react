@@ -79,7 +79,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setProfileResolved(false);
     setProfileError(null);
     const cachedProfile = readCachedProfile(u.id);
-    if (cachedProfile) setProfile(cachedProfile);
+    setProfile(cachedProfile);
+    setIsAdmin(false);
     try {
       const { profile: p, isAdmin: admin } = await fetchProfileWithRetry(u.id);
       if (activeUserIdRef.current !== u.id) return;
@@ -128,7 +129,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         // returning members back through verification.
         setUser(session.user);
         const cachedProfile = readCachedProfile(session.user.id);
-        if (cachedProfile) setProfile(cachedProfile);
+        setProfile(cachedProfile);
+        setIsAdmin(false);
         // Cached state makes rendering fast, but routing always waits for the
         // authoritative server result on this device.
         setLoading(true);

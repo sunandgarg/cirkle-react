@@ -11,7 +11,7 @@ import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle,
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, expectedIitEmailDomain, IIT_LIST, iitLogoSettingKey, isMatchingIitEmail, type IitInstitute, type IitMemberStatus } from "@/data/iitInstitutes";
-import { readResumeRoute } from "@/lib/sessionResume";
+import { resolvePostAuthRoute } from "@/lib/sessionResume";
 import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
 import { loadOnboardingProgress, saveOnboardingProgress } from "@/lib/onboardingProgress";
 import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
@@ -80,7 +80,7 @@ type Step = "account_details" | "select_iit" | "select_status" | "verify_email" 
 
 const IitVerification = () => {
   const navigate = useNavigate();
-  const { user, profile, refetchProfile, loading: authLoading, profileResolved, profileError } = useAuth();
+  const { user, profile, refetchProfile, loading: authLoading, profileResolved, profileError, isAdmin } = useAuth();
   const restoredProgressRef = useRef(false);
   const [step, setStep] = useState<Step>("account_details");
   const [selectedIit, setSelectedIit] = useState<IitInstitute | null>(null);
@@ -152,7 +152,7 @@ const IitVerification = () => {
     }
 
     if (profile?.is_verified && profile?.onboarding_completed && user?.id) {
-      navigate(readResumeRoute(user.id), { replace: true });
+      navigate(resolvePostAuthRoute(user.id, isAdmin), { replace: true });
       return;
     }
     if (latestDocumentSubmission?.iit_name) {
@@ -195,7 +195,7 @@ const IitVerification = () => {
       return;
     }
     setStep("select_iit");
-  }, [authLoading, documentStatusFetched, latestDocumentSubmission, navigate, profile, profileResolved, progressFetched, savedProgress, user]);
+  }, [authLoading, documentStatusFetched, isAdmin, latestDocumentSubmission, navigate, profile, profileResolved, progressFetched, savedProgress, user]);
 
   useEffect(() => {
     if (!user || !restoredProgressRef.current || step === "onboarding" || profile?.onboarding_completed) return;
@@ -516,7 +516,7 @@ const IitVerification = () => {
         onComplete={async () => {
           // Ensure profile is fresh before navigating
           await refetchProfile();
-          navigate(readResumeRoute(user?.id), { replace: true });
+          navigate(resolvePostAuthRoute(user?.id, isAdmin), { replace: true });
         }}
       />
     );

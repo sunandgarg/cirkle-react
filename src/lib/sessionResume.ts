@@ -17,6 +17,9 @@ export const readResumeRoute = (userId?: string | null) => {
   }
 };
 
+export const resolvePostAuthRoute = (userId: string | null | undefined, isAdmin: boolean) =>
+  isAdmin ? "/admin" : readResumeRoute(userId);
+
 export const saveResumeRoute = (userId: string, route: string) => {
   if (!isSafeResumeRoute(route)) return;
   try { localStorage.setItem(`${LAST_ROUTE_PREFIX}${userId}`, route); }

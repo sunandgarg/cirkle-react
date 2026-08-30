@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { readResumeRoute, saveResumeRoute } from "@/lib/sessionResume";
+import { readResumeRoute, resolvePostAuthRoute, saveResumeRoute } from "@/lib/sessionResume";
 
 describe("durable member route resume", () => {
   beforeEach(() => localStorage.clear());
@@ -20,5 +20,11 @@ describe("durable member route resume", () => {
     saveResumeRoute("member-1", "/profile");
     expect(readResumeRoute("member-1")).toBe("/profile");
     expect(readResumeRoute("member-2")).toBe("/cirkle-forum");
+  });
+
+  it("always opens the admin panel for an authenticated admin", () => {
+    saveResumeRoute("admin-1", "/cirkle-forum?room=cohort");
+    expect(resolvePostAuthRoute("admin-1", true)).toBe("/admin");
+    expect(resolvePostAuthRoute("member-1", false)).toBe("/cirkle-forum");
   });
 });

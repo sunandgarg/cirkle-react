@@ -117,9 +117,9 @@ const App = () => (
                 <Route path="/settings" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><Settings /></Suspense></ProtectedRoute>} />
                 <Route path="/settings/account" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><Settings /></Suspense></ProtectedRoute>} />
                 <Route path="/settings/privacy" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><Settings /></Suspense></ProtectedRoute>} />
-                <Route path="/admin" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><Admin /></Suspense></ProtectedRoute>} />
-                <Route path="/admin/users" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><Admin /></Suspense></ProtectedRoute>} />
-                <Route path="/admin/reports" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><Admin /></Suspense></ProtectedRoute>} />
+                <Route path="/admin" element={<ProtectedRoute requireAdmin><Suspense fallback={<PageLoader />}><Admin /></Suspense></ProtectedRoute>} />
+                <Route path="/admin/users" element={<ProtectedRoute requireAdmin><Suspense fallback={<PageLoader />}><Admin /></Suspense></ProtectedRoute>} />
+                <Route path="/admin/reports" element={<ProtectedRoute requireAdmin><Suspense fallback={<PageLoader />}><Admin /></Suspense></ProtectedRoute>} />
 
                 {/* Legacy redirects */}
                 <Route path="/forum" element={<Navigate to="/cirkle-forum" replace />} />

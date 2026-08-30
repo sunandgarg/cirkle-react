@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { readResumeRoute } from "@/lib/sessionResume";
+import { resolvePostAuthRoute } from "@/lib/sessionResume";
 import { applyThemePreference, readThemePreference, type ThemePreference } from "@/lib/theme";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
@@ -41,7 +41,7 @@ const Auth = () => {
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { user, profile, loading: authLoading, profileResolved } = useAuth();
+  const { user, profile, loading: authLoading, profileResolved, isAdmin } = useAuth();
 
   useEffect(() => {
     applyThemePreference(theme);
@@ -61,10 +61,10 @@ const Auth = () => {
       if (accessState !== "ready") {
         navigate("/iit-verify", { replace: true });
       } else {
-        navigate(readResumeRoute(user.id), { replace: true });
+        navigate(resolvePostAuthRoute(user.id, isAdmin), { replace: true });
       }
     }
-  }, [user, profile, profileResolved, authLoading, navigate]);
+  }, [user, profile, profileResolved, authLoading, isAdmin, navigate]);
 
   const handleEmailChange = (value: string) => {
     setEmail(value.trim().toLowerCase());

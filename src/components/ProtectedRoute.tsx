@@ -4,8 +4,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { saveResumeRoute } from "@/lib/sessionResume";
 import { resolveMemberAccessState } from "@/lib/memberAccess";
 
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { user, profile, loading, profileResolved, profileError, refetchProfile } = useAuth();
+const ProtectedRoute = ({ children, requireAdmin = false }: { children: React.ReactNode; requireAdmin?: boolean }) => {
+  const { user, profile, loading, profileResolved, profileError, refetchProfile, isAdmin } = useAuth();
   const location = useLocation();
 
   const accessState = resolveMemberAccessState(profile, profileResolved);
@@ -51,6 +51,10 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   // route can bypass them, so a returning member always resumes the exact gate.
   if (accessState === "verification" || accessState === "onboarding") {
     return <Navigate to="/iit-verify" replace />;
+  }
+
+  if (requireAdmin && !isAdmin) {
+    return <Navigate to="/cirkle-forum" replace />;
   }
 
   return <>{children}</>;
