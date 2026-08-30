@@ -23,6 +23,7 @@ import {
 import { getForumBroadcastRow } from "@/lib/forumRealtime";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { appSyncRealtimeEnabled, subscribeAppSync } from "@/lib/appsyncEvents";
+import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 
 const THREAD_PAGE_SIZE = 50;
 
@@ -60,6 +61,7 @@ interface ThreadPanelProps {
 const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profileMap, navigate }: ThreadPanelProps) => {
   const { user, profile } = useAuth();
   const queryClient = useQueryClient();
+  const realtimeActive = useRealtimeActivity();
   const [content, setContent] = useState("");
   const [isAnonymous, setIsAnonymous] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -258,7 +260,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
   };
 
   useEffect(() => {
-    if (testSession) return;
+    if (testSession || !realtimeActive) return;
     const updateParentReplyCount = (delta: number) => {
       if (!delta) return;
       queryClient.setQueriesData({ queryKey: ["forum-posts"] }, (current: any) => current?.posts ? {
@@ -341,7 +343,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
       if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
       unsubscribeAppSync?.();
     };
-  }, [parentPost.id, profileMap, queryClient, testSession]);
+  }, [parentPost.id, profileMap, queryClient, realtimeActive, testSession]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey && content.trim()) {

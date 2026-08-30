@@ -59,6 +59,7 @@ import { createRealtimeRecoveryController } from "@/lib/realtimeRecovery";
 import {
   appSyncRealtimeEnabled, getForumAppSyncChannels, publishAppSync, subscribeAppSync,
 } from "@/lib/appsyncEvents";
+import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
@@ -348,6 +349,7 @@ const Forum = () => {
   const { user, profile, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const realtimeActive = useRealtimeActivity();
 
   // Core state
   const [activeScope, setActiveScope] = useState<{ type: string; key: string }>({ type: "GLOBAL", key: "IIT_ALL" });
@@ -1171,7 +1173,7 @@ const Forum = () => {
 
   /* ─── Realtime: subscribe only to the open room ─── */
   useEffect(() => {
-    if (readMobileTestSession()) return;
+    if (readMobileTestSession() || !realtimeActive) return;
     const filter = `scope_identity=eq.${activeScope.type}:${activeScope.key}`;
     const roomQueryKey = ["forum-posts", user?.id, activeScope.type, activeScope.key] as const;
     const pendingEvents: ForumRealtimeEvent[] = [];
@@ -1385,7 +1387,7 @@ const Forum = () => {
       if (fallbackChannel) supabase.removeChannel(fallbackChannel);
       unsubscribeAppSync?.();
     };
-  }, [queryClient, activeScope.type, activeScope.key, enrichPosts, profileMap, user?.id]);
+  }, [queryClient, activeScope.type, activeScope.key, enrichPosts, profileMap, realtimeActive, user?.id]);
 
 
   /* ─── Typing indicator ─── */
@@ -1393,7 +1395,7 @@ const Forum = () => {
     // Typing fan-out is useful in small cohorts and wasteful in campus/global
     // rooms where thousands of people may be active simultaneously.
     const typingEnabled = activeScope.type === "COHORT" || activeScope.type === "COHORT_GLOBAL";
-    if (!user?.id || readMobileTestSession() || !typingEnabled) return;
+    if (!user?.id || readMobileTestSession() || !typingEnabled || !realtimeActive) return;
     const typingTimers = remoteTypingTimersRef.current;
     if (appSyncRealtimeEnabled) {
       let disposed = false;
@@ -1451,7 +1453,7 @@ const Forum = () => {
       setTypingUsers([]);
       supabase.removeChannel(presenceChannel);
     };
-  }, [user?.id, activeScope.type, activeScope.key]);
+  }, [user?.id, activeScope.type, activeScope.key, realtimeActive]);
 
   const broadcastTyping = useCallback(() => {
     if (!user?.id || !profile?.name) return;

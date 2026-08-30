@@ -32,7 +32,7 @@ class AppSyncEventsClient {
   private hiddenTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private connecting: Promise<void> | null = null;
-  private explicitlyClosed = false;
+  private intentionallyClosedSockets = new WeakSet<WebSocket>();
 
   constructor() {
     if (typeof document !== "undefined") {
@@ -80,13 +80,13 @@ class AppSyncEventsClient {
     if (!appSyncRealtimeEnabled || typeof WebSocket === "undefined") throw new Error("AppSync is not configured");
     if (this.socket?.readyState === WebSocket.OPEN) return;
     if (this.connecting) return this.connecting;
-    this.explicitlyClosed = false;
     this.connecting = (async () => {
       const token = await this.accessToken();
       const header = base64Url(JSON.stringify(authentication(realtimeEndpoint, token)));
       await new Promise<void>((resolve, reject) => {
         const socket = new WebSocket(`${realtimeEndpoint}?header=${header}&payload=e30`, ["aws-appsync-event-ws", `header-${header}`]);
         this.socket = socket;
+        let acknowledged = false;
         const timeout = setTimeout(() => { socket.close(); reject(new Error("Realtime connection timed out")); }, 10_000);
         socket.onopen = () => socket.send(JSON.stringify({ type: "connection_init" }));
         socket.onmessage = (message) => {
@@ -94,6 +94,7 @@ class AppSyncEventsClient {
           try { payload = JSON.parse(String(message.data)); } catch { return; }
           if (payload.type === "connection_ack") {
             clearTimeout(timeout);
+            acknowledged = true;
             this.reconnectAttempt = 0;
             resolve();
             return;
@@ -104,9 +105,14 @@ class AppSyncEventsClient {
         socket.onclose = () => {
           clearTimeout(timeout);
           if (this.socket === socket) this.socket = null;
+          const intentionallyClosed = this.intentionallyClosedSockets.delete(socket);
+          if (!acknowledged) {
+            if (intentionallyClosed) resolve();
+            else reject(new Error("Realtime connection closed"));
+          }
           // An intentional background/unmount close must not start the
           // Supabase realtime fallback; foreground recovery queries the DB.
-          if (!this.explicitlyClosed) {
+          if (!intentionallyClosed) {
             this.listeners.forEach((listener) => listener.onStatus?.("CLOSED"));
             if (this.listeners.size && (typeof document === "undefined" || !document.hidden)) this.scheduleReconnect();
           }
@@ -151,10 +157,13 @@ class AppSyncEventsClient {
   }
 
   private closeSocket() {
-    this.explicitlyClosed = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    this.socket?.close(1000, "idle");
+    const socket = this.socket;
+    if (socket) {
+      this.intentionallyClosedSockets.add(socket);
+      socket.close(1000, "idle");
+    }
     this.socket = null;
   }
 

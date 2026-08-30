@@ -27,6 +27,7 @@ import {
   appSyncRealtimeEnabled, chatAppSyncChannels, publishAppSync,
   requestRealtimeDispatch, subscribeAppSync,
 } from "@/lib/appsyncEvents";
+import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 
 const PAGE_SIZE = 50;
 const INBOX_CACHE_KEY = "cirkle:chat-inbox";
@@ -127,6 +128,7 @@ const Chats = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const realtimeActive = useRealtimeActivity();
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
   const [newMessage, setNewMessage] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -145,7 +147,13 @@ const Chats = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const roomChannelRef = useRef<{ send: (message: { payload: Record<string, unknown> }) => Promise<unknown> | void } | null>(null);
+  const roomChannelRef = useRef<{
+    send: (message: {
+      type: "broadcast";
+      event: "typing";
+      payload: Record<string, unknown>;
+    }) => Promise<unknown> | void;
+  } | null>(null);
   const typingStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingBroadcastRef = useRef(0);
@@ -154,6 +162,7 @@ const Chats = () => {
   const processingOutboxRef = useRef(false);
   const outboxPreviewUrlsRef = useRef(new Map<string, string>());
   const messagesRef = useRef<ChatMessage[]>([]);
+  const realtimeRoomIdRef = useRef<string | null>(null);
 
   const { data: friendIds = [] } = useQuery({
     queryKey: ["friend-ids-chat", user?.id],
@@ -205,7 +214,7 @@ const Chats = () => {
   }, [queryClient, user?.id]);
 
   useEffect(() => {
-    if (!activeRoom || !user) return;
+    if (!activeRoom || !user || !realtimeActive) return;
     let cancelled = false;
     let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
     let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
@@ -216,11 +225,15 @@ const Chats = () => {
     let recoveryController: ReturnType<typeof createRealtimeRecoveryController> | null = null;
     let unsubscribeAppSyncMessage: (() => void) | null = null;
     let unsubscribeAppSyncTyping: (() => void) | null = null;
-    setMessages([]);
-    messagesRef.current = [];
-    setHasOlder(false);
-    setNewMessageCount(0);
-    followLiveRef.current = true;
+    const changedRoom = realtimeRoomIdRef.current !== activeRoom.id;
+    realtimeRoomIdRef.current = activeRoom.id;
+    if (changedRoom) {
+      setMessages([]);
+      messagesRef.current = [];
+      setHasOlder(false);
+      setNewMessageCount(0);
+      followLiveRef.current = true;
+    }
 
     void getCachedMessages<ChatMessage>(activeRoom.id).then((cached) => {
       if (!cancelled && cached.length) void hydrateChatMedia(cached).then((hydrated) => {
@@ -400,7 +413,7 @@ const Chats = () => {
       unsubscribeAppSyncMessage?.();
       unsubscribeAppSyncTyping?.();
     };
-  }, [activeRoom, markReadSoon, queryClient, user]);
+  }, [activeRoom, markReadSoon, queryClient, realtimeActive, user]);
 
   useEffect(() => {
     if (!activeRoom || !messages.length) return;
