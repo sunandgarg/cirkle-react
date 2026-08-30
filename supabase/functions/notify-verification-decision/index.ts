@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.3";
 import { documentDecisionEmail } from "../_shared/emailTemplate.ts";
+import { prepareEmailBranding } from "../_shared/emailLogo.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -39,6 +40,7 @@ const sendWithSes = async (params: { to: string; subject: string; text: string; 
   if (!accessKey || !secretKey) throw new Error("AWS SES is not configured");
 
   const host = `email.${region}.amazonaws.com`;
+  const branded = await prepareEmailBranding(params.html);
   const payload = JSON.stringify({
     FromEmailAddress: from,
     Destination: { ToAddresses: [params.to] },
@@ -47,8 +49,9 @@ const sendWithSes = async (params: { to: string; subject: string; text: string; 
         Subject: { Data: params.subject, Charset: "UTF-8" },
         Body: {
           Text: { Data: params.text, Charset: "UTF-8" },
-          Html: { Data: params.html, Charset: "UTF-8" },
+          Html: { Data: branded.html, Charset: "UTF-8" },
         },
+        Attachments: branded.attachments,
       },
     },
   });

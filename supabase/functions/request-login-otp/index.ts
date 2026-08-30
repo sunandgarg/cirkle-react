@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.3";
 import { loginCodeEmail } from "../_shared/emailTemplate.ts";
+import { prepareEmailBranding } from "../_shared/emailLogo.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -58,6 +59,7 @@ const sendWithSes = async (params: { to: string; code: string }) => {
   const host = `email.${region}.amazonaws.com`;
   const endpoint = `https://${host}/v2/email/outbound-emails`;
   const { subject, text, html } = loginCodeEmail(params.code);
+  const branded = await prepareEmailBranding(html);
   const payload = JSON.stringify({
     FromEmailAddress: from,
     Destination: { ToAddresses: [params.to] },
@@ -66,8 +68,9 @@ const sendWithSes = async (params: { to: string; code: string }) => {
         Subject: { Data: subject, Charset: "UTF-8" },
         Body: {
           Text: { Data: text, Charset: "UTF-8" },
-          Html: { Data: html, Charset: "UTF-8" },
+          Html: { Data: branded.html, Charset: "UTF-8" },
         },
+        Attachments: branded.attachments,
       },
     },
   });

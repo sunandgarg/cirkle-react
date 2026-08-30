@@ -13,6 +13,7 @@ describe("Cirkle email templates", () => {
     expect(message.html).toContain("482913");
     expect(message.html).toContain("expires in 10 minutes");
     expect(message.html).toContain("Never share this code");
+    expect(message.html).toContain('src="cid:cirkle-logo"');
     expect(message.text).toContain("Cirkle.World");
   });
 

@@ -5,11 +5,11 @@ const SURFACE = "#f4f7fb";
 
 export const escapeHtml = (value: string) =>
   value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 
 type EmailTemplateInput = {
   eyebrow: string;
@@ -57,7 +57,7 @@ export const renderCirkleEmail = (input: EmailTemplateInput) => {
                 <table role="presentation" cellspacing="0" cellpadding="0">
                   <tr>
                     <td style="padding-right:12px;">
-                      <img src="https://cirkle.world/cirkle-oauth-logo.png" width="42" height="42" alt="Cirkle.World" style="display:block;border-radius:12px;">
+                      <img src="cid:cirkle-logo" width="42" height="42" alt="Cirkle.World" style="display:block;border-radius:12px;">
                     </td>
                     <td>
                       <div style="font-size:18px;font-weight:800;letter-spacing:-.02em;color:${INK};">Cirkle.World</div>
