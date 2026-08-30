@@ -214,6 +214,14 @@ serve(async (request) => {
   let scanRunId: string | null = null;
   try {
     const body = await request.json();
+    if (body.action === "status") {
+      const configuredProviders = [
+        Deno.env.get("GEMINI_API_KEY") ? "gemini" : null,
+        Deno.env.get("OPENAI_API_KEY") ? "openai" : null,
+        Deno.env.get("ANTHROPIC_API_KEY") ? "anthropic" : null,
+      ].filter(Boolean);
+      return json({ configured_providers: configuredProviders });
+    }
     const provider = body.provider as Provider;
     if (!["openai", "anthropic", "gemini"].includes(provider)) throw new Error("Choose OpenAI, Anthropic, or Gemini.");
     const model = typeof body.model === "string" ? body.model.trim().slice(0, 100) : "";
@@ -222,6 +230,7 @@ serve(async (request) => {
     if (!sourceUrls.length) throw new Error("Add at least one HTTPS event source URL.");
     sourceUrls.forEach(assertPublicHttpsUrl);
     const instructions = typeof body.instructions === "string" ? body.instructions.trim().slice(0, 2000) : "";
+    const sourceIit = typeof body.source_iit === "string" ? body.source_iit.trim().slice(0, 120) : "";
     const rawAudience = (body.audience || {}) as Partial<Audience>;
     const audience: Audience = {
       mode: rawAudience.mode === "targeted" ? "targeted" : "everyone",
@@ -235,6 +244,7 @@ serve(async (request) => {
 
     const { data: run, error: runError } = await adminClient.from("event_scan_runs").insert({
       requested_by: user.id, provider, model, source_urls: sourceUrls, instructions: instructions || null,
+      source_iit: sourceIit || null,
       audience_mode: audience.mode, target_iits: audience.iits, target_courses: audience.courses,
       target_specialisations: audience.specialisations,
     }).select("id").single();
@@ -247,9 +257,10 @@ serve(async (request) => {
       .map((result) => result.value).filter(Boolean).join("\n\n");
     if (!sourceText) throw new Error("None of the supplied event sources could be read.");
 
-    const prompt = `You extract real events from supplied source text. Today is ${new Date().toISOString()}.
+    const prompt = `You are Cirkle's careful IIT event editor. Extract real, meaningful upcoming events from supplied source text. Today is ${new Date().toISOString()}.
 Return only JSON matching this shape: {"events":[{"title":"...","description":null,"start_time":"ISO-8601 with timezone","end_time":null,"location":null,"organizer":null,"registration_url":null,"source_url":"https://..."}]}.
-Rules: include only events explicitly supported by the sources; exclude past events, news, jobs, and undated announcements; never invent dates, URLs, venues, or organizers; use null when optional data is absent; deduplicate; maximum 40 events. ${instructions ? `Admin instructions: ${instructions}` : ""}
+Prioritize significant campus experiences: institute fests, distinguished or chief-guest visits, public talks, conferences, competitions, research showcases, convocations, cultural or sports festivals, entrepreneurship programs, and substantial alumni events.
+Rules: include only events explicitly supported by the sources; exclude routine class notices, past events, news without a future event, jobs, and undated announcements; never invent dates, URLs, venues, or organizers; use null when optional data is absent; make descriptions concise and factual; deduplicate; maximum 40 events. ${sourceIit ? `These sources belong to ${sourceIit}.` : "These sources may cover multiple IITs."} ${instructions ? `Admin instructions: ${instructions}` : ""}
 
 ${sourceText}`;
     const extracted = await callProvider(provider, model, prompt);
@@ -275,6 +286,7 @@ ${sourceText}`;
         registration_url: event.registration_url?.startsWith("https://") ? event.registration_url : null,
         source_url: event.source_url?.startsWith("https://") ? event.source_url : sourceUrls[0],
         source_fingerprint: fingerprint,
+        source_iit: sourceIit || null,
         source_type: "scan",
         scan_run_id: scanRunId,
         status: "draft",

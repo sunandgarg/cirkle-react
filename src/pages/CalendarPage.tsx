@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Calendar as CalendarIcon, Check, ChevronLeft, ChevronRight, Clock, ExternalLink, Globe2, MapPin, Settings2, Sparkles, Users } from "lucide-react";
@@ -9,6 +9,7 @@ import EmptyState from "@/components/EmptyState";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import type { Database } from "@/integrations/supabase/types";
+import { isEventFromInstitute, rankEventsForViewer } from "@/lib/eventRanking";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 
@@ -19,7 +20,7 @@ const audienceLabel = (event: EventRow) => {
 };
 
 const CalendarPage = () => {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, profile } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -81,14 +82,20 @@ const CalendarPage = () => {
     return !isPast;
   });
 
-  const upcoming = events.filter((event) => new Date(event.end_time || event.start_time).getTime() >= now);
+  const viewerIit = profile?.iit_name;
+  const rankingSeed = `${user?.id || "member"}:${format(currentMonth, "yyyy-MM")}`;
+  const upcoming = useMemo(() => rankEventsForViewer(
+    events.filter((event) => new Date(event.end_time || event.start_time).getTime() >= now),
+    viewerIit,
+    rankingSeed,
+  ), [events, now, rankingSeed, viewerIit]);
   const nextEvent = upcoming[0];
   const monthStart = startOfMonth(currentMonth);
   const days = eachDayOfInterval({ start: monthStart, end: endOfMonth(currentMonth) });
   const eventsOnDate = (date: Date) => events.filter((event) => isSameDay(new Date(event.start_time), date));
-  const listEvents = selectedDate
+  const listEvents = rankEventsForViewer(selectedDate
     ? filteredByView.filter((event) => isSameDay(new Date(event.start_time), selectedDate))
-    : filteredByView.filter((event) => isSameMonth(new Date(event.start_time), currentMonth));
+    : filteredByView.filter((event) => isSameMonth(new Date(event.start_time), currentMonth)), viewerIit, rankingSeed);
 
   return (
     <div className="bg-background min-h-screen">
@@ -96,7 +103,7 @@ const CalendarPage = () => {
         <div className="flex items-center justify-between max-w-3xl mx-auto">
           <div>
             <h1 className="text-lg font-bold text-foreground">Events</h1>
-            <p className="text-xs text-muted-foreground">Relevant opportunities for your IIT journey</p>
+            <p className="text-xs text-muted-foreground">Your IIT first · every campus kept together</p>
           </div>
           {isAdmin && <Button size="sm" variant="outline" className="rounded-full" onClick={() => navigate("/admin")}><Settings2 className="w-4 h-4" /> Manage</Button>}
         </div>
@@ -107,7 +114,7 @@ const CalendarPage = () => {
           <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-primary via-primary/90 to-violet-600 text-primary-foreground p-5 shadow-lg shadow-primary/15">
             <div className="absolute -right-12 -top-12 w-40 h-40 rounded-full bg-white/10" />
             <div className="relative">
-              <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-white/80"><Sparkles className="w-3.5 h-3.5" /> Next for you</div>
+              <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-white/80"><Sparkles className="w-3.5 h-3.5" /> {isEventFromInstitute(nextEvent, viewerIit) ? `From ${viewerIit}` : "Next for you"}</div>
               <h2 className="text-xl font-black leading-tight mt-3 max-w-lg">{nextEvent.title}</h2>
               <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-3 text-xs text-white/85">
                 <span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" />{format(new Date(nextEvent.start_time), "EEE, MMM d · h:mm a")}</span>
@@ -146,7 +153,7 @@ const CalendarPage = () => {
         </section>
 
         <section className="space-y-3">
-          <div className="flex items-center justify-between"><div><h3 className="text-sm font-bold">{selectedDate ? format(selectedDate, "EEEE, MMMM d") : `${format(currentMonth, "MMMM")} events`}</h3><p className="text-[11px] text-muted-foreground">Only events available to your verified profile are shown.</p></div>{selectedDate && <button onClick={() => setSelectedDate(null)} className="text-xs font-semibold text-primary">Clear date</button>}</div>
+          <div className="flex items-center justify-between"><div><h3 className="text-sm font-bold">{selectedDate ? format(selectedDate, "EEEE, MMMM d") : `${format(currentMonth, "MMMM")} events`}</h3><p className="text-[11px] text-muted-foreground">{viewerIit ? `${viewerIit} first, then adjacent campus groups.` : "Only events available to your verified profile are shown."}</p></div>{selectedDate && <button onClick={() => setSelectedDate(null)} className="text-xs font-semibold text-primary">Clear date</button>}</div>
           {isLoading ? [1, 2].map((item) => <div key={item} className="h-36 rounded-2xl bg-muted animate-pulse" />) : listEvents.length ? listEvents.map((event) => (
             <article key={event.id} className="rounded-2xl border border-border bg-card p-4 shadow-sm">
               <div className="flex gap-3">
@@ -154,7 +161,7 @@ const CalendarPage = () => {
                 <div className="flex-1 min-w-0"><h4 className="font-bold text-sm text-foreground">{event.title}</h4>{event.organizer && <p className="text-[11px] text-muted-foreground mt-0.5">By {event.organizer}</p>}<div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[11px] text-muted-foreground"><span className="flex items-center gap-1"><Clock className="w-3 h-3" />{format(new Date(event.start_time), "h:mm a")}</span>{event.location && <span className="flex items-center gap-1"><MapPin className="w-3 h-3" />{event.location}</span>}</div></div>
               </div>
               {event.description && <p className="text-xs text-muted-foreground leading-relaxed mt-3 line-clamp-3">{event.description}</p>}
-              <div className="mt-3 flex items-center gap-2"><span className="inline-flex items-center gap-1 text-[10px] font-semibold rounded-full bg-primary/10 text-primary px-2.5 py-1">{event.audience_mode === "everyone" ? <Globe2 className="w-3 h-3" /> : <Users className="w-3 h-3" />}{audienceLabel(event)}</span></div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">{event.source_iit && <span className="inline-flex items-center gap-1 text-[10px] font-bold rounded-full bg-violet-500/10 text-violet-700 dark:text-violet-300 px-2.5 py-1">{event.source_iit}</span>}<span className="inline-flex items-center gap-1 text-[10px] font-semibold rounded-full bg-primary/10 text-primary px-2.5 py-1">{event.audience_mode === "everyone" ? <Globe2 className="w-3 h-3" /> : <Users className="w-3 h-3" />}{audienceLabel(event)}</span></div>
               <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-border/60">
                 <Button size="sm" variant={myRsvps[event.id] === "going" ? "default" : "outline"} className="rounded-xl h-10" disabled={rsvp.isPending} onClick={() => rsvp.mutate({ eventId: event.id, status: "going" })}>{myRsvps[event.id] === "going" ? <><Check className="w-4 h-4" /> Going</> : "I'm going"}</Button>
                 {event.registration_url ? <a href={event.registration_url} target="_blank" rel="noreferrer" className="h-10 rounded-xl bg-secondary text-foreground text-xs font-semibold flex items-center justify-center gap-1.5">Register <ExternalLink className="w-3.5 h-3.5" /></a> : <Button size="sm" variant={myRsvps[event.id] === "not_going" ? "secondary" : "ghost"} className="rounded-xl h-10" disabled={rsvp.isPending} onClick={() => rsvp.mutate({ eventId: event.id, status: "not_going" })}>Not for me</Button>}

@@ -818,6 +818,7 @@ export type Database = {
           provider: string
           requested_by: string
           skipped_count: number
+          source_iit: string | null
           source_urls: string[]
           status: string
           target_courses: string[]
@@ -837,6 +838,7 @@ export type Database = {
           provider: string
           requested_by: string
           skipped_count?: number
+          source_iit?: string | null
           source_urls: string[]
           status?: string
           target_courses?: string[]
@@ -856,6 +858,7 @@ export type Database = {
           provider?: string
           requested_by?: string
           skipped_count?: number
+          source_iit?: string | null
           source_urls?: string[]
           status?: string
           target_courses?: string[]
@@ -879,6 +882,7 @@ export type Database = {
           registration_url: string | null
           scan_run_id: string | null
           source_fingerprint: string | null
+          source_iit: string | null
           source_type: string
           source_url: string | null
           start_time: string
@@ -903,6 +907,7 @@ export type Database = {
           registration_url?: string | null
           scan_run_id?: string | null
           source_fingerprint?: string | null
+          source_iit?: string | null
           source_type?: string
           source_url?: string | null
           start_time: string
@@ -927,6 +932,7 @@ export type Database = {
           registration_url?: string | null
           scan_run_id?: string | null
           source_fingerprint?: string | null
+          source_iit?: string | null
           source_type?: string
           source_url?: string | null
           start_time?: string

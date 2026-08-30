@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, Check, ExternalLink, Globe2, Loader2, Pencil, Plus, Radar, Trash2, X } from "lucide-react";
+import { Bot, CalendarDays, Check, ExternalLink, Globe2, Loader2, Pencil, Plus, Radar, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { IIT_LIST } from "@/data/iitInstitutes";
@@ -24,6 +24,7 @@ type Audience = {
 
 type EventForm = Audience & {
   id?: string;
+  source_iit: string;
   title: string;
   description: string;
   start_time: string;
@@ -36,14 +37,21 @@ type EventForm = Audience & {
 
 const emptyAudience = (): Audience => ({ mode: "everyone", iits: [], courses: [], specialisations: [] });
 const emptyEvent = (): EventForm => ({
-  ...emptyAudience(), title: "", description: "", start_time: "", end_time: "", location: "",
+  ...emptyAudience(), source_iit: "", title: "", description: "", start_time: "", end_time: "", location: "",
   organizer: "", registration_url: "", status: "draft",
 });
 const MODEL_DEFAULTS = {
-  openai: "gpt-5.6-luna",
+  openai: "gpt-5-mini",
   anthropic: "claude-sonnet-4-20250514",
-  gemini: "gemini-3.5-flash",
+  gemini: "gemini-2.5-flash",
 } as const;
+
+const EVENT_CRITERIA_PRESETS = [
+  ["Major campus events", "Prioritize major institute events, convocations, public conferences, research showcases, and high-value campus programs."],
+  ["Chief guests & talks", "Prioritize distinguished visitors, chief guests, public lectures, fireside chats, and notable speaker sessions."],
+  ["Fests & competitions", "Prioritize cultural, technical, entrepreneurship and sports festivals, competitions, and open registrations."],
+  ["Student opportunities", "Prioritize events that IIT students or alumni can attend, enter, volunteer for, or meaningfully benefit from."],
+] as const;
 
 const toggle = (values: string[], value: string) => values.includes(value)
   ? values.filter((item) => item !== value)
@@ -129,6 +137,7 @@ const AdminEvents = () => {
   const [model, setModel] = useState<string>(MODEL_DEFAULTS.gemini);
   const [sourceUrls, setSourceUrls] = useState("");
   const [instructions, setInstructions] = useState("");
+  const [sourceIit, setSourceIit] = useState("");
   const [scanAudience, setScanAudience] = useState<Audience>(emptyAudience());
 
   const { data: events = [], isLoading, error: eventsError } = useQuery({
@@ -151,6 +160,22 @@ const AdminEvents = () => {
     retry: false,
   });
 
+  const { data: scannerStatus, isLoading: isScannerStatusLoading } = useQuery({
+    queryKey: ["admin-event-scanner-status"],
+    queryFn: async () => {
+      const { data, error } = await supabase.functions.invoke("scan-events", { body: { action: "status" } });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      return data as { configured_providers?: Array<keyof typeof MODEL_DEFAULTS> };
+    },
+    enabled: !!user,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+  const configuredProviders = scannerStatus?.configured_providers || [];
+  const scannerReady = configuredProviders.length > 0;
+  const selectedProviderReady = configuredProviders.includes(provider);
+
   const saveEvent = useMutation({
     mutationFn: async (publish: boolean) => {
       if (!user) throw new Error("Sign in again to continue.");
@@ -167,6 +192,7 @@ const AdminEvents = () => {
         start_time: new Date(form.start_time).toISOString(), end_time: form.end_time ? new Date(form.end_time).toISOString() : null,
         location: form.location.trim() || null, organizer: form.organizer.trim() || null,
         registration_url: form.registration_url.trim() || null,
+        source_iit: form.source_iit || null,
         status: publish ? "published" : form.status,
         published_at: publish ? new Date().toISOString() : null,
         audience_mode: form.mode, target_iits: form.iits, target_courses: form.courses,
@@ -193,9 +219,15 @@ const AdminEvents = () => {
     mutationFn: async () => {
       const urls = sourceUrls.split(/\n|,/).map((url) => url.trim()).filter(Boolean);
       if (!urls.length) throw new Error("Add at least one event source URL.");
+      if (urls.length > 10) throw new Error("Use at most 10 sources per scan.");
+      for (const rawUrl of urls) {
+        let url: URL;
+        try { url = new URL(rawUrl); } catch { throw new Error("Every event source must be a valid URL."); }
+        if (url.protocol !== "https:") throw new Error("Event sources must use HTTPS.");
+      }
       if (scanAudience.mode === "targeted" && !scanAudience.iits.length && !scanAudience.courses.length && !scanAudience.specialisations.length) throw new Error("Choose at least one audience target.");
       const { data, error } = await supabase.functions.invoke("scan-events", {
-        body: { provider, model: model.trim(), source_urls: urls, instructions: instructions.trim(), audience: scanAudience },
+        body: { provider, model: model.trim(), source_urls: urls, source_iit: sourceIit, instructions: instructions.trim(), audience: scanAudience },
       });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
@@ -229,6 +261,7 @@ const AdminEvents = () => {
     const localDate = (value: string | null) => value ? new Date(new Date(value).getTime() - new Date(value).getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : "";
     setForm({
       id: event.id, title: event.title, description: event.description || "", start_time: localDate(event.start_time), end_time: localDate(event.end_time),
+      source_iit: event.source_iit || "",
       location: event.location || "", organizer: event.organizer || "", registration_url: event.registration_url || "", status: event.status as EventForm["status"],
       mode: event.audience_mode === "targeted" ? "targeted" : "everyone", iits: event.target_iits || [], courses: event.target_courses || [], specialisations: event.target_specialisations || [],
     });
@@ -246,14 +279,19 @@ const AdminEvents = () => {
       <div className="rounded-2xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h3 className="font-bold text-foreground flex items-center gap-2"><CalendarDays className="w-5 h-5 text-primary" /> Events control center</h3>
-            <p className="text-xs text-muted-foreground mt-1">Scan trusted sources into drafts, review them, and publish to a precise verified audience.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-bold text-foreground flex items-center gap-2"><Sparkles className="w-5 h-5 text-primary" /> AI Event Studio</h3>
+              <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${scannerReady ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>{isScannerStatusLoading ? "Checking…" : scannerReady ? "AI ready" : "Setup needed"}</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Find high-value IIT events, create reviewable drafts, and publish with institute-aware ranking.</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" className="flex-1 sm:flex-none rounded-xl" onClick={() => setShowScanner(true)}><Radar className="w-4 h-4" /> Scan</Button>
+            <Button variant="outline" className="flex-1 sm:flex-none rounded-xl" onClick={() => setShowScanner(true)}><Bot className="w-4 h-4" /> AI Generate</Button>
             <Button className="flex-1 sm:flex-none rounded-xl" onClick={() => { setForm(emptyEvent()); setShowEditor(true); }}><Plus className="w-4 h-4" /> Add manually</Button>
           </div>
         </div>
+        {!isScannerStatusLoading && !scannerReady && <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-[11px] leading-relaxed text-amber-800 dark:text-amber-200"><span className="font-bold">Connect Gemini once:</span> create a Gemini API key, then add it as <code className="font-mono">GEMINI_API_KEY</code> in Supabase Edge Function secrets. The same key powers Job Studio and Event Studio and is never exposed to browsers.</div>}
+        {scannerReady && <div className="mt-4 flex items-center gap-2 rounded-xl bg-emerald-500/10 px-3 py-2 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300"><ShieldCheck className="h-4 w-4" /> Connected: {configuredProviders.join(", ")}. AI imports drafts only; an admin remains the publishing gate.</div>}
         <div className="grid grid-cols-3 gap-2 mt-4">
           {["draft", "published", "archived"].map((status) => <div key={status} className="rounded-xl bg-secondary/55 p-3 text-center"><p className="text-lg font-bold">{events.filter((event) => event.status === status).length}</p><p className="text-[10px] uppercase tracking-wide text-muted-foreground">{status}</p></div>)}
         </div>
@@ -270,7 +308,7 @@ const AdminEvents = () => {
               <div className="w-12 h-12 rounded-xl bg-primary/10 text-primary flex flex-col items-center justify-center shrink-0"><span className="text-[10px] font-bold uppercase">{format(new Date(event.start_time), "MMM")}</span><span className="text-lg font-black leading-none">{format(new Date(event.start_time), "d")}</span></div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2"><div><h4 className="text-sm font-bold text-foreground">{event.title}</h4><p className="text-[11px] text-muted-foreground mt-0.5">{format(new Date(event.start_time), "EEE, MMM d · h:mm a")}{event.location ? ` · ${event.location}` : ""}</p></div><span className={`text-[9px] uppercase tracking-wide px-2 py-1 rounded-full font-bold ${event.status === "published" ? "bg-emerald-500/10 text-emerald-600" : event.status === "draft" ? "bg-amber-500/10 text-amber-600" : "bg-muted text-muted-foreground"}`}>{event.status}</span></div>
-                <div className="mt-2 flex items-center gap-2"><AudienceSummary event={event} />{event.source_type === "scan" && <span className="text-[9px] rounded-full bg-violet-500/10 text-violet-600 px-2 py-0.5 font-bold">AI draft</span>}</div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">{event.source_iit && <span className="text-[9px] rounded-full bg-primary/10 text-primary px-2 py-0.5 font-bold">{event.source_iit}</span>}<AudienceSummary event={event} />{event.source_type === "scan" && <span className="text-[9px] rounded-full bg-violet-500/10 text-violet-600 px-2 py-0.5 font-bold">AI draft</span>}</div>
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-border/60">
@@ -289,6 +327,7 @@ const AdminEvents = () => {
 
       {showEditor && <div className="fixed inset-0 z-[80] bg-background/80 backdrop-blur-sm flex items-end sm:items-center justify-center"><div className="bg-card w-full max-w-xl rounded-t-3xl sm:rounded-3xl border border-border max-h-[92dvh] overflow-y-auto shadow-2xl"><div className="sticky top-0 bg-card/95 backdrop-blur-xl border-b border-border px-5 py-4 flex items-center justify-between z-10"><div><h3 className="font-bold">{form.id ? "Edit event" : "Create event"}</h3><p className="text-[11px] text-muted-foreground">Clear information builds trust and attendance.</p></div><button onClick={() => setShowEditor(false)} className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center"><X className="w-4 h-4" /></button></div><div className="p-5 space-y-4">
         <div><Label>Event title *</Label><Input maxLength={180} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="AI research workshop" className="mt-1 h-11 rounded-xl" /></div>
+        <div><Label>Hosting IIT</Label><select value={form.source_iit} onChange={(event) => setForm({ ...form, source_iit: event.target.value })} className="mt-1 w-full h-11 rounded-xl border border-border bg-background px-3 text-sm"><option value="">Cross-IIT / national event</option>{IIT_LIST.map((iit) => <option key={iit.name} value={iit.name}>{iit.name}</option>)}</select><p className="text-[10px] text-muted-foreground mt-1">This controls feed grouping; it does not restrict who can view the event.</p></div>
         <div><Label>Description</Label><Textarea maxLength={4000} rows={4} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="What members will gain, agenda and important requirements" className="mt-1 rounded-xl" /></div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><div><Label>Starts *</Label><Input type="datetime-local" value={form.start_time} onChange={(event) => setForm({ ...form, start_time: event.target.value })} className="mt-1 h-11 rounded-xl" /></div><div><Label>Ends</Label><Input type="datetime-local" value={form.end_time} min={form.start_time} onChange={(event) => setForm({ ...form, end_time: event.target.value })} className="mt-1 h-11 rounded-xl" /></div></div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><div><Label>Location</Label><Input value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="IIT Delhi / Online" className="mt-1 h-11 rounded-xl" /></div><div><Label>Organizer</Label><Input value={form.organizer} onChange={(event) => setForm({ ...form, organizer: event.target.value })} placeholder="E-Cell IIT Delhi" className="mt-1 h-11 rounded-xl" /></div></div>
@@ -297,13 +336,15 @@ const AdminEvents = () => {
         <div className="grid grid-cols-2 gap-2 sticky bottom-0 bg-card pt-2"><Button variant="outline" className="h-11 rounded-xl" disabled={saveEvent.isPending} onClick={() => saveEvent.mutate(false)}>Save draft</Button><Button className="h-11 rounded-xl" disabled={saveEvent.isPending} onClick={() => saveEvent.mutate(true)}>{saveEvent.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Publish now"}</Button></div>
       </div></div></div>}
 
-      {showScanner && <div className="fixed inset-0 z-[80] bg-background/80 backdrop-blur-sm flex items-end sm:items-center justify-center"><div className="bg-card w-full max-w-xl rounded-t-3xl sm:rounded-3xl border border-border max-h-[92dvh] overflow-y-auto shadow-2xl"><div className="sticky top-0 bg-card/95 backdrop-blur-xl border-b border-border px-5 py-4 flex items-center justify-between z-10"><div><h3 className="font-bold flex items-center gap-2"><Radar className="w-5 h-5 text-primary" /> Scan event sources</h3><p className="text-[11px] text-muted-foreground">AI creates drafts only. You approve what goes live.</p></div><button onClick={() => setShowScanner(false)} className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center"><X className="w-4 h-4" /></button></div><div className="p-5 space-y-4">
+      {showScanner && <div className="fixed inset-0 z-[80] bg-background/80 backdrop-blur-sm flex items-end sm:items-center justify-center"><div className="bg-card w-full max-w-xl rounded-t-3xl sm:rounded-3xl border border-border max-h-[92dvh] overflow-y-auto shadow-2xl"><div className="sticky top-0 bg-card/95 backdrop-blur-xl border-b border-border px-5 py-4 flex items-center justify-between z-10"><div><h3 className="font-bold flex items-center gap-2"><Sparkles className="w-5 h-5 text-primary" /> AI Event Studio</h3><p className="text-[11px] text-muted-foreground">Scan official sources. AI creates drafts; you decide what goes live.</p></div><button onClick={() => setShowScanner(false)} className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center"><X className="w-4 h-4" /></button></div><div className="p-5 space-y-4">
         <div className="grid grid-cols-2 gap-3"><div><Label>Provider</Label><select value={provider} onChange={(event) => { const next = event.target.value as keyof typeof MODEL_DEFAULTS; setProvider(next); setModel(MODEL_DEFAULTS[next]); }} className="mt-1 w-full h-11 rounded-xl border border-border bg-background px-3 text-sm"><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="anthropic">Claude</option></select></div><div><Label>Model</Label><Input value={model} onChange={(event) => setModel(event.target.value)} className="mt-1 h-11 rounded-xl" /></div></div>
+        <div><Label>Source institute</Label><select value={sourceIit} onChange={(event) => setSourceIit(event.target.value)} className="mt-1 w-full h-11 rounded-xl border border-border bg-background px-3 text-sm"><option value="">Multiple IITs / national source</option>{IIT_LIST.map((iit) => <option key={iit.name} value={iit.name}>{iit.name}</option>)}</select><p className="text-[10px] text-muted-foreground mt-1">Choose the IIT whose official pages you are scanning. Its events stay together and rank first for that IIT’s members.</p></div>
         <div><Label>Source URLs *</Label><Textarea rows={5} value={sourceUrls} onChange={(event) => setSourceUrls(event.target.value)} placeholder={"https://home.iitd.ac.in/events\nhttps://ecell.example.org/calendar"} className="mt-1 rounded-xl font-mono text-xs" /><p className="text-[10px] text-muted-foreground mt-1">One public HTTPS page or JSON feed per line. Maximum 10 sources per scan.</p></div>
-        <div><Label>Extra instructions</Label><Textarea rows={3} maxLength={2000} value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="Example: include only entrepreneurship events with open registrations" className="mt-1 rounded-xl" /></div>
+        <div><div className="flex items-center justify-between gap-2"><Label>Editorial focus</Label><span className="text-[10px] text-muted-foreground">Tap to add</span></div><div className="flex gap-1.5 overflow-x-auto py-2">{EVENT_CRITERIA_PRESETS.map(([label, value]) => <button key={label} type="button" onClick={() => setInstructions((current) => current.includes(value) ? current : `${current}${current ? "\n" : ""}${value}`)} className="shrink-0 rounded-full border border-border bg-background px-3 py-1.5 text-[10px] font-semibold text-muted-foreground hover:border-primary hover:text-primary">{label}</button>)}</div><Textarea rows={3} maxLength={2000} value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="Example: include only entrepreneurship events with open registrations" className="rounded-xl" /></div>
         <AudiencePicker value={scanAudience} onChange={setScanAudience} />
         <div className="rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-300 p-3 text-[11px] leading-relaxed">Scanned results are never published automatically. Dates, links and audience must be reviewed by an admin first.</div>
-        <Button className="w-full h-12 rounded-xl" disabled={scanEvents.isPending || !model.trim() || !sourceUrls.trim()} onClick={() => scanEvents.mutate()}>{scanEvents.isPending ? <><Loader2 className="w-4 h-4 animate-spin" /> Reading and extracting events…</> : <><Radar className="w-4 h-4" /> Scan and create drafts</>}</Button>
+        {!selectedProviderReady && <p className="rounded-xl bg-amber-500/10 p-3 text-[11px] text-amber-800 dark:text-amber-200">{provider === "gemini" ? "Add GEMINI_API_KEY to Supabase Edge Function secrets to enable Gemini." : `${provider} is not configured in Supabase Edge Function secrets.`}</p>}
+        <Button className="w-full h-12 rounded-xl" disabled={scanEvents.isPending || !model.trim() || !sourceUrls.trim() || !selectedProviderReady} onClick={() => scanEvents.mutate()}>{scanEvents.isPending ? <><Loader2 className="w-4 h-4 animate-spin" /> Reading and extracting events…</> : <><Sparkles className="w-4 h-4" /> Search, extract and import drafts</>}</Button>
       </div></div></div>}
     </div>
   );
