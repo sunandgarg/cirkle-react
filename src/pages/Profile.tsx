@@ -9,8 +9,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft, Pencil, Settings, MapPin, BadgeCheck, UserPlus, Check, MessageSquare,
-  LogOut, Camera, GraduationCap, Calendar, Briefcase, Share2, LinkIcon, Mail, Globe,
-  ExternalLink, Plus, X, Trash2, Star, MessageCircle, Phone, Video, ShieldCheck, Link2
+  LogOut, Camera, GraduationCap, Calendar, Briefcase, Share2, LinkIcon,
+  Plus, X, Trash2, Phone, Video, ShieldCheck, Link2
 } from "lucide-react";
 import { toast } from "sonner";
 import { format, formatDistanceToNow } from "date-fns";
@@ -23,7 +23,19 @@ import { companies } from "@/data/companiesList";
 import { locations } from "@/data/locationsList";
 import { clearMobileTestSession } from "@/lib/mobileVerification";
 
-const PROFILE_TABS = ["About Me", "Education", "Professional Details", "Expertise", "Pricing Information", "Social Handles", "Activity"];
+const PROFILE_TABS = [
+  { label: "About Me", compact: "About" },
+  { label: "Education", compact: "Edu" },
+  { label: "Professional Details", compact: "Career" },
+  { label: "Expertise", compact: "Skills" },
+  { label: "Pricing Information", compact: "Pricing" },
+  { label: "Social Handles", compact: "Social" },
+  { label: "Activity", compact: "Activity" },
+] as const;
+
+const formatMemberStatus = (status?: string | null) => status
+  ? status.replace(/_/g, " ").replace(/\b\w/g, (character) => character.toUpperCase())
+  : "";
 
 const getCompanyLogo = (name: string) => {
   const key = name.toLowerCase().trim();
@@ -82,7 +94,7 @@ const Profile = () => {
   const targetId = resolvedUserId;
   const isOwn = targetId === user?.id;
 
-  const { data: profile, refetch: refetchProfile } = useQuery({
+  const { data: profile, refetch: refetchProfile, isFetched: profileFetched } = useQuery({
     queryKey: ["profile", targetId],
     queryFn: async () => {
       if (!targetId) return null;
@@ -344,55 +356,76 @@ const Profile = () => {
   const EditButton = ({ section, tab }: { section: string; tab?: number }) => (
     isOwn ? (
       <button onClick={() => { if (tab !== undefined) setActiveTab(tab); setEditingSection(section); }}
-        className="text-xs text-primary font-medium flex items-center gap-1 hover:underline">
+        className="inline-flex min-h-8 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/10">
         <Pencil className="w-3 h-3" /> Edit
       </button>
     ) : null
   );
 
+  if (targetId && !displayProfile && !profileFetched) {
+    return (
+      <div className="min-h-screen w-full overflow-hidden bg-background">
+        <div className="h-48 animate-pulse bg-primary/35 sm:h-56" />
+        <div className="relative z-10 mx-auto -mt-14 w-full max-w-3xl px-3 sm:px-5">
+          <div className="h-64 animate-pulse rounded-[24px] border border-border bg-card shadow-sm" />
+          <div className="mt-4 h-12 animate-pulse rounded-2xl bg-card" />
+          <div className="mt-4 h-52 animate-pulse rounded-[24px] bg-card" />
+        </div>
+      </div>
+    );
+  }
+
+  if (targetId && !displayProfile && profileFetched) {
+    return (
+      <div className="grid min-h-[60vh] place-items-center bg-background px-6 text-center">
+        <div><h1 className="text-lg font-bold text-foreground">Profile unavailable</h1><p className="mt-1 text-sm text-muted-foreground">This member profile could not be found.</p><Button className="mt-4 rounded-xl" onClick={() => navigate(-1)}>Go back</Button></div>
+      </div>
+    );
+  }
+
   return (
-    <div className="bg-background min-h-screen pb-8">
+    <div className="min-h-screen w-full overflow-x-hidden bg-background pb-[max(2rem,env(safe-area-inset-bottom))]">
       {/* Cover */}
-      <div className="h-44 sm:h-52 relative overflow-hidden profile-cover">
-        {(displayProfile as any)?.cover_photo_url ? <img src={(displayProfile as any).cover_photo_url} alt="Cover" className="absolute inset-0 w-full h-full object-cover" loading="eager" decoding="async" />
+      <div className="profile-cover relative h-48 overflow-hidden sm:h-56">
+        {(displayProfile as any)?.cover_photo_url ? <><img src={(displayProfile as any).cover_photo_url} alt="Cover" className="absolute inset-0 h-full w-full object-cover object-center" loading="eager" decoding="async" /><div className="absolute inset-0 bg-gradient-to-b from-black/15 via-transparent to-black/10" /></>
           : <div className="absolute inset-0 bg-gradient-to-br from-primary via-primary/80 to-primary/60" />}
-        <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 pt-4">
-          <button onClick={() => navigate(-1)} className="w-9 h-9 rounded-full bg-card/60 backdrop-blur flex items-center justify-center"><ArrowLeft className="w-4 h-4 text-foreground" /></button>
+        <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between px-3 pt-[max(1rem,env(safe-area-inset-top))] sm:px-5">
+          <button aria-label="Go back" onClick={() => navigate(-1)} className="grid h-10 w-10 place-items-center rounded-full border border-white/30 bg-card/80 shadow-sm backdrop-blur-md transition-transform active:scale-95"><ArrowLeft className="h-[18px] w-[18px] text-foreground" /></button>
           <div className="flex items-center gap-2">
             {isOwn && (
               <>
-                <button onClick={() => coverInputRef.current?.click()} className="w-9 h-9 rounded-full bg-card/60 backdrop-blur flex items-center justify-center" title="Change cover"><Camera className="w-4 h-4 text-foreground" /></button>
+                <button aria-label="Change cover photo" onClick={() => coverInputRef.current?.click()} className="grid h-10 w-10 place-items-center rounded-full border border-white/30 bg-card/80 shadow-sm backdrop-blur-md transition-transform active:scale-95" title="Change cover"><Camera className="w-4 h-4 text-foreground" /></button>
                 <input ref={coverInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadImage(f, "avatars", "cover_photo_url"); e.target.value = ""; }} />
-                <button onClick={() => navigate("/settings")} className="w-9 h-9 rounded-full bg-card/60 backdrop-blur flex items-center justify-center"><Settings className="w-4 h-4 text-foreground" /></button>
+                <button aria-label="Open settings" onClick={() => navigate("/settings")} className="grid h-10 w-10 place-items-center rounded-full border border-white/30 bg-card/80 shadow-sm backdrop-blur-md transition-transform active:scale-95"><Settings className="w-4 h-4 text-foreground" /></button>
               </>
             )}
           </div>
         </div>
       </div>
 
-      <main className="max-w-lg mx-auto px-4 -mt-16 relative z-10">
+      <main className="relative z-10 mx-auto -mt-14 w-full max-w-3xl px-3 sm:-mt-16 sm:px-5">
         {/* Avatar + Name */}
-        <div className="bg-card rounded-2xl border border-border p-4 shadow-sm">
-          <div className="flex items-end gap-4 -mt-14 mb-3">
+        <div className="rounded-[24px] border border-border/80 bg-card p-4 shadow-[0_14px_35px_-22px_rgba(15,23,42,0.45)] sm:p-5">
+          <div className="mb-3 flex items-end gap-3.5 -mt-[58px] sm:gap-4">
             <div className="flex-shrink-0 relative">
               {(displayProfile as any)?.avatar_url ? (
-                <div className="w-24 h-24 rounded-full border-4 border-card overflow-hidden shadow-lg"><img src={(displayProfile as any).avatar_url} alt="Profile" className="w-full h-full object-cover" decoding="async" /></div>
+                <div className="h-[104px] w-[104px] overflow-hidden rounded-full border-[5px] border-card bg-secondary shadow-lg"><img src={(displayProfile as any).avatar_url} alt="Profile" className="h-full w-full object-cover" decoding="async" /></div>
               ) : (
-                <div className="w-24 h-24 rounded-full border-4 border-card bg-secondary flex items-center justify-center shadow-lg"><span className="text-3xl font-bold text-primary">{((displayProfile as any)?.name || "?")[0]}</span></div>
+                <div className="flex h-[104px] w-[104px] items-center justify-center rounded-full border-[5px] border-card bg-secondary shadow-lg"><span className="text-3xl font-bold text-primary">{((displayProfile as any)?.name || "?")[0]}</span></div>
               )}
               {isOwn && (
                 <>
-                  <button onClick={() => avatarInputRef.current?.click()} className="absolute bottom-0 right-0 w-7 h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-md border-2 border-card"><Camera className="w-3 h-3" /></button>
+                  <button aria-label="Change profile photo" onClick={() => avatarInputRef.current?.click()} className="absolute bottom-0 right-0 grid h-8 w-8 place-items-center rounded-full border-[3px] border-card bg-primary text-primary-foreground shadow-md transition-transform active:scale-95"><Camera className="w-3 h-3" /></button>
                   <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadImage(f, "avatars", "avatar_url"); e.target.value = ""; }} />
                 </>
               )}
             </div>
-            <div className="pb-1 flex-1 min-w-0 overflow-hidden">
+            <div className="min-w-0 flex-1 overflow-hidden pb-1.5">
               <div className="flex items-center gap-1.5 flex-wrap">
-                <h1 className="text-lg font-bold text-foreground break-words">{(displayProfile as any)?.name || "Anonymous"}</h1>
+                <h1 className="break-words text-xl font-black tracking-tight text-foreground">{(displayProfile as any)?.name || "Anonymous"}</h1>
                 {(displayProfile as any)?.is_verified && <BadgeCheck className="w-5 h-5 text-primary flex-shrink-0" />}
               </div>
-              {(displayProfile as any)?.headline && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{(displayProfile as any).headline}</p>}
+              {(displayProfile as any)?.headline && <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{(displayProfile as any).headline}</p>}
               {/* Slug URL display */}
               {profileSlug && (
                 <div className="flex items-center gap-1 mt-1">
@@ -423,18 +456,18 @@ const Profile = () => {
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-2 mt-2 mb-3 bg-secondary/50 rounded-xl p-2.5">
-            <div className="text-center"><p className="text-base font-bold text-foreground">{formatCount(stats?.connections || 0)}</p><p className="text-[10px] text-muted-foreground">Connections</p></div>
-            <div className="text-center border-x border-border"><p className="text-base font-bold text-foreground">{formatCount(stats?.posts || 0)}</p><p className="text-[10px] text-muted-foreground">Posts</p></div>
-            <div className="text-center"><p className="text-base font-bold text-foreground">{formatCount(stats?.sessions || 0)}</p><p className="text-[10px] text-muted-foreground">Sessions</p></div>
+          <div className="mb-3 mt-4 grid grid-cols-3 rounded-2xl border border-border/50 bg-secondary/55 px-1 py-3">
+            <div className="text-center"><p className="text-lg font-black leading-none text-foreground">{formatCount(stats?.connections || 0)}</p><p className="mt-1.5 text-[10px] font-medium text-muted-foreground">Connections</p></div>
+            <div className="border-x border-border text-center"><p className="text-lg font-black leading-none text-foreground">{formatCount(stats?.posts || 0)}</p><p className="mt-1.5 text-[10px] font-medium text-muted-foreground">Posts</p></div>
+            <div className="text-center"><p className="text-lg font-black leading-none text-foreground">{formatCount(stats?.sessions || 0)}</p><p className="mt-1.5 text-[10px] font-medium text-muted-foreground">Sessions</p></div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex min-w-0 gap-2">
             {isOwn ? (
               <>
-                <Button className="flex-1 rounded-xl h-9 text-xs font-semibold gap-1" onClick={() => { setActiveTab(0); setEditingSection("about"); }}><Pencil className="w-3.5 h-3.5" /> Edit Profile</Button>
-                <Button variant="outline" className="rounded-xl h-9 px-3" onClick={() => { navigator.clipboard.writeText(shareUrl); toast.success("Link copied!"); }}><Share2 className="w-3.5 h-3.5" /></Button>
-                {isAdmin && <Button variant="outline" className="rounded-xl h-9 gap-1 text-xs" onClick={() => navigate("/admin")}><ShieldCheck className="w-3.5 h-3.5" /> Admin</Button>}
-                <Button variant="outline" className="rounded-xl h-9 gap-1 text-xs" onClick={handleLogout}><LogOut className="w-3.5 h-3.5" /></Button>
+                <Button className="h-10 min-w-0 flex-1 gap-1 rounded-xl text-xs font-semibold" onClick={() => { setActiveTab(0); setEditingSection("about"); }}><Pencil className="w-3.5 h-3.5" /> Edit Profile</Button>
+                <Button aria-label="Share profile" title="Share profile" variant="outline" className="h-10 w-10 shrink-0 rounded-xl p-0" onClick={() => { navigator.clipboard.writeText(shareUrl); toast.success("Link copied!"); }}><Share2 className="w-3.5 h-3.5" /></Button>
+                {isAdmin && <Button variant="outline" className="h-10 shrink-0 gap-1 rounded-xl px-2.5 text-xs sm:px-3" onClick={() => navigate("/admin")}><ShieldCheck className="w-3.5 h-3.5" /> Admin</Button>}
+                <Button aria-label="Log out" title="Log out" variant="outline" className="h-10 w-10 shrink-0 rounded-xl p-0" onClick={handleLogout}><LogOut className="w-3.5 h-3.5" /></Button>
               </>
             ) : (
               <>
@@ -448,17 +481,19 @@ const Profile = () => {
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-border mt-4 -mx-1 px-1 overflow-x-auto scrollbar-hide">
+        <div role="tablist" aria-label="Profile sections" className="mt-4 grid grid-cols-7 overflow-hidden rounded-2xl border border-border/80 bg-card px-1 shadow-sm">
           {PROFILE_TABS.map((tab, i) => (
-            <button key={tab} onClick={() => setActiveTab(i)}
-              className={`py-2.5 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap px-3 ${activeTab === i ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>{tab}</button>
+            <button key={tab.label} role="tab" aria-selected={activeTab === i} aria-controls={`profile-panel-${i}`} onClick={() => setActiveTab(i)}
+              className={`min-w-0 border-b-2 px-0.5 py-3 text-center text-[10px] font-bold leading-none transition-colors sm:px-1 sm:text-[11px] ${activeTab === i ? "border-primary bg-primary/5 text-primary" : "border-transparent text-muted-foreground hover:bg-secondary/60 hover:text-foreground"}`}>
+              <span className="sm:hidden">{tab.compact}</span><span className="hidden sm:inline">{tab.label}</span>
+            </button>
           ))}
         </div>
 
         {/* Section Edit Modals */}
         {editingSection && (
-          <div className="fixed inset-0 z-[60] bg-background/80 backdrop-blur-sm flex items-end sm:items-center justify-center">
-            <div className="bg-card w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-border p-6 animate-fade-in max-h-[80vh] overflow-y-auto">
+          <div className="fixed inset-0 z-[60] flex items-end justify-center bg-background/80 backdrop-blur-sm sm:items-center">
+            <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md animate-fade-in overflow-y-auto rounded-t-[24px] border border-border bg-card p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:max-h-[85dvh] sm:rounded-[24px] sm:p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-bold text-foreground">Edit {editingSection === "about" ? "About Me" : editingSection === "expertise" ? "Expertise" : editingSection === "pricing" ? "Pricing" : editingSection === "social" ? "Social Handles" : editingSection === "education" ? "Add Education" : "Add Experience"}</h3>
                 <button onClick={() => setEditingSection(null)} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
@@ -545,10 +580,10 @@ const Profile = () => {
         )}
 
         {/* Tab Content */}
-        <div className="mt-4 animate-fade-in space-y-4">
+        <div id={`profile-panel-${activeTab}`} role="tabpanel" className="mt-4 animate-fade-in space-y-4">
           {/* ─── Profile Capsule Pricing Buttons (₹499 / ₹999 / ₹1999) ─── */}
           {(displayProfile as any)?.is_mentor && !isOwn && activeTab === 0 && (
-            <div className="bg-card rounded-2xl border border-border p-4">
+            <div className="rounded-[24px] border border-border/80 bg-card p-5 shadow-sm">
               <h3 className="font-bold text-foreground text-sm mb-3">Book a Session</h3>
               <div className="flex gap-2">
                 {[
@@ -570,7 +605,7 @@ const Profile = () => {
           )}
 
           {activeTab === 0 && (
-            <div className="bg-card rounded-2xl border border-border p-4 space-y-4">
+            <div className="space-y-4 rounded-[24px] border border-border/80 bg-card p-5 shadow-sm">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-foreground text-sm">About Me</h3>
                 <EditButton section="about" />
@@ -580,14 +615,14 @@ const Profile = () => {
               <div className="space-y-3 pt-2 border-t border-border">
                 {(displayProfile as any)?.location && <div className="flex items-center gap-2.5 text-sm text-muted-foreground"><MapPin className="w-4 h-4 text-primary flex-shrink-0" /> {(displayProfile as any).location}</div>}
                 {(displayProfile as any)?.date_of_birth && <div className="flex items-center gap-2.5 text-sm text-muted-foreground"><Calendar className="w-4 h-4 text-primary flex-shrink-0" /> {format(new Date((displayProfile as any).date_of_birth + "T00:00:00"), "do MMM, yyyy")}</div>}
-                {(displayProfile as any)?.iit_name && <div className="flex items-center gap-2.5 text-sm text-muted-foreground"><GraduationCap className="w-4 h-4 text-primary flex-shrink-0" /> {(displayProfile as any).iit_name}{(displayProfile as any)?.student_status && <span className="text-xs">· {(displayProfile as any).student_status}</span>}</div>}
+                {(displayProfile as any)?.iit_name && <div className="flex min-w-0 items-center gap-2.5 text-sm text-muted-foreground"><GraduationCap className="w-4 h-4 text-primary flex-shrink-0" /><span className="min-w-0 break-words">{(displayProfile as any).iit_name}{(displayProfile as any)?.student_status && <span className="text-xs"> · {formatMemberStatus((displayProfile as any).student_status)}</span>}</span></div>}
                 {(displayProfile as any)?.is_mentor && <div className="flex items-center gap-2.5 text-sm text-primary"><BadgeCheck className="w-4 h-4 flex-shrink-0" /> Mentor{(displayProfile as any).mentor_category && <span className="text-xs bg-primary/10 px-2 py-0.5 rounded-full">{(displayProfile as any).mentor_category}</span>}</div>}
               </div>
             </div>
           )}
 
           {activeTab === 1 && (
-            <div className="bg-card rounded-2xl border border-border p-4">
+            <div className="rounded-[24px] border border-border/80 bg-card p-5 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-bold text-foreground text-sm">Education</h3>
                 {isOwn && <button onClick={() => setEditingSection("education")} className="text-xs text-primary font-medium flex items-center gap-1 hover:underline"><Plus className="w-3 h-3" /> Add</button>}
@@ -595,10 +630,10 @@ const Profile = () => {
               {education && education.length > 0 ? (
                 <div className="space-y-4">
                   {education.map((edu: any) => (
-                    <div key={edu.id} className="flex gap-3">
+                    <div key={edu.id} className="flex min-w-0 gap-3">
                       <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0"><GraduationCap className="w-5 h-5 text-primary" /></div>
-                      <div className="flex-1">
-                        <p className="font-semibold text-sm text-foreground">{edu.institution}</p>
+                      <div className="min-w-0 flex-1">
+                        <p className="break-words font-semibold text-sm text-foreground">{edu.institution}</p>
                         <p className="text-xs text-muted-foreground">{[edu.degree, edu.branch_area].filter(Boolean).join(" - ")}</p>
                         {edu.passing_year && <p className="text-[10px] text-muted-foreground/70 mt-0.5">Class of {edu.passing_year}</p>}
                       </div>
@@ -611,7 +646,7 @@ const Profile = () => {
           )}
 
           {activeTab === 2 && (
-            <div className="bg-card rounded-2xl border border-border p-4">
+            <div className="rounded-[24px] border border-border/80 bg-card p-5 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-bold text-foreground text-sm">Professional Details</h3>
                 {isOwn && <button onClick={() => setEditingSection("experience")} className="text-xs text-primary font-medium flex items-center gap-1 hover:underline"><Plus className="w-3 h-3" /> Add</button>}
@@ -621,11 +656,11 @@ const Profile = () => {
                   {experience.map((exp: any) => {
                     const logoUrl = exp.logo_url || getCompanyLogo(exp.company_name);
                     return (
-                      <div key={exp.id} className="flex gap-3">
+                      <div key={exp.id} className="flex min-w-0 gap-3">
                         <img src={logoUrl} alt={exp.company_name} className="w-10 h-10 rounded-lg object-contain bg-secondary p-1 flex-shrink-0"
                           onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                        <div className="flex-1">
-                          <p className="font-semibold text-sm text-foreground">{exp.job_title || "Role"} at {exp.company_name}</p>
+                        <div className="min-w-0 flex-1">
+                          <p className="break-words font-semibold text-sm text-foreground">{exp.job_title || "Role"} at {exp.company_name}</p>
                           <p className="text-xs text-muted-foreground">{exp.start_date || ""}{exp.start_date && " - "}{exp.is_current ? "Present" : exp.end_date || ""}</p>
                           {exp.location && <p className="text-[10px] text-muted-foreground/70 mt-0.5">{exp.location}</p>}
                         </div>
@@ -639,7 +674,7 @@ const Profile = () => {
           )}
 
           {activeTab === 3 && (
-            <div className="bg-card rounded-2xl border border-border p-4">
+            <div className="rounded-[24px] border border-border/80 bg-card p-5 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-bold text-foreground text-sm">Expertise & Skills</h3>
                 <EditButton section="expertise" />
@@ -653,7 +688,7 @@ const Profile = () => {
           )}
 
           {activeTab === 4 && (
-            <div className="bg-card rounded-2xl border border-border p-4">
+            <div className="rounded-[24px] border border-border/80 bg-card p-5 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-bold text-foreground text-sm">Pricing Information</h3>
                 <EditButton section="pricing" />
@@ -669,7 +704,7 @@ const Profile = () => {
           )}
 
           {activeTab === 5 && (
-            <div className="bg-card rounded-2xl border border-border p-4">
+            <div className="rounded-[24px] border border-border/80 bg-card p-5 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-bold text-foreground text-sm">Social Handles</h3>
                 <EditButton section="social" />
@@ -677,8 +712,8 @@ const Profile = () => {
               {Object.keys(socialLinks).length > 0 && Object.values(socialLinks).some(v => !!v) ? (
                 <div className="space-y-3">
                   {Object.entries(socialLinks).map(([key, val]) => val ? (
-                    <a key={key} href={val as string} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2.5 py-2 border-b border-border last:border-0 text-sm text-primary hover:underline">
-                      <LinkIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" /><span className="capitalize">{key}:</span> {val as string}
+                    <a key={key} href={val as string} target="_blank" rel="noopener noreferrer" className="flex min-w-0 items-start gap-2.5 border-b border-border py-2 text-sm text-primary last:border-0 hover:underline">
+                      <LinkIcon className="mt-0.5 w-4 h-4 text-muted-foreground flex-shrink-0" /><span className="capitalize">{key}:</span><span className="min-w-0 break-all">{val as string}</span>
                     </a>
                   ) : null)}
                 </div>
@@ -687,7 +722,7 @@ const Profile = () => {
           )}
 
           {activeTab === 6 && (
-            <div className="bg-card rounded-2xl border border-border p-4">
+            <div className="rounded-[24px] border border-border/80 bg-card p-5 shadow-sm">
               <h3 className="font-bold text-foreground text-sm mb-3">Activity</h3>
               <div className="space-y-3">
                 {userActivity && userActivity.length > 0 ? userActivity.map((activity: any, i: number) => (
