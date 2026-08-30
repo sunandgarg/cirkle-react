@@ -84,17 +84,26 @@ const sendWithSes = async (params: { to: string; code: string }) => {
   const stringToSign = `AWS4-HMAC-SHA256\n${dateHeader}\n${scope}\n${await sha256Hex(canonicalRequest)}`;
   const signature = bytesToHex(await hmac(await getSignatureKey(secretKey, dateStamp, region, "ses"), stringToSign));
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Host: host,
-      "X-Amz-Content-Sha256": payloadHash,
-      "X-Amz-Date": dateHeader,
-      Authorization: `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
-    },
-    body: payload,
-  });
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Host: host,
+        "X-Amz-Content-Sha256": payloadHash,
+        "X-Amz-Date": dateHeader,
+        Authorization: `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+      },
+      body: payload,
+      // Never leave the auth UI waiting indefinitely when SES has a transient
+      // network problem. A retry is safe from the client after this fails.
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (error) {
+    console.error("AWS SES login OTP request failed", error instanceof Error ? error.message : error);
+    throw new Error("Email delivery is taking too long. Try again shortly.");
+  }
 
   if (!response.ok) {
     const detail = await response.text();

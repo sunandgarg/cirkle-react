@@ -77,12 +77,20 @@ const Auth = () => {
     }
     setLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke("request-login-otp", {
-        body: {
-          email,
-          redirect_to: `${window.location.origin}/iit-verify`,
-        },
-      });
+      const { data, error } = await Promise.race([
+        supabase.functions.invoke("request-login-otp", {
+          body: {
+            email,
+            redirect_to: `${window.location.origin}/iit-verify`,
+          },
+        }),
+        new Promise<never>((_, reject) => {
+          window.setTimeout(
+            () => reject(new Error("Email delivery is taking too long. Please try again.")),
+            15_000,
+          );
+        }),
+      ]);
       if (error) {
         const parsed = await readEdgeFunctionError(error, data, "Could not send the email code. Please try again.");
         throw new Error(parsed.message);
