@@ -10,10 +10,104 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.15"
+    PostgrestVersion: "14.5"
   }
   public: {
     Tables: {
+      academic_degrees: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          id: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
+      academic_institutes: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          network_id: string
+        }
+        Insert: {
+          created_at?: string
+          id: string
+          name: string
+          network_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          network_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "academic_institutes_network_id_fkey"
+            columns: ["network_id"]
+            isOneToOne: false
+            referencedRelation: "academic_networks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      academic_networks: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          id: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
+      academic_specialisations: {
+        Row: {
+          created_at: string
+          degree_id: string
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          degree_id: string
+          id: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          degree_id?: string
+          id?: string
+          name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "academic_specialisations_degree_id_fkey"
+            columns: ["degree_id"]
+            isOneToOne: false
+            referencedRelation: "academic_degrees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ad_messages: {
         Row: {
           content: string
@@ -335,7 +429,15 @@ export type Database = {
           started_at?: string
           started_by?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "call_sessions_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "chat_rooms"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       chat_members: {
         Row: {
@@ -449,25 +551,34 @@ export type Database = {
           community_id: string
           created_at: string
           id: string
+          note: string | null
           receiver_id: string
           requester_id: string
+          responded_at: string | null
           status: string
+          withdrawn_at: string | null
         }
         Insert: {
           community_id?: string
           created_at?: string
           id?: string
+          note?: string | null
           receiver_id: string
           requester_id: string
+          responded_at?: string | null
           status?: string
+          withdrawn_at?: string | null
         }
         Update: {
           community_id?: string
           created_at?: string
           id?: string
+          note?: string | null
           receiver_id?: string
           requester_id?: string
+          responded_at?: string | null
           status?: string
+          withdrawn_at?: string | null
         }
         Relationships: []
       }
@@ -513,6 +624,48 @@ export type Database = {
         }
         Relationships: []
       }
+      course_verification_requests: {
+        Row: {
+          applicant_name: string | null
+          course_name: string
+          created_at: string
+          id: string
+          iit_name: string
+          review_notes: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          applicant_name?: string | null
+          course_name: string
+          created_at?: string
+          id?: string
+          iit_name: string
+          review_notes?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          applicant_name?: string | null
+          course_name?: string
+          created_at?: string
+          id?: string
+          iit_name?: string
+          review_notes?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       custom_options: {
         Row: {
           category: string
@@ -555,6 +708,60 @@ export type Database = {
           created_by?: string | null
           id?: string
           name?: string
+        }
+        Relationships: []
+      }
+      document_verifications: {
+        Row: {
+          created_at: string
+          document_path: string
+          document_type: string
+          file_size: number
+          id: string
+          iit_name: string
+          mime_type: string
+          original_filename: string
+          review_notes: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          status: string
+          student_status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          document_path: string
+          document_type: string
+          file_size: number
+          id?: string
+          iit_name: string
+          mime_type: string
+          original_filename: string
+          review_notes?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string
+          student_status: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          document_path?: string
+          document_type?: string
+          file_size?: number
+          id?: string
+          iit_name?: string
+          mime_type?: string
+          original_filename?: string
+          review_notes?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string
+          student_status?: string
+          updated_at?: string
+          user_id?: string
         }
         Relationships: []
       }
@@ -630,7 +837,7 @@ export type Database = {
           provider: string
           requested_by: string
           skipped_count?: number
-          source_urls?: string[]
+          source_urls: string[]
           status?: string
           target_courses?: string[]
           target_iits?: string[]
@@ -740,94 +947,73 @@ export type Database = {
           },
         ]
       }
-      jobs: {
+      forum_deleted_for_user: {
         Row: {
-          apply_url: string | null
-          category: string | null
-          community_id: string
-          company: string
-          created_at: string
-          created_by: string
-          description: string | null
-          easy_apply: boolean
-          experience: string | null
-          experience_level: string | null
+          deleted_at: string
           id: string
-          job_type: string
-          location: string
-          expires_at: string | null
-          published_at: string | null
-          salary_text: string | null
-          scan_run_id: string | null
-          skills: string[]
-          source_fingerprint: string | null
-          source_type: string
-          source_url: string | null
-          status: string
-          title: string
-          updated_at: string
+          post_id: string
+          user_id: string
         }
         Insert: {
-          apply_url?: string | null
-          category?: string | null
-          community_id?: string
-          company: string
-          created_at?: string
-          created_by: string
-          description?: string | null
-          easy_apply?: boolean
-          experience?: string | null
-          experience_level?: string | null
+          deleted_at?: string
           id?: string
-          job_type?: string
-          location?: string
-          expires_at?: string | null
-          published_at?: string | null
-          salary_text?: string | null
-          scan_run_id?: string | null
-          skills?: string[]
-          source_fingerprint?: string | null
-          source_type?: string
-          source_url?: string | null
-          status?: string
-          title: string
-          updated_at?: string
+          post_id: string
+          user_id: string
         }
         Update: {
-          apply_url?: string | null
-          category?: string | null
-          community_id?: string
-          company?: string
-          created_at?: string
-          created_by?: string
-          description?: string | null
-          easy_apply?: boolean
-          experience?: string | null
-          experience_level?: string | null
+          deleted_at?: string
           id?: string
-          job_type?: string
-          location?: string
-          expires_at?: string | null
-          published_at?: string | null
-          salary_text?: string | null
-          scan_run_id?: string | null
-          skills?: string[]
-          source_fingerprint?: string | null
-          source_type?: string
-          source_url?: string | null
-          status?: string
-          title?: string
-          updated_at?: string
+          post_id?: string
+          user_id?: string
         }
         Relationships: [
           {
-            foreignKeyName: "jobs_scan_run_id_fkey"
-            columns: ["scan_run_id"]
+            foreignKeyName: "forum_deleted_for_user_post_id_fkey"
+            columns: ["post_id"]
             isOneToOne: false
-            referencedRelation: "job_scan_runs"
+            referencedRelation: "posts"
             referencedColumns: ["id"]
           },
         ]
+      }
+      forum_room_state: {
+        Row: {
+          draft: string
+          last_opened_at: string
+          last_read_at: string
+          muted_until: string | null
+          notification_level: string
+          scope_key: string
+          scope_type: string
+          scroll_offset: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          draft?: string
+          last_opened_at?: string
+          last_read_at?: string
+          muted_until?: string | null
+          notification_level?: string
+          scope_key: string
+          scope_type: string
+          scroll_offset?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          draft?: string
+          last_opened_at?: string
+          last_read_at?: string
+          muted_until?: string | null
+          notification_level?: string
+          scope_key?: string
+          scope_type?: string
+          scroll_offset?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       job_scan_runs: {
         Row: {
@@ -934,6 +1120,95 @@ export type Database = {
         }
         Relationships: []
       }
+      jobs: {
+        Row: {
+          apply_url: string | null
+          category: string | null
+          community_id: string
+          company: string
+          created_at: string
+          created_by: string
+          description: string | null
+          easy_apply: boolean
+          experience: string | null
+          experience_level: string | null
+          expires_at: string | null
+          id: string
+          job_type: string
+          location: string
+          published_at: string | null
+          salary_text: string | null
+          scan_run_id: string | null
+          skills: string[]
+          source_fingerprint: string | null
+          source_type: string
+          source_url: string | null
+          status: string
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          apply_url?: string | null
+          category?: string | null
+          community_id?: string
+          company: string
+          created_at?: string
+          created_by: string
+          description?: string | null
+          easy_apply?: boolean
+          experience?: string | null
+          experience_level?: string | null
+          expires_at?: string | null
+          id?: string
+          job_type?: string
+          location?: string
+          published_at?: string | null
+          salary_text?: string | null
+          scan_run_id?: string | null
+          skills?: string[]
+          source_fingerprint?: string | null
+          source_type?: string
+          source_url?: string | null
+          status?: string
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          apply_url?: string | null
+          category?: string | null
+          community_id?: string
+          company?: string
+          created_at?: string
+          created_by?: string
+          description?: string | null
+          easy_apply?: boolean
+          experience?: string | null
+          experience_level?: string | null
+          expires_at?: string | null
+          id?: string
+          job_type?: string
+          location?: string
+          published_at?: string | null
+          salary_text?: string | null
+          scan_run_id?: string | null
+          skills?: string[]
+          source_fingerprint?: string | null
+          source_type?: string
+          source_url?: string | null
+          status?: string
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "jobs_scan_run_id_fkey"
+            columns: ["scan_run_id"]
+            isOneToOne: false
+            referencedRelation: "job_scan_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       message_deleted_for_user: {
         Row: {
           deleted_at: string
@@ -958,7 +1233,7 @@ export type Database = {
             foreignKeyName: "message_deleted_for_user_message_id_fkey"
             columns: ["message_id"]
             isOneToOne: false
-            referencedRelation: "posts"
+            referencedRelation: "messages"
             referencedColumns: ["id"]
           },
         ]
@@ -1118,6 +1393,21 @@ export type Database = {
           },
         ]
       }
+      platform_owners: {
+        Row: {
+          created_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       poll_votes: {
         Row: {
           created_at: string
@@ -1176,7 +1466,7 @@ export type Database = {
           {
             foreignKeyName: "polls_post_id_fkey"
             columns: ["post_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "posts"
             referencedColumns: ["id"]
           },
@@ -1199,22 +1489,26 @@ export type Database = {
           deleted_for_users: string[] | null
           edited_at: string | null
           file_name: string | null
+          file_path: string | null
           file_size: number | null
           file_type: string | null
           file_url: string | null
           id: string
+          image_path: string | null
           image_url: string | null
           is_anonymous: boolean
           is_deleted_for_everyone: boolean
           pinned_at: string | null
           reply_to_id: string | null
           reshared_post_id: string | null
+          scope_identity: string | null
           scope_key: string | null
           scope_type: string | null
           seen_by: string[] | null
           student_status_filter: string | null
           tags: string[] | null
           voice_duration: number | null
+          voice_path: string | null
           voice_url: string | null
         }
         Insert: {
@@ -1225,7 +1519,7 @@ export type Database = {
           channel?: string | null
           cohort_filter?: string | null
           community_id?: string
-          content: string
+          content?: string
           created_at?: string
           degree_filter?: string | null
           deleted_at?: string | null
@@ -1233,22 +1527,26 @@ export type Database = {
           deleted_for_users?: string[] | null
           edited_at?: string | null
           file_name?: string | null
+          file_path?: string | null
           file_size?: number | null
           file_type?: string | null
           file_url?: string | null
           id?: string
+          image_path?: string | null
           image_url?: string | null
           is_anonymous?: boolean
           is_deleted_for_everyone?: boolean
           pinned_at?: string | null
           reply_to_id?: string | null
           reshared_post_id?: string | null
+          scope_identity?: string | null
           scope_key?: string | null
           scope_type?: string | null
           seen_by?: string[] | null
           student_status_filter?: string | null
           tags?: string[] | null
           voice_duration?: number | null
+          voice_path?: string | null
           voice_url?: string | null
         }
         Update: {
@@ -1267,22 +1565,26 @@ export type Database = {
           deleted_for_users?: string[] | null
           edited_at?: string | null
           file_name?: string | null
+          file_path?: string | null
           file_size?: number | null
           file_type?: string | null
           file_url?: string | null
           id?: string
+          image_path?: string | null
           image_url?: string | null
           is_anonymous?: boolean
           is_deleted_for_everyone?: boolean
           pinned_at?: string | null
           reply_to_id?: string | null
           reshared_post_id?: string | null
+          scope_identity?: string | null
           scope_key?: string | null
           scope_type?: string | null
           seen_by?: string[] | null
           student_status_filter?: string | null
           tags?: string[] | null
           voice_duration?: number | null
+          voice_path?: string | null
           voice_url?: string | null
         }
         Relationships: [
@@ -1758,11 +2060,100 @@ export type Database = {
         }
         Relationships: []
       }
+      verified_academic_affiliations: {
+        Row: {
+          created_at: string
+          degree_id: string
+          graduation_year: number
+          identity_version: number
+          institute_id: string
+          member_status: string
+          network_id: string
+          source_education_id: string | null
+          specialisation_id: string
+          updated_at: string
+          user_id: string
+          verification_status: string
+        }
+        Insert: {
+          created_at?: string
+          degree_id: string
+          graduation_year: number
+          identity_version?: number
+          institute_id: string
+          member_status: string
+          network_id: string
+          source_education_id?: string | null
+          specialisation_id: string
+          updated_at?: string
+          user_id: string
+          verification_status?: string
+        }
+        Update: {
+          created_at?: string
+          degree_id?: string
+          graduation_year?: number
+          identity_version?: number
+          institute_id?: string
+          member_status?: string
+          network_id?: string
+          source_education_id?: string | null
+          specialisation_id?: string
+          updated_at?: string
+          user_id?: string
+          verification_status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "verified_academic_affiliations_degree_id_fkey"
+            columns: ["degree_id"]
+            isOneToOne: false
+            referencedRelation: "academic_degrees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "verified_academic_affiliations_degree_id_specialisation_id_fkey"
+            columns: ["degree_id", "specialisation_id"]
+            isOneToOne: false
+            referencedRelation: "academic_specialisations"
+            referencedColumns: ["degree_id", "id"]
+          },
+          {
+            foreignKeyName: "verified_academic_affiliations_institute_id_fkey"
+            columns: ["institute_id"]
+            isOneToOne: false
+            referencedRelation: "academic_institutes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "verified_academic_affiliations_network_id_fkey"
+            columns: ["network_id"]
+            isOneToOne: false
+            referencedRelation: "academic_networks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "verified_academic_affiliations_source_education_id_fkey"
+            columns: ["source_education_id"]
+            isOneToOne: false
+            referencedRelation: "education"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      can_apply_job: {
+        Args: { p_job_id: string; p_user_id?: string }
+        Returns: boolean
+      }
+      can_view_event: {
+        Args: { p_event_id: string; p_user_id?: string }
+        Returns: boolean
+      }
       complete_iit_email_verification: {
         Args: {
           p_code_id: string
@@ -1775,46 +2166,134 @@ export type Database = {
         }
         Returns: undefined
       }
-      complete_member_onboarding: {
-        Args: {
-          p_company?: string
-          p_degree: string
-          p_iit_name: string
-          p_linkedin?: string
-          p_location?: string
-          p_name: string
-          p_passing_year: string
-          p_phone?: string
-          p_phone_country_code?: string
-          p_specialisation: string
-        }
-        Returns: string
-      }
+      complete_member_onboarding:
+        | {
+            Args: {
+              p_company?: string
+              p_degree: string
+              p_iit_name: string
+              p_linkedin?: string
+              p_location?: string
+              p_name: string
+              p_passing_year: string
+              p_specialisation: string
+            }
+            Returns: string
+          }
+        | {
+            Args: {
+              p_company?: string
+              p_degree: string
+              p_iit_name: string
+              p_linkedin?: string
+              p_location?: string
+              p_name: string
+              p_passing_year: string
+              p_phone?: string
+              p_phone_country_code?: string
+              p_specialisation: string
+            }
+            Returns: string
+          }
       create_chat_group: {
         Args: { p_member_ids: string[]; p_name: string }
         Returns: string
       }
-      get_chat_inbox: {
-        Args: Record<PropertyKey, never>
-        Returns: {
-          avatar_url: string | null
-          created_at: string
-          created_by: string | null
-          display_avatar: string | null
-          display_name: string
-          id: string
-          is_group: boolean
-          last_message: Json | null
-          name: string | null
-          unread_count: number
-        }[]
+      forum_broadcast_ready: { Args: never; Returns: boolean }
+      forum_can_access_scope: {
+        Args: { p_scope_key: string; p_scope_type: string }
+        Returns: boolean
       }
-      get_or_create_direct_chat: { Args: { p_peer_id: string }; Returns: string }
+      forum_is_admin: { Args: never; Returns: boolean }
+      forum_post_json: {
+        Args: { p: Database["public"]["Tables"]["posts"]["Row"] }
+        Returns: Json
+      }
+      forum_scope_segment: { Args: { p_value: string }; Returns: string }
       generate_profile_slug: {
         Args: { p_name: string; p_user_id: string }
         Returns: string
       }
-      get_user_room_ids: { Args: { p_user_id: string }; Returns: string[] }
+      get_chat_inbox: {
+        Args: never
+        Returns: {
+          avatar_url: string
+          created_at: string
+          created_by: string
+          display_avatar: string
+          display_name: string
+          id: string
+          is_group: boolean
+          last_message: Json
+          name: string
+          unread_count: number
+        }[]
+      }
+      get_forum_posts_page: {
+        Args: {
+          p_before_created_at?: string
+          p_before_id?: string
+          p_limit?: number
+          p_scope_key: string
+          p_scope_type: string
+        }
+        Returns: {
+          post: Json
+        }[]
+      }
+      get_forum_room_state: {
+        Args: { p_scope_key: string; p_scope_type: string }
+        Returns: {
+          draft: string
+          last_read_at: string
+          notification_level: string
+          scroll_offset: number
+        }[]
+      }
+      get_forum_thread_page: {
+        Args: {
+          p_before_created_at?: string
+          p_before_id?: string
+          p_limit?: number
+          p_parent_id: string
+        }
+        Returns: {
+          post: Json
+        }[]
+      }
+      get_last_forum_room: {
+        Args: never
+        Returns: {
+          scope_key: string
+          scope_type: string
+        }[]
+      }
+      get_my_academic_identity: {
+        Args: never
+        Returns: {
+          degree_id: string
+          degree_name: string
+          graduation_year: number
+          institute_id: string
+          institute_name: string
+          member_status: string
+          network_id: string
+          specialisation_id: string
+          specialisation_name: string
+        }[]
+      }
+      get_my_forum_unread: {
+        Args: never
+        Returns: {
+          has_unread: boolean
+          scope_key: string
+          scope_type: string
+        }[]
+      }
+      get_or_create_direct_chat: {
+        Args: { p_peer_id: string }
+        Returns: string
+      }
       grant_admin_role: {
         Args: { p_target_user_id: string }
         Returns: undefined
@@ -1830,11 +2309,82 @@ export type Database = {
         Args: { p_room_id: string; p_user_id?: string }
         Returns: boolean
       }
-      is_platform_owner: { Args: Record<PropertyKey, never>; Returns: boolean }
+      is_event_admin: { Args: { p_user_id?: string }; Returns: boolean }
+      is_job_admin: { Args: { p_user_id?: string }; Returns: boolean }
+      is_platform_owner: { Args: never; Returns: boolean }
       mark_chat_read: { Args: { p_room_id: string }; Returns: undefined }
-      mark_forum_post_seen: {
-        Args: { p_post_id: string }
+      mark_forum_post_seen: { Args: { p_post_id: string }; Returns: undefined }
+      mark_forum_scope_read: {
+        Args: { p_scope_key: string; p_scope_type: string }
         Returns: undefined
+      }
+      respond_connection_request: {
+        Args: { p_accept: boolean; p_request_id: string }
+        Returns: {
+          community_id: string
+          created_at: string
+          id: string
+          note: string | null
+          receiver_id: string
+          requester_id: string
+          responded_at: string | null
+          status: string
+          withdrawn_at: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "connections"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      review_course_verification: {
+        Args: { p_notes?: string; p_request_id: string; p_status: string }
+        Returns: {
+          applicant_name: string | null
+          course_name: string
+          created_at: string
+          id: string
+          iit_name: string
+          review_notes: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "course_verification_requests"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      review_document_verification: {
+        Args: { p_notes?: string; p_status: string; p_submission_id: string }
+        Returns: {
+          created_at: string
+          document_path: string
+          document_type: string
+          file_size: number
+          id: string
+          iit_name: string
+          mime_type: string
+          original_filename: string
+          review_notes: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          status: string
+          student_status: string
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "document_verifications"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       revoke_admin_role: {
         Args: { p_target_user_id: string }
@@ -1848,9 +2398,122 @@ export type Database = {
         }
         Returns: undefined
       }
+      save_forum_room_state: {
+        Args: {
+          p_draft?: string
+          p_scope_key: string
+          p_scope_type: string
+          p_scroll_offset?: number
+        }
+        Returns: undefined
+      }
+      search_forum_posts: {
+        Args: {
+          p_before_created_at?: string
+          p_before_id?: string
+          p_kind?: string
+          p_limit?: number
+          p_query?: string
+          p_scope_key: string
+          p_scope_type: string
+        }
+        Returns: {
+          post: Json
+        }[]
+      }
+      send_connection_request: {
+        Args: { p_note?: string; p_receiver_id: string }
+        Returns: {
+          community_id: string
+          created_at: string
+          id: string
+          note: string | null
+          receiver_id: string
+          requester_id: string
+          responded_at: string | null
+          status: string
+          withdrawn_at: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "connections"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       set_member_verification: {
         Args: { p_target_user_id: string; p_verified: boolean }
         Returns: undefined
+      }
+      show_limit: { Args: never; Returns: number }
+      show_trgm: { Args: { "": string }; Returns: string[] }
+      withdraw_connection_request: {
+        Args: { p_request_id: string }
+        Returns: {
+          community_id: string
+          created_at: string
+          id: string
+          note: string | null
+          receiver_id: string
+          requester_id: string
+          responded_at: string | null
+          status: string
+          withdrawn_at: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "connections"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      withdraw_course_verification: {
+        Args: { p_request_id: string }
+        Returns: {
+          applicant_name: string | null
+          course_name: string
+          created_at: string
+          id: string
+          iit_name: string
+          review_notes: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "course_verification_requests"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      withdraw_document_verification: {
+        Args: { p_submission_id: string }
+        Returns: {
+          created_at: string
+          document_path: string
+          document_type: string
+          file_size: number
+          id: string
+          iit_name: string
+          mime_type: string
+          original_filename: string
+          review_notes: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          status: string
+          student_status: string
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "document_verifications"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
     }
     Enums: {

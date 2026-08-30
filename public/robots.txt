@@ -25,4 +25,4 @@ Disallow: /admin/
 Disallow: /auth/
 Disallow: /settings/
 
-Sitemap: https://tribe-link-network.lovable.app/sitemap.xml
+Sitemap: https://cirkle.world/sitemap.xml

@@ -1,4 +1,4 @@
-# cirkle-LIVE
+# Cirkle
 
 Project: Cirkle.world (mobile-first community networking web app)
 
@@ -115,16 +115,6 @@ Acceptance tests (must pass):
 - A user can view jobs and apply once; application record is created.
 
 Build this as a working MVP with clean code structure and reusable components.
-
-This project was built with [Lovable](https://lovable.dev).
-
-## Build with Lovable
-
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/6cdf08bc-1224-4ced-9ce6-a7c3bbdeffdc).
-
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
 
 ## Development
 
