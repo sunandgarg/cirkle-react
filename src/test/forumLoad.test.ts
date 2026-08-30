@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyForumRealtimeBatch, applyForumRealtimeEvent } from "@/lib/forumRealtime";
+import { applyForumRealtimeBatch, applyForumRealtimeEvent, getForumBroadcastRow } from "@/lib/forumRealtime";
 
 type VirtualAgent = {
   id: string;
@@ -9,6 +9,16 @@ type VirtualAgent = {
 };
 
 describe("forum burst and isolation simulation", () => {
+  it("normalizes current and legacy Supabase Broadcast Change envelopes", () => {
+    const current = { payload: { record: { id: "new-row" }, old_record: { id: "old-row" } } };
+    const legacy = { payload: { new: { id: "legacy-new" }, old: { id: "legacy-old" } } };
+
+    expect(getForumBroadcastRow(current, "new")?.id).toBe("new-row");
+    expect(getForumBroadcastRow(current, "old")?.id).toBe("old-row");
+    expect(getForumBroadcastRow(legacy, "new")?.id).toBe("legacy-new");
+    expect(getForumBroadcastRow(legacy, "old")?.id).toBe("legacy-old");
+  });
+
   it("routes 1,000 simultaneous hot-room messages across 10,000 virtual agents", () => {
     const zoneCount = 10;
     const agentsPerZone = 1_000;

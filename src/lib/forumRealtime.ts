@@ -9,6 +9,24 @@ export type ForumRealtimeEvent = {
   old?: Record<string, any>;
 };
 
+/**
+ * Normalizes Supabase Broadcast Changes envelopes across Realtime versions.
+ * Current servers expose rows as payload.record / payload.old_record while
+ * older deployments and Postgres Changes use new / old.
+ */
+export const getForumBroadcastRow = (
+  message: Record<string, any> | undefined,
+  version: "new" | "old",
+): Record<string, any> | undefined => {
+  if (!message) return undefined;
+  const payload = message.payload ?? message;
+  const nested = payload.payload ?? payload;
+  if (version === "old") {
+    return payload.old_record ?? nested.old_record ?? message.old ?? payload.old ?? nested.old;
+  }
+  return payload.record ?? nested.record ?? message.new ?? payload.new ?? nested.new;
+};
+
 const compareMessages = (left: Record<string, any>, right: Record<string, any>) => {
   const byTime = new Date(left.created_at || 0).getTime() - new Date(right.created_at || 0).getTime();
   if (byTime !== 0) return byTime;

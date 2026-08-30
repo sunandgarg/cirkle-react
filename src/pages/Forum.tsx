@@ -39,7 +39,7 @@ import {
   type CanonicalAcademicIdentity, type ForumScope as ScopeDef,
 } from "@/lib/forumScopes";
 import { hasMobileTestAcademicProfile, readMobileTestSession } from "@/lib/mobileVerification";
-import { applyForumRealtimeBatch, type ForumRealtimeEvent } from "@/lib/forumRealtime";
+import { applyForumRealtimeBatch, getForumBroadcastRow, type ForumRealtimeEvent } from "@/lib/forumRealtime";
 import { acknowledgeForumPost } from "@/lib/forumMessages";
 import { hydrateForumMediaUrls } from "@/lib/forumMedia";
 import { publishForumOutboxItem } from "@/lib/forumPublisher";
@@ -1323,13 +1323,13 @@ const Forum = () => {
         config: { private: true },
       })
         .on('broadcast', { event: 'INSERT' }, (payload: any) => {
-          applyHydratedRoomEvent({ eventType: "INSERT", new: payload.new || payload.payload?.new || {} });
+          applyHydratedRoomEvent({ eventType: "INSERT", new: getForumBroadcastRow(payload, "new") || {} });
         })
         .on('broadcast', { event: 'UPDATE' }, (payload: any) => {
-          applyHydratedRoomEvent({ eventType: "UPDATE", new: payload.new || payload.payload?.new || {} });
+          applyHydratedRoomEvent({ eventType: "UPDATE", new: getForumBroadcastRow(payload, "new") || {} });
         })
         .on('broadcast', { event: 'DELETE' }, (payload: any) => {
-          applyRoomEvent({ eventType: "DELETE", old: payload.old || payload.payload?.old || {} });
+          applyRoomEvent({ eventType: "DELETE", old: getForumBroadcastRow(payload, "old") || {} });
         })
         .subscribe((status) => {
           if (status === "SUBSCRIBED") {

@@ -17,6 +17,7 @@ import {
 import { hydrateForumMediaUrls } from "@/lib/forumMedia";
 import { publishForumOutboxItem } from "@/lib/forumPublisher";
 import { deleteForumOutboxItem, markForumOutboxFailed, putForumOutboxItem, type ForumOutboxItem } from "@/lib/forumOutbox";
+import { getForumBroadcastRow } from "@/lib/forumRealtime";
 
 const THREAD_PAGE_SIZE = 50;
 
@@ -223,9 +224,9 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
       updateParentReplyCount(replyCountDelta);
     };
     const channel = supabase.channel(`forum-thread:${parentPost.id}`, { config: { private: true } })
-      .on("broadcast", { event: "INSERT" }, (payload: any) => applyReplyEvent("INSERT", payload.new || payload.payload?.new))
-      .on("broadcast", { event: "UPDATE" }, (payload: any) => applyReplyEvent("UPDATE", payload.new || payload.payload?.new))
-      .on("broadcast", { event: "DELETE" }, (payload: any) => applyReplyEvent("DELETE", payload.old || payload.payload?.old))
+      .on("broadcast", { event: "INSERT" }, (payload: any) => applyReplyEvent("INSERT", getForumBroadcastRow(payload, "new")))
+      .on("broadcast", { event: "UPDATE" }, (payload: any) => applyReplyEvent("UPDATE", getForumBroadcastRow(payload, "new")))
+      .on("broadcast", { event: "DELETE" }, (payload: any) => applyReplyEvent("DELETE", getForumBroadcastRow(payload, "old")))
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
   }, [parentPost.id, profileMap, queryClient, testSession]);

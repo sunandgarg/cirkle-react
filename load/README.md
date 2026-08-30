@@ -20,7 +20,9 @@ SCOPE_TYPE=GLOBAL
 SCOPE_KEY=LOAD_TEST
 ```
 
-Optional controls are `WRITE_RATE`, `READ_RATE`, `REALTIME_SUBSCRIBERS`, `DURATION`, `MAX_WRITE_VUS`, `REALTIME_SESSION_MS`, and `RUN_ID`. The harness refuses both known application project refs and any URL that does not match `PERF_PROJECT_REF`. Every generated message is tagged `[load-test:<RUN_ID>:<timestamp>]` for isolated-project cleanup and end-to-end Realtime latency measurement.
+Optional controls are `WRITE_RATE`, `READ_RATE`, `REALTIME_SUBSCRIBERS`, `DURATION`, `REALTIME_WARMUP`, `MAX_WRITE_VUS`, `REALTIME_SESSION_MS`, and `RUN_ID`. `REALTIME_JWT` can override the subscriber token for diagnosing Realtime authorization independently from authenticated REST writes. The harness refuses both known application project refs and any URL that does not match `PERF_PROJECT_REF`. Every generated message is tagged `[load-test:<RUN_ID>:<timestamp>]` for isolated-project cleanup and end-to-end Realtime latency measurement.
+
+Set `PLAN_PROFILE=PRO_SPEND_CAP` for a guarded Pro-plan run. The harness then refuses configurations above 500 subscribers or a conservative estimate of 500 Realtime events/second (`WRITE_RATE * (REALTIME_SUBSCRIBERS + 1)`). It uses Realtime protocol v2, decodes server Broadcast binary frames, and starts writes only after the subscriber warm-up interval so a zero-event result cannot be mistaken for capacity.
 
 ## 100 million messages/day qualification
 
