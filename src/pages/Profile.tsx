@@ -340,7 +340,7 @@ const Profile = () => {
     } catch (err: any) { toast.error("Upload error: " + err.message); }
   };
 
-  const handleLogout = async () => { clearMobileTestSession(); await supabase.auth.signOut(); navigate("/"); };
+  const handleLogout = async () => { clearMobileTestSession(); await supabase.auth.signOut({ scope: "local" }); navigate("/"); };
 
   if (!user && isOwn) { navigate("/auth"); return null; }
 

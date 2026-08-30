@@ -9,6 +9,13 @@ additional_redirect_urls = [
   "https://www.cirkle.world/reset-password",
 ]
 
+# Keep sessions durable across browser restarts and allow the same account on
+# any number of devices. With no timebox or inactivity timeout configured,
+# Supabase refresh sessions remain valid until explicit local logout, password
+# or security changes, administrator revocation, or browser storage removal.
+[auth.sessions]
+single_per_user = false
+
 [auth.email]
 enable_confirmations = true
 max_frequency = "1m"

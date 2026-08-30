@@ -21,7 +21,7 @@ const Settings = () => {
 
   const handleLogout = async () => {
     clearMobileTestSession();
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: "local" });
     navigate("/");
   };
 

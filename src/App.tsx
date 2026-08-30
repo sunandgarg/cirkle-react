@@ -8,6 +8,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import AppLayout from "@/components/AppLayout";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { lazy, Suspense } from "react";
+import CookieConsentBar from "@/components/CookieConsentBar";
 
 // ─── Lazy-loaded routes (code splitting per route) ───
 const Landing = lazy(() => import("@/pages/Landing"));
@@ -60,6 +61,7 @@ const App = () => (
           <Sonner />
           <BrowserRouter>
             <a href="#main-content" className="skip-to-main">Skip to main content</a>
+            <CookieConsentBar />
             <Suspense fallback={<PageLoader />}>
               <Routes>
                 {/* Public routes */}
