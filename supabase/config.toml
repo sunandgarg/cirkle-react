@@ -63,7 +63,7 @@ verify_jwt = true
 [functions.scan-jobs]
 verify_jwt = true
 
-[functions.giphy-search]
+[functions.klipy-search]
 verify_jwt = true
 
 [functions.daily-create-room]

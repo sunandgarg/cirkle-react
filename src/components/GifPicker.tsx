@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 interface GifResult {
   id: string;
+  slug: string;
   title: string;
   url: string;
   preview: string;
@@ -30,34 +31,54 @@ const GifPicker = ({ onSelect, onEmojiSelect, onClose }: GifPickerProps) => {
   const [results, setResults] = useState<GifResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
   const [activeTab, setActiveTab] = useState<"emoji" | "gifs">("emoji");
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const requestIdRef = useRef(0);
 
-  const searchGifs = useCallback(async (q: string, type: string) => {
+  const searchGifs = useCallback(async (q: string) => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
+    setErrorMessage("");
     try {
-      const { data, error } = await supabase.functions.invoke("giphy-search", {
-        body: { q, type, limit: 20 },
+      const { data, error } = await supabase.functions.invoke("klipy-search", {
+        body: { q, type: "gifs", limit: 20 },
       });
       if (error) throw error;
+      if (requestId !== requestIdRef.current) return;
       setResults(data?.results || []);
       setHasSearched(true);
     } catch {
+      if (requestId !== requestIdRef.current) return;
       setResults([]);
+      setHasSearched(true);
+      setErrorMessage("GIFs are temporarily unavailable. Please try again.");
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
+  }, []);
+
+  const registerShare = useCallback((slug: string) => {
+    if (!slug) return;
+    void supabase.functions
+      .invoke("klipy-search", { body: { action: "share", type: "gifs", slug } })
+      .catch(() => undefined);
   }, []);
 
   // Load trending on mount and tab change
   useEffect(() => {
-    if (activeTab === "gifs") searchGifs("", "gifs");
+    if (activeTab === "gifs") searchGifs("");
   }, [searchGifs, activeTab]);
+
+  useEffect(() => () => {
+    requestIdRef.current += 1;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+  }, []);
 
   const handleQueryChange = (value: string) => {
     setQuery(value);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => searchGifs(value, "gifs"), 400);
+    debounceRef.current = setTimeout(() => searchGifs(value), 350);
   };
 
   return (
@@ -65,7 +86,12 @@ const GifPicker = ({ onSelect, onEmojiSelect, onClose }: GifPickerProps) => {
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <div className="flex items-center gap-0">
           <button
-            onClick={() => { setActiveTab("emoji"); setQuery(""); }}
+            onClick={() => {
+              requestIdRef.current += 1;
+              setLoading(false);
+              setActiveTab("emoji");
+              setQuery("");
+            }}
             className={`min-h-9 px-4 py-1 text-xs font-semibold rounded-full transition-colors ${activeTab === "emoji" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
           >
             Emoji
@@ -87,7 +113,8 @@ const GifPicker = ({ onSelect, onEmojiSelect, onClose }: GifPickerProps) => {
           <Input
             value={query}
             onChange={(e) => handleQueryChange(e.target.value)}
-            placeholder={`Search ${activeTab}...`}
+            placeholder="Search KLIPY"
+            aria-label="Search KLIPY GIFs"
             className="h-8 pl-8 text-xs bg-secondary border-border rounded-lg"
           />
         </div>
@@ -116,7 +143,7 @@ const GifPicker = ({ onSelect, onEmojiSelect, onClose }: GifPickerProps) => {
         {!loading && results.map((gif) => (
           <button
             key={gif.id}
-            onClick={() => onSelect(gif.url)}
+            onClick={() => { registerShare(gif.slug); onSelect(gif.url); }}
             className="rounded-lg overflow-hidden hover:ring-2 hover:ring-primary transition-all"
           >
             <img
@@ -129,12 +156,12 @@ const GifPicker = ({ onSelect, onEmojiSelect, onClose }: GifPickerProps) => {
         ))}
         {!loading && hasSearched && results.length === 0 && (
           <div className="col-span-2 py-6 text-center text-xs text-muted-foreground">
-            No {activeTab} found
+            {errorMessage || "No GIFs found"}
           </div>
         )}
       </div>}
       {activeTab === "gifs" && <div className="px-3 py-1 border-t border-border">
-        <p className="text-[9px] text-muted-foreground text-right">Powered by GIPHY</p>
+        <p className="text-[9px] text-muted-foreground text-right">Powered by KLIPY</p>
       </div>}
     </div>
   );
