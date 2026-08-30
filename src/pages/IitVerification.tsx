@@ -98,6 +98,16 @@ const IitVerification = () => {
     gcTime: 24 * 60 * 60 * 1000,
   });
 
+  const { data: documentVerificationEnabled = false, isFetched: documentSettingFetched } = useQuery({
+    queryKey: ["document-verification-enabled"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("app_settings").select("value").eq("key", "document_verification_enabled").maybeSingle();
+      if (error) throw error;
+      return data?.value === "true";
+    },
+    staleTime: 60_000,
+  });
+
   const { data: savedProgress, isFetched: progressFetched } = useQuery({
     queryKey: ["onboarding-progress", user?.id],
     queryFn: () => loadOnboardingProgress(user!.id),
@@ -125,7 +135,7 @@ const IitVerification = () => {
   });
 
   useEffect(() => {
-    if (authLoading || !profileResolved || !user || !progressFetched || !documentStatusFetched || restoredProgressRef.current) return;
+    if (authLoading || !profileResolved || !user || !progressFetched || !documentStatusFetched || !documentSettingFetched || restoredProgressRef.current) return;
     restoredProgressRef.current = true;
 
     const saved = savedProgress?.progress_data;
@@ -155,7 +165,7 @@ const IitVerification = () => {
       setStep("documents_pending");
       return;
     }
-    if (latestDocumentSubmission?.status === "rejected") {
+    if (latestDocumentSubmission?.status === "rejected" && documentVerificationEnabled) {
       setStep("upload_documents");
       return;
     }
@@ -174,6 +184,10 @@ const IitVerification = () => {
     const restoredIitName = saved?.selectedIit || latestDocumentSubmission?.iit_name;
     const restoredStatus = saved?.studentStatus || latestDocumentSubmission?.student_status;
     if (savedStep && validSteps.includes(savedStep)) {
+      if ((savedStep === "upload_documents" || savedStep === "documents_pending") && !documentVerificationEnabled) {
+        setStep(restoredStatus ? "verify_email" : restoredIitName ? "select_status" : "select_iit");
+        return;
+      }
       if ((savedStep === "select_status" || savedStep === "verify_email" || savedStep === "verify_otp" || savedStep === "upload_documents") && !restoredIitName) {
         setStep("select_iit");
       } else if ((savedStep === "verify_email" || savedStep === "verify_otp" || savedStep === "upload_documents") && !restoredStatus) {
@@ -186,7 +200,7 @@ const IitVerification = () => {
       return;
     }
     setStep("select_iit");
-  }, [authLoading, documentStatusFetched, isAdmin, latestDocumentSubmission, navigate, profile, profileResolved, progressFetched, savedProgress, user]);
+  }, [authLoading, documentSettingFetched, documentStatusFetched, documentVerificationEnabled, isAdmin, latestDocumentSubmission, navigate, profile, profileResolved, progressFetched, savedProgress, user]);
 
   useEffect(() => {
     if (!user || !restoredProgressRef.current || step === "onboarding" || profile?.onboarding_completed) return;
@@ -365,6 +379,11 @@ const IitVerification = () => {
   };
 
   const handleDocumentUpload = async () => {
+    if (!documentVerificationEnabled) {
+      toast.error("Document verification is currently unavailable. Please use your official IIT email.");
+      setStep("verify_email");
+      return;
+    }
     if (!selectedIit || !studentStatus || !documentFile) {
       toast.error("Choose a document to continue");
       return;
@@ -692,19 +711,23 @@ const IitVerification = () => {
               {loading ? "Sending..." : "Send Verification Code"}
             </Button>
             <p className="text-xs text-muted-foreground mt-4 text-center">We'll send a 6-digit code to verify that you own this email.</p>
-            <div className="flex items-center gap-3 my-6" aria-hidden="true">
-              <div className="h-px bg-border flex-1" />
-              <span className="text-xs font-medium text-muted-foreground">or</span>
-              <div className="h-px bg-border flex-1" />
-            </div>
-            <Button variant="outline" size="lg" className="w-full h-12 text-sm font-semibold rounded-xl" onClick={() => setStep("upload_documents")}>
-              <FileUp className="w-4 h-4 mr-2" /> Verify with documents
-            </Button>
-            <p className="text-xs text-muted-foreground mt-3 text-center">Use a student ID, admission letter, or degree certificate.</p>
+            {documentVerificationEnabled && (
+              <>
+                <div className="flex items-center gap-3 my-6" aria-hidden="true">
+                  <div className="h-px bg-border flex-1" />
+                  <span className="text-xs font-medium text-muted-foreground">or</span>
+                  <div className="h-px bg-border flex-1" />
+                </div>
+                <Button variant="outline" size="lg" className="w-full h-12 text-sm font-semibold rounded-xl" onClick={() => setStep("upload_documents")}>
+                  <FileUp className="w-4 h-4 mr-2" /> Verify with documents
+                </Button>
+                <p className="text-xs text-muted-foreground mt-3 text-center">Use a student ID, admission letter, or degree certificate.</p>
+              </>
+            )}
           </div>
         )}
 
-        {step === "upload_documents" && (
+        {step === "upload_documents" && documentVerificationEnabled && (
           <div className="onboarding-stage animate-fade-in">
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">{selectedIit?.name}</span>

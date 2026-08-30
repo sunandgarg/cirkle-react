@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, Shield, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays, Mail, RotateCcw, LayoutDashboard } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, Shield, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays, Mail, RotateCcw, LayoutDashboard, UserPlus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { convertToWebP } from "@/lib/imageUtils";
@@ -36,6 +37,10 @@ const Admin = () => {
   const [reviewingDocument, setReviewingDocument] = useState<string | null>(null);
   const [reviewingCourse, setReviewingCourse] = useState<string | null>(null);
   const [testDataAction, setTestDataAction] = useState<"seed" | "purge" | null>(null);
+  const [memberDialogOpen, setMemberDialogOpen] = useState(false);
+  const [creatingMember, setCreatingMember] = useState(false);
+  const [deletingMemberId, setDeletingMemberId] = useState<string | null>(null);
+  const [memberForm, setMemberForm] = useState({ name: "", email: "", password: "", student_status: "current_student" });
 
   const { data: navConfig } = useQuery({
     queryKey: ["nav-config-admin"],
@@ -405,6 +410,64 @@ const Admin = () => {
     toast.success(current ? "Unverified" : "Verified!");
   };
 
+  const createVerifiedMember = async () => {
+    if (!memberForm.name.trim() || !memberForm.email.trim() || memberForm.password.length < 8) {
+      toast.error("Enter a name, valid email and password of at least 8 characters");
+      return;
+    }
+    setCreatingMember(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("manage-users", {
+        body: {
+          action: "create_member",
+          ...memberForm,
+          name: memberForm.name.trim(),
+          email: memberForm.email.trim().toLowerCase(),
+          iit_name: "IIT Delhi",
+          degree: "MBA",
+          specialisation: "General",
+          graduation_year: 2026,
+        },
+      });
+      if (error) {
+        const parsed = await readEdgeFunctionError(error, data, "Could not create this member");
+        throw new Error(parsed.message);
+      }
+      if (data?.error) throw new Error(data.error);
+      setMemberForm({ name: "", email: "", password: "", student_status: "current_student" });
+      setMemberDialogOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      toast.success("Verified member created and ready to enter the forum");
+    } catch (error: any) {
+      toast.error(error.message || "Could not create this member");
+    } finally {
+      setCreatingMember(false);
+    }
+  };
+
+  const deleteMember = async (member: any) => {
+    const displayName = member.name || "Unnamed member";
+    const confirmation = window.prompt(`This permanently deletes ${displayName} and their account data. Type the member name exactly to continue:`);
+    if (confirmation === null) return;
+    setDeletingMemberId(member.user_id);
+    try {
+      const { data, error } = await supabase.functions.invoke("manage-users", {
+        body: { action: "delete_member", user_id: member.user_id, confirmation },
+      });
+      if (error) {
+        const parsed = await readEdgeFunctionError(error, data, "Could not delete this member");
+        throw new Error(parsed.message);
+      }
+      if (data?.error) throw new Error(data.error);
+      await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      toast.success(`${displayName} was permanently deleted`);
+    } catch (error: any) {
+      toast.error(error.message || "Could not delete this member");
+    } finally {
+      setDeletingMemberId(null);
+    }
+  };
+
   const filteredUsers = users?.filter((u: any) =>
     !userSearch || (u.name || "").toLowerCase().includes(userSearch.toLowerCase()) ||
     (u.iit_name || "").toLowerCase().includes(userSearch.toLowerCase()) ||
@@ -454,9 +517,14 @@ const Admin = () => {
 
           {/* Users Tab */}
           <TabsContent value="users" className="space-y-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search users..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="pl-9 h-10 rounded-xl bg-secondary border-0" />
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input placeholder="Search users..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="pl-9 h-10 rounded-xl bg-secondary border-0" />
+              </div>
+              <Button className="h-10 rounded-xl gap-2" onClick={() => setMemberDialogOpen(true)}>
+                <UserPlus className="h-4 w-4" /> <span className="hidden sm:inline">Add member</span>
+              </Button>
             </div>
             <p className="text-xs text-muted-foreground">{filteredUsers?.length || 0} users found</p>
             <div className="grid gap-2 lg:grid-cols-2">
@@ -469,10 +537,23 @@ const Admin = () => {
                     <p className="text-xs text-muted-foreground truncate">{u.headline || "No headline"}</p>
                     <p className="text-[10px] text-muted-foreground">{u.iit_name || "No IIT"} · {u.role} · {u.location || "Unknown"}</p>
                   </div>
-                  <button onClick={() => toggleVerify(u.user_id, u.is_verified)}
-                    className={`text-[10px] font-medium px-2 py-0.5 rounded-full cursor-pointer transition-colors ${u.is_verified ? "bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]" : "bg-muted text-muted-foreground hover:bg-primary/10 hover:text-primary"}`}>
-                    {u.is_verified ? "✓ Verified" : "Verify"}
-                  </button>
+                  <div className="flex flex-col items-end gap-2">
+                    <button onClick={() => toggleVerify(u.user_id, u.is_verified)}
+                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full cursor-pointer transition-colors ${u.is_verified ? "bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]" : "bg-muted text-muted-foreground hover:bg-primary/10 hover:text-primary"}`}>
+                      {u.is_verified ? "✓ Verified" : "Verify"}
+                    </button>
+                    {u.user_id !== user?.id && !adminUsers?.some((admin: any) => admin.user_id === u.user_id) && (
+                      <button
+                        type="button"
+                        aria-label={`Delete ${u.name || "member"}`}
+                        disabled={deletingMemberId === u.user_id}
+                        onClick={() => void deleteMember(u)}
+                        className="rounded-lg p-1.5 text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -699,6 +780,22 @@ const Admin = () => {
 
           {/* Settings Tab */}
           <TabsContent value="settings" className="space-y-4">
+            <div className="bg-card border border-border rounded-xl p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><ClipboardCheck className="w-5 h-5 text-primary" /></div>
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Allow document verification</p>
+                    <p className="text-xs text-muted-foreground">When off, members verify only with an official IIT email. Existing submissions stay available to admins.</p>
+                  </div>
+                </div>
+                <Switch
+                  aria-label="Allow document verification"
+                  checked={appSettings?.document_verification_enabled === "true"}
+                  onCheckedChange={(checked) => void updateSetting("document_verification_enabled", checked ? "true" : "false")}
+                />
+              </div>
+            </div>
             <div className="bg-card border border-border rounded-xl p-4 space-y-4">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><Image className="w-5 h-5 text-primary" /></div>
@@ -837,6 +934,29 @@ const Admin = () => {
           </TabsContent>
         </Tabs>
       </main>
+
+      <Dialog open={memberDialogOpen} onOpenChange={setMemberDialogOpen}>
+        <DialogContent className="w-[calc(100%_-_1.5rem)] max-w-md rounded-3xl p-5 sm:p-6">
+          <DialogHeader>
+            <DialogTitle>Create verified member</DialogTitle>
+            <DialogDescription>This provisions a fully verified IIT Delhi · MBA · General · 2026 account. The password is sent only to Supabase and is never stored in this app.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div><Label htmlFor="member-name">Full name</Label><Input id="member-name" value={memberForm.name} onChange={(e) => setMemberForm((v) => ({ ...v, name: e.target.value }))} className="mt-1.5" autoComplete="off" /></div>
+            <div><Label htmlFor="member-email">Email</Label><Input id="member-email" type="email" value={memberForm.email} onChange={(e) => setMemberForm((v) => ({ ...v, email: e.target.value }))} className="mt-1.5" autoComplete="off" /></div>
+            <div><Label htmlFor="member-password">Temporary password</Label><Input id="member-password" type="password" value={memberForm.password} onChange={(e) => setMemberForm((v) => ({ ...v, password: e.target.value }))} className="mt-1.5" autoComplete="new-password" /></div>
+            <div>
+              <Label htmlFor="member-status">Member status</Label>
+              <select id="member-status" value={memberForm.student_status} onChange={(e) => setMemberForm((v) => ({ ...v, student_status: e.target.value }))} className="mt-1.5 h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                <option value="current_student">Current student</option>
+                <option value="alumni">Alumni</option>
+              </select>
+            </div>
+            <div className="rounded-xl border border-border bg-secondary/50 p-3 text-xs text-muted-foreground">IIT Delhi · MBA · General · Class of 2026 · Direct forum access</div>
+            <Button className="w-full" onClick={() => void createVerifiedMember()} disabled={creatingMember}>{creatingMember ? "Creating securely…" : "Create verified member"}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

@@ -55,6 +55,16 @@ Deno.serve(async (req) => {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    if (!['confirmed', 'completed'].includes(consult.status)) {
+      return new Response(JSON.stringify({ error: "The mentor must accept this request before chat is created" }), {
+        status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (consult.chat_room_id) {
+      return new Response(JSON.stringify({ room_id: consult.chat_room_id, status: consult.status, existing: true }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     // Get both profiles for room name
     const { data: profiles } = await supabase
@@ -118,20 +128,21 @@ Deno.serve(async (req) => {
       ]);
     }
 
-    // Send initial system-like message
+    // Send the introduction exactly once, when the consultation is linked.
     await supabase.from("messages").insert({
       room_id: roomId,
       sender_id: consult.client_id,
-      content: `📋 Consultation booked: ${consult.consultation_type} session (${consult.duration_minutes}min). Looking forward to connecting!`,
+      content: `📋 Consultation accepted: ${consult.consultation_type} session (${consult.duration_minutes}min). You can coordinate securely here.`,
     });
 
-    // Update consultation status to confirmed
-    await supabase
+    const { error: linkError } = await supabase
       .from("consultations")
-      .update({ status: "confirmed" })
-      .eq("id", consultation_id);
+      .update({ chat_room_id: roomId })
+      .eq("id", consultation_id)
+      .is("chat_room_id", null);
+    if (linkError) throw linkError;
 
-    return new Response(JSON.stringify({ room_id: roomId, status: "confirmed" }), {
+    return new Response(JSON.stringify({ room_id: roomId, status: consult.status }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err: any) {

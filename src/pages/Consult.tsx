@@ -1,18 +1,29 @@
-import { useState } from "react";
-import { BadgeCheck, MessageCircle, Phone, Video, Search, Star, Lock, X, Calendar, Clock, CheckCircle2, ArrowRight, Users, Sparkles, ExternalLink, Globe, Award } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { BadgeCheck, MessageCircle, Phone, Video, Search, Lock, X, Calendar, Clock, CheckCircle2, Users, Sparkles, AlertCircle, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 
 const CATEGORIES = ["All", "Tech", "Finance", "Career", "Startups", "Research", "Design", "Legal"];
 const TIME_SLOTS = ["09:00 AM", "10:00 AM", "11:00 AM", "12:00 PM", "02:00 PM", "03:00 PM", "04:00 PM", "05:00 PM", "06:00 PM", "07:00 PM"];
 const DURATION_OPTIONS = [15, 30, 45, 60];
+
+const toScheduledIso = (date: string, time: string) => {
+  const match = time.match(/^(\d{1,2}):(\d{2})\s(AM|PM)$/);
+  if (!match) throw new Error("Choose a valid time");
+  let hour = Number(match[1]);
+  if (match[3] === "PM" && hour !== 12) hour += 12;
+  if (match[3] === "AM" && hour === 12) hour = 0;
+  const local = new Date(`${date}T${String(hour).padStart(2, "0")}:${match[2]}:00`);
+  if (Number.isNaN(local.getTime())) throw new Error("Choose a valid booking date");
+  return local.toISOString();
+};
 
 const getInitials = (name?: string | null): string => {
   if (!name) return "?";
@@ -23,10 +34,10 @@ const getInitials = (name?: string | null): string => {
 
 // Topmate-style service card
 const ServiceButton = ({ icon: Icon, label, price, color, active, onClick }: any) => (
-  <button onClick={onClick}
+  <button onClick={onClick} disabled={price === undefined || price === null}
     className={`flex-1 py-3 rounded-2xl text-xs font-semibold flex flex-col items-center justify-center gap-1.5 transition-all border-2 hover-scale ${
       active ? `${color} shadow-sm` : "bg-card border-border text-muted-foreground hover:border-primary/30"
-    }`}>
+    } disabled:cursor-not-allowed disabled:opacity-40`}>
     <Icon className="w-4 h-4" />
     <span>{label}</span>
     {price !== undefined && price !== null && <span className="text-[10px] opacity-75">₹{price}</span>}
@@ -35,6 +46,7 @@ const ServiceButton = ({ icon: Icon, label, price, color, active, onClick }: any
 
 const Consult = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user, profile } = useAuth();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
@@ -47,34 +59,38 @@ const Consult = () => {
   const [bookingNotes, setBookingNotes] = useState("");
   const [activeTab, setActiveTab] = useState<"mentors" | "bookings">("mentors");
 
-  const isVerified = !!user && !!profile?.is_verified;
+  const isVerified = !!user && !!profile?.is_verified && !!profile?.onboarding_completed;
 
   // Only fetch mentors who opted in
-  const { data: experts } = useQuery({
+  const { data: experts, isLoading: expertsLoading, error: expertsError, refetch: refetchExperts } = useQuery({
     queryKey: ["mentors", search, activeCategory],
     queryFn: async () => {
-      let query: any = supabase.from("profiles").select("*").eq("is_mentor", true);
-      if (search) query = query.or(`name.ilike.%${search}%,headline.ilike.%${search}%,skills.cs.{${search}}`);
+      const normalizedSearch = search.trim().replace(/[^a-zA-Z0-9 .&+#-]/g, " ").slice(0, 80);
+      let query: any = supabase.from("profiles").select("user_id,name,avatar_url,headline,bio,iit_name,is_verified,onboarding_completed,is_mentor,mentor_category,mentor_price_chat,mentor_price_audio,mentor_price_video,skills,slug").eq("is_mentor", true).eq("is_verified", true).eq("onboarding_completed", true);
+      if (normalizedSearch) query = query.or(`name.ilike.%${normalizedSearch}%,headline.ilike.%${normalizedSearch}%`);
       if (activeCategory !== "All") query = query.eq("mentor_category", activeCategory);
       query = query.order("is_verified", { ascending: false });
-      const { data } = await query.limit(50);
+      const { data, error } = await query.limit(50);
+      if (error) throw error;
       return (data ?? []) as any[];
     },
-    staleTime: Infinity,
+    staleTime: 5 * 60_000,
   });
 
   // My bookings - topmate-style
-  const { data: myBookings } = useQuery({
+  const { data: myBookings, isLoading: bookingsLoading, error: bookingsError, refetch: refetchBookings } = useQuery({
     queryKey: ["my-consultations", user?.id],
     queryFn: async () => {
       if (!user) return [];
-      const { data } = await supabase.from("consultations").select("*").or(`client_id.eq.${user.id},consultant_id.eq.${user.id}`)
+      const { data, error } = await (supabase as any).from("consultations").select("id,client_id,consultant_id,consultation_type,status,amount,duration_minutes,scheduled_at,notes,created_at,chat_room_id").or(`client_id.eq.${user.id},consultant_id.eq.${user.id}`)
         .order("created_at", { ascending: false });
+      if (error) throw error;
       if (!data?.length) return [];
-      const userIds = [...new Set(data.map(b => b.consultant_id === user.id ? b.client_id : b.consultant_id))];
+      const rows = data as any[];
+      const userIds = [...new Set<string>(rows.map((b) => b.consultant_id === user.id ? b.client_id : b.consultant_id))];
       const { data: profiles } = await supabase.from("profiles").select("user_id, name, avatar_url").in("user_id", userIds);
       const pMap = new Map(profiles?.map(p => [p.user_id, p]) ?? []);
-      return data.map(b => ({
+      return rows.map((b) => ({
         ...b,
         otherProfile: pMap.get(b.consultant_id === user.id ? b.client_id : b.consultant_id),
         isConsultant: b.consultant_id === user.id,
@@ -85,76 +101,73 @@ const Consult = () => {
 
   const bookMutation = useMutation({
     mutationFn: async () => {
-      if (!user || !bookingExpert) return;
-      const amount = bookingType === "chat"
-        ? (bookingExpert.mentor_price_chat || 200)
-        : bookingType === "audio"
-        ? (bookingExpert.mentor_price_audio || 300)
-        : (bookingExpert.mentor_price_video || 400);
-
-      const scheduledAt = selectedDate && selectedTime
-        ? new Date(`${selectedDate}T${selectedTime.replace(" AM", ":00").replace(" PM", ":00").replace(/(\d+):/, (_, h) => {
-            const hour = parseInt(h);
-            if (selectedTime.includes("PM") && hour !== 12) return `${hour + 12}:`;
-            if (selectedTime.includes("AM") && hour === 12) return "00:";
-            return `${hour}:`;
-          })}`).toISOString()
-        : null;
-
-      const { data: consultation, error } = await supabase.from("consultations").insert({
-        consultant_id: bookingExpert.user_id, client_id: user.id, consultation_type: bookingType,
-        scheduled_at: scheduledAt, amount, duration_minutes: selectedDuration,
-        notes: bookingNotes || null, status: "pending",
-      }).select("id").single();
-      if (error) {
-        if (error.message.includes("row-level security")) throw new Error("Please verify your account to book sessions");
-        throw new Error("Booking failed. Please try again.");
-      }
-
-      // Send notification
-      await supabase.from("notifications").insert({
-        user_id: bookingExpert.user_id, type: "consultation_booking", title: "New Booking Request",
-        message: `${profile?.name || "Someone"} booked a ${bookingType} session (${selectedDuration}min)`, entity_id: bookingExpert.user_id,
+      if (!user || !bookingExpert || !selectedDate || !selectedTime) throw new Error("Choose a date and time");
+      const { data: consultation, error } = await (supabase as any).rpc("request_consultation", {
+        p_consultant_id: bookingExpert.user_id,
+        p_consultation_type: bookingType,
+        p_scheduled_at: toScheduledIso(selectedDate, selectedTime),
+        p_duration_minutes: selectedDuration,
+        p_notes: bookingNotes.trim() || null,
       });
-
-      // Auto-create chat room via edge function
-      if (consultation?.id) {
-        try {
-          await supabase.functions.invoke("create-consult-chat", {
-            body: { consultation_id: consultation.id },
-          });
-        } catch {
-          // Non-critical: chat room creation can be retried
-          console.warn("Chat room creation deferred");
-        }
+      if (error) {
+        throw new Error(error.message || "Booking failed. Please try again.");
       }
+      return consultation;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["my-consultations"] });
       setBookingExpert(null); setBookingNotes(""); setSelectedDate(""); setSelectedTime(""); setSelectedDuration(30);
-      toast.success("Session booked! A chat has been created with your mentor. 🎉");
+      toast.success("Request sent. You’ll be notified when the mentor accepts.");
     },
     onError: (err: any) => toast.error(err.message || "Something went wrong"),
   });
 
   const updateBookingStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      await supabase.from("consultations").update({ status }).eq("id", id);
+      const { data, error } = await (supabase as any).rpc("change_consultation_status", {
+        p_consultation_id: id,
+        p_status: status,
+      });
+      if (error) throw error;
+      if (status === "confirmed") {
+        const { error: chatError } = await supabase.functions.invoke("create-consult-chat", { body: { consultation_id: id } });
+        if (chatError) toast.warning("Booking accepted. The conversation will be created when either participant retries.");
+      }
+      return data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["my-consultations"] });
-      toast.success("Status updated!");
+      toast.success("Booking updated");
     },
+    onError: (error: any) => toast.error(error.message || "Could not update this booking"),
   });
 
   const displayExperts = !user ? experts?.slice(0, 3) : isVerified ? experts : experts?.slice(0, 3);
-  const hasBooked = (expertId: string) => myBookings?.some((b) => b.consultant_id === expertId && b.status !== "cancelled");
-
-  const nextDates = Array.from({ length: 7 }, (_, i) => {
+  const nextDates = Array.from({ length: 14 }, (_, i) => {
     const d = new Date();
     d.setDate(d.getDate() + i + 1);
     return d.toISOString().split("T")[0];
   });
+
+  const bookingPrice = useMemo(() => {
+    if (!bookingExpert) return null;
+    return bookingType === "chat" ? bookingExpert.mentor_price_chat : bookingType === "audio" ? bookingExpert.mentor_price_audio : bookingExpert.mentor_price_video;
+  }, [bookingExpert, bookingType]);
+
+  useEffect(() => {
+    if (!isVerified || !experts?.length || bookingExpert) return;
+    const mentorId = searchParams.get("mentor");
+    const requestedService = searchParams.get("service");
+    if (!mentorId) return;
+    const mentor = experts.find((item) => item.user_id === mentorId);
+    if (!mentor) return;
+    const available = (["chat", "audio", "video"] as const).filter((service) => mentor[`mentor_price_${service}`] != null);
+    if (!available.length) return;
+    const service = available.includes(requestedService as any) ? requestedService as "chat" | "audio" | "video" : available[0];
+    setBookingType(service);
+    setBookingExpert(mentor);
+    setSearchParams({}, { replace: true });
+  }, [bookingExpert, experts, isVerified, searchParams, setSearchParams]);
 
   return (
     <div className="bg-background flex flex-col min-h-0">
@@ -182,7 +195,7 @@ const Consult = () => {
             </div>
 
             {/* Service type - topmate style */}
-            <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">Choose Service</Label>
+            <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">Choose service</Label>
             <div className="flex gap-2 mb-5">
               <ServiceButton icon={MessageCircle} label="Chat" price={bookingExpert.mentor_price_chat} color="bg-primary/10 border-primary text-primary" active={bookingType === "chat"} onClick={() => setBookingType("chat")} />
               <ServiceButton icon={Phone} label="Audio" price={bookingExpert.mentor_price_audio} color="bg-[hsl(var(--success))]/10 border-[hsl(var(--success))] text-[hsl(var(--success))]" active={bookingType === "audio"} onClick={() => setBookingType("audio")} />
@@ -228,15 +241,15 @@ const Consult = () => {
 
             <div className="mb-5">
               <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">What would you like to discuss?</Label>
-              <Textarea placeholder="Share your goals, questions, or topics..." value={bookingNotes} onChange={(e) => setBookingNotes(e.target.value)} className="bg-secondary border-border mt-2 rounded-2xl" rows={3} />
+              <Textarea placeholder="Share your goal so the mentor can prepare…" value={bookingNotes} onChange={(e) => setBookingNotes(e.target.value)} className="bg-secondary border-border mt-2 rounded-2xl" rows={3} maxLength={1000} />
+              <p className="mt-1 text-right text-[10px] text-muted-foreground">{bookingNotes.length}/1000</p>
             </div>
 
-            <Button className="w-full h-12 rounded-2xl text-sm font-bold gap-2" onClick={() => bookMutation.mutate()} disabled={bookMutation.isPending || !selectedDate || !selectedTime}>
-              {bookMutation.isPending ? "Booking..." : <><Sparkles className="w-4 h-4" /> Confirm Booking - ₹{
-                bookingType === "chat" ? (bookingExpert.mentor_price_chat || 200)
-                : bookingType === "audio" ? (bookingExpert.mentor_price_audio || 300)
-                : (bookingExpert.mentor_price_video || 400)
-              }</>}
+            <div className="mb-3 rounded-2xl border border-primary/15 bg-primary/5 p-3 text-xs text-muted-foreground">
+              <ShieldCheck className="mr-1.5 inline h-4 w-4 text-primary" /> The mentor reviews this request before a private conversation is opened. Payment is not collected on this screen.
+            </div>
+            <Button className="w-full h-12 rounded-2xl text-sm font-bold gap-2" onClick={() => bookMutation.mutate()} disabled={bookMutation.isPending || !selectedDate || !selectedTime || bookingPrice === null}>
+              {bookMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending request…</> : <><Sparkles className="w-4 h-4" /> Send request · ₹{bookingPrice ?? "—"}</>}
             </Button>
           </div>
         </div>
@@ -245,7 +258,7 @@ const Consult = () => {
       {/* Sticky header */}
       <div className="flex-shrink-0 bg-background sticky top-0 z-10">
         <div className="px-4 pt-4 pb-2">
-          <div className="max-w-lg mx-auto flex items-center justify-between">
+          <div className="max-w-5xl mx-auto flex items-center justify-between">
             <div>
               <h1 className="text-xl font-bold text-foreground">Consult</h1>
               <p className="text-xs text-muted-foreground">Book 1:1 sessions with verified experts</p>
@@ -258,7 +271,7 @@ const Consult = () => {
 
         {/* Tabs - topmate style */}
         <div className="px-4 py-1">
-          <div className="max-w-lg mx-auto flex gap-2">
+          <div className="max-w-5xl mx-auto flex gap-2">
             <button onClick={() => setActiveTab("mentors")}
               className={`flex-1 text-xs font-semibold py-2.5 rounded-full transition-all ${activeTab === "mentors" ? "bg-primary text-primary-foreground" : "bg-card border border-border text-muted-foreground"}`}>
               <Users className="w-3.5 h-3.5 inline mr-1" />Mentors
@@ -276,13 +289,13 @@ const Consult = () => {
         {activeTab === "mentors" && (
           <>
             <div className="px-4 py-2">
-              <div className="max-w-lg mx-auto relative">
+              <div className="max-w-5xl mx-auto relative">
                 <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input placeholder="Search by name, skill, or topic..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10 h-12 rounded-2xl bg-card border-border w-full" />
               </div>
             </div>
             <div className="px-4 py-2 overflow-x-auto scrollbar-hide">
-              <div className="max-w-lg mx-auto flex gap-2">
+              <div className="max-w-5xl mx-auto flex gap-2">
                 {CATEGORIES.map((cat) => (
                   <button key={cat} onClick={() => setActiveCategory(cat)}
                     className={`text-xs font-semibold px-4 py-2 rounded-full whitespace-nowrap transition-all ${activeCategory === cat ? "bg-primary text-primary-foreground shadow-sm" : "bg-card border border-border text-muted-foreground hover:text-foreground hover:border-primary/30"}`}>
@@ -297,10 +310,14 @@ const Consult = () => {
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto min-h-0">
-        <main className="max-w-lg mx-auto px-4 py-4 space-y-4 pb-4">
+        <main className="max-w-5xl mx-auto px-4 py-4 space-y-4 pb-4">
           {activeTab === "bookings" && (
             <>
-              {!myBookings?.length ? (
+              {bookingsLoading ? (
+                <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Loading your bookings…</div>
+              ) : bookingsError ? (
+                <div className="rounded-2xl border border-destructive/20 bg-destructive/5 p-6 text-center"><AlertCircle className="mx-auto h-8 w-8 text-destructive" /><p className="mt-2 text-sm font-semibold">Couldn’t load your bookings</p><Button variant="outline" size="sm" className="mt-3" onClick={() => void refetchBookings()}><RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Retry</Button></div>
+              ) : !myBookings?.length ? (
                 <div className="text-center py-16">
                   <Calendar className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
                   <h3 className="font-bold text-foreground text-sm">No bookings yet</h3>
@@ -335,12 +352,20 @@ const Consult = () => {
                   )}
                   {booking.notes && <p className="text-xs text-muted-foreground mb-2">💬 {booking.notes}</p>}
                   <p className="text-xs font-semibold text-foreground">₹{booking.amount || 0}</p>
-                  {/* Action buttons for consultant */}
                   {booking.isConsultant && booking.status === "pending" && (
                     <div className="flex gap-2 mt-3">
-                      <Button size="sm" className="flex-1 rounded-xl h-8 text-xs" onClick={() => updateBookingStatus.mutate({ id: booking.id, status: "confirmed" })}>Accept</Button>
-                      <Button size="sm" variant="outline" className="flex-1 rounded-xl h-8 text-xs" onClick={() => updateBookingStatus.mutate({ id: booking.id, status: "cancelled" })}>Decline</Button>
+                      <Button size="sm" className="flex-1 rounded-xl h-8 text-xs" disabled={updateBookingStatus.isPending} onClick={() => updateBookingStatus.mutate({ id: booking.id, status: "confirmed" })}>Accept request</Button>
+                      <Button size="sm" variant="outline" className="flex-1 rounded-xl h-8 text-xs" disabled={updateBookingStatus.isPending} onClick={() => updateBookingStatus.mutate({ id: booking.id, status: "cancelled" })}>Decline</Button>
                     </div>
+                  )}
+                  {!booking.isConsultant && ["pending", "confirmed"].includes(booking.status) && (
+                    <Button size="sm" variant="outline" className="mt-3 h-8 w-full rounded-xl text-xs text-destructive" disabled={updateBookingStatus.isPending} onClick={() => updateBookingStatus.mutate({ id: booking.id, status: "cancelled" })}>Cancel booking</Button>
+                  )}
+                  {booking.isConsultant && booking.status === "confirmed" && booking.scheduled_at && new Date(booking.scheduled_at).getTime() <= Date.now() && (
+                    <Button size="sm" variant="outline" className="mt-3 h-8 w-full rounded-xl text-xs" disabled={updateBookingStatus.isPending} onClick={() => updateBookingStatus.mutate({ id: booking.id, status: "completed" })}>Mark completed</Button>
+                  )}
+                  {booking.chat_room_id && booking.status === "confirmed" && (
+                    <Button size="sm" className="mt-2 h-8 w-full rounded-xl text-xs" onClick={() => navigate(`/chats/${booking.chat_room_id}`)}><MessageCircle className="mr-1.5 h-3.5 w-3.5" /> Open private conversation</Button>
                   )}
                 </div>
               ))}
@@ -349,7 +374,18 @@ const Consult = () => {
 
           {activeTab === "mentors" && (
             <>
-              {(!experts || experts.length === 0) && !search && (
+              <section className="grid grid-cols-3 gap-2 rounded-3xl border border-primary/15 bg-gradient-to-br from-primary/10 via-card to-card p-4 sm:gap-4 sm:p-5" aria-label="How Consult works">
+                {["Choose a verified mentor", "Send a clear request", "Connect after acceptance"].map((step, index) => (
+                  <div key={step} className="text-center sm:text-left"><span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">{index + 1}</span><p className="mt-2 text-[11px] font-semibold leading-4 text-foreground sm:text-xs">{step}</p></div>
+                ))}
+              </section>
+              {expertsLoading && (
+                <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Finding verified mentors…</div>
+              )}
+              {expertsError && (
+                <div className="rounded-2xl border border-destructive/20 bg-destructive/5 p-6 text-center"><AlertCircle className="mx-auto h-8 w-8 text-destructive" /><p className="mt-2 text-sm font-semibold">Couldn’t load mentors</p><Button variant="outline" size="sm" className="mt-3" onClick={() => void refetchExperts()}><RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Retry</Button></div>
+              )}
+              {!expertsLoading && !expertsError && (!experts || experts.length === 0) && !search && (
                 <div className="text-center py-16">
                   <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
                     <Users className="w-10 h-10 text-primary" />
@@ -359,11 +395,15 @@ const Consult = () => {
                 </div>
               )}
 
+              {!expertsLoading && !expertsError && experts?.length === 0 && search && (
+                <div className="py-14 text-center"><Search className="mx-auto h-9 w-9 text-muted-foreground/40" /><h3 className="mt-3 text-sm font-bold">No matching mentors</h3><p className="mt-1 text-xs text-muted-foreground">Try another name, skill or category.</p></div>
+              )}
+
+              <div className="grid gap-4 lg:grid-cols-2">
               {displayExperts?.map((expert: any, i: number) => {
                 const chatPrice = expert.mentor_price_chat;
                 const audioPrice = expert.mentor_price_audio;
                 const videoPrice = expert.mentor_price_video;
-                const booked = hasBooked(expert.user_id);
                 const skills = expert.skills || [];
 
                 return (
@@ -416,35 +456,28 @@ const Consult = () => {
                           <div className="flex-1 rounded-2xl py-2.5 px-3 flex items-center justify-center gap-1.5 pricing-audio"><Phone className="w-3.5 h-3.5" /><span className="text-xs font-bold">₹{audioPrice || "-"}</span></div>
                           <div className="flex-1 rounded-2xl py-2.5 px-3 flex items-center justify-center gap-1.5 pricing-video"><Video className="w-3.5 h-3.5" /><span className="text-xs font-bold">₹{videoPrice || "-"}</span></div>
                         </div>
-                      ) : booked ? (
-                        <div className="flex-1 rounded-2xl py-2.5 px-3 flex items-center justify-center gap-1.5 bg-[hsl(var(--success))]/10 text-[hsl(var(--success))] border border-[hsl(var(--success))]/20">
-                          <CheckCircle2 className="w-4 h-4" /><span className="text-xs font-bold">Booked</span>
-                        </div>
                       ) : (
                         <>
-                          {chatPrice && (
+                          {chatPrice !== null && chatPrice !== undefined && (
                             <button onClick={() => { setBookingExpert(expert); setBookingType("chat"); }}
                               className="flex-1 rounded-2xl py-2.5 px-3 flex items-center justify-center gap-1.5 pricing-chat cursor-pointer hover:shadow-md transition-all hover-scale">
                               <MessageCircle className="w-3.5 h-3.5" /><span className="text-xs font-bold">₹{chatPrice}</span>
                             </button>
                           )}
-                          {audioPrice && (
+                          {audioPrice !== null && audioPrice !== undefined && (
                             <button onClick={() => { setBookingExpert(expert); setBookingType("audio"); }}
                               className="flex-1 rounded-2xl py-2.5 px-3 flex items-center justify-center gap-1.5 pricing-audio cursor-pointer hover:shadow-md transition-all hover-scale">
                               <Phone className="w-3.5 h-3.5" /><span className="text-xs font-bold">₹{audioPrice}</span>
                             </button>
                           )}
-                          {videoPrice && (
+                          {videoPrice !== null && videoPrice !== undefined && (
                             <button onClick={() => { setBookingExpert(expert); setBookingType("video"); }}
                               className="flex-1 rounded-2xl py-2.5 px-3 flex items-center justify-center gap-1.5 pricing-video cursor-pointer hover:shadow-md transition-all hover-scale">
                               <Video className="w-3.5 h-3.5" /><span className="text-xs font-bold">₹{videoPrice}</span>
                             </button>
                           )}
-                          {!chatPrice && !audioPrice && !videoPrice && (
-                            <button onClick={() => { setBookingExpert(expert); setBookingType("chat"); }}
-                              className="flex-1 rounded-2xl py-2.5 px-3 flex items-center justify-center gap-1.5 bg-primary/10 border border-primary text-primary cursor-pointer hover:shadow-md transition-all hover-scale">
-                              <Sparkles className="w-3.5 h-3.5" /><span className="text-xs font-bold">Book Session</span>
-                            </button>
+                          {chatPrice == null && audioPrice == null && videoPrice == null && (
+                            <div className="flex-1 rounded-2xl border border-border bg-secondary/50 px-3 py-2.5 text-center text-xs font-semibold text-muted-foreground">Services not configured</div>
                           )}
                         </>
                       )}
@@ -452,6 +485,7 @@ const Consult = () => {
                   </article>
                 );
               })}
+              </div>
 
               {(!user || !isVerified) && (experts?.length || 0) > 0 && (
                 <div className="relative rounded-2xl border border-border bg-card/60 backdrop-blur-sm p-8 text-center">

@@ -587,16 +587,16 @@ const Profile = () => {
               <h3 className="font-bold text-foreground text-sm mb-3">Book a Session</h3>
               <div className="flex gap-2">
                 {[
-                  { label: "₹499", type: "chat" as const, price: (displayProfile as any)?.mentor_price_chat || 499 },
-                  { label: "₹999", type: "audio" as const, price: (displayProfile as any)?.mentor_price_audio || 999 },
-                  { label: "₹1999", type: "video" as const, price: (displayProfile as any)?.mentor_price_video || 1999 },
-                ].map((tier) => (
+                  { type: "chat" as const, price: (displayProfile as any)?.mentor_price_chat },
+                  { type: "audio" as const, price: (displayProfile as any)?.mentor_price_audio },
+                  { type: "video" as const, price: (displayProfile as any)?.mentor_price_video },
+                ].filter((tier) => tier.price != null).map((tier) => (
                   <button
                     key={tier.type}
-                    onClick={() => navigate(`/consult`)}
+                    onClick={() => navigate(`/consult?mentor=${displayProfile.user_id}&service=${tier.type}`)}
                     className="flex-1 py-3 px-4 rounded-full bg-primary/10 border border-primary/20 text-primary font-bold text-sm hover:bg-primary hover:text-primary-foreground transition-all hover:shadow-md"
                   >
-                    {tier.label}
+                    ₹{tier.price}
                     <span className="block text-[9px] font-medium opacity-70 capitalize">{tier.type}</span>
                   </button>
                 ))}

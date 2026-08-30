@@ -218,7 +218,6 @@ const Auth = () => {
             src="/auth-community-portrait-v2.webp"
             alt=""
             aria-hidden="true"
-            fetchPriority="high"
             className="absolute inset-0 h-full w-full object-cover object-[center_20%] opacity-85 dark:opacity-100 lg:object-cover lg:object-center"
           />
         </picture>
