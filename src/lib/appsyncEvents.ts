@@ -13,6 +13,7 @@ type Listener = {
 const provider = import.meta.env.VITE_CHAT_REALTIME_PROVIDER;
 const realtimeEndpoint = import.meta.env.VITE_APPSYNC_REALTIME_ENDPOINT;
 const httpEndpoint = import.meta.env.VITE_APPSYNC_HTTP_ENDPOINT;
+const BACKGROUND_IDLE_MS = 30_000;
 
 export const appSyncRealtimeEnabled = provider === "appsync" && Boolean(realtimeEndpoint && httpEndpoint);
 
@@ -36,14 +37,11 @@ class AppSyncEventsClient {
   constructor() {
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", () => {
-        if (document.hidden) {
-          this.hiddenTimer = setTimeout(() => this.closeSocket(), 60_000);
-        } else {
-          if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
-          this.hiddenTimer = null;
-          if (this.listeners.size) void this.connect();
-        }
+        if (document.hidden) this.scheduleBackgroundClose();
+        else this.resumeForeground();
       });
+      window.addEventListener("pagehide", () => this.scheduleBackgroundClose());
+      window.addEventListener("pageshow", () => this.resumeForeground());
       window.addEventListener("online", () => { if (this.listeners.size) void this.connect(); });
     }
   }
@@ -106,8 +104,12 @@ class AppSyncEventsClient {
         socket.onclose = () => {
           clearTimeout(timeout);
           if (this.socket === socket) this.socket = null;
-          this.listeners.forEach((listener) => listener.onStatus?.("CLOSED"));
-          if (!this.explicitlyClosed && this.listeners.size && (typeof document === "undefined" || !document.hidden)) this.scheduleReconnect();
+          // An intentional background/unmount close must not start the
+          // Supabase realtime fallback; foreground recovery queries the DB.
+          if (!this.explicitlyClosed) {
+            this.listeners.forEach((listener) => listener.onStatus?.("CLOSED"));
+            if (this.listeners.size && (typeof document === "undefined" || !document.hidden)) this.scheduleReconnect();
+          }
         };
       });
       await Promise.all([...this.listeners.keys()].map((id) => this.sendSubscription(id)));
@@ -154,6 +156,20 @@ class AppSyncEventsClient {
     this.reconnectTimer = null;
     this.socket?.close(1000, "idle");
     this.socket = null;
+  }
+
+  private scheduleBackgroundClose() {
+    if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
+    this.hiddenTimer = setTimeout(() => {
+      this.hiddenTimer = null;
+      this.closeSocket();
+    }, BACKGROUND_IDLE_MS);
+  }
+
+  private resumeForeground() {
+    if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
+    this.hiddenTimer = null;
+    if (this.listeners.size) void this.connect();
   }
 }
 
