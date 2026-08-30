@@ -2717,7 +2717,7 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
 
           {/* Image */}
           {!isDeleted && post.image_url && (
-            <img src={post.image_url} alt="" className="mt-1.5 rounded-lg max-h-72 max-w-[400px] w-auto object-cover cursor-pointer hover:opacity-90 transition-opacity"
+            <img src={post.image_url} alt={post.content === "GIF" ? "Shared GIF" : "Shared image"} className="mt-1.5 block h-auto max-h-72 w-full max-w-[400px] rounded-lg object-contain cursor-pointer hover:opacity-90 transition-opacity"
               loading="lazy" onClick={() => onImageClick(post.image_url)} />
           )}
 

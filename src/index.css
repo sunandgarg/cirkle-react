@@ -129,6 +129,8 @@
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
     scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
   body {
     @apply bg-background text-foreground antialiased;
@@ -156,6 +158,18 @@
 
   button, a, input, textarea, select {
     @apply transition-colors duration-150;
+  }
+
+  /* Mobile Safari zooms the entire page when a focused form control renders
+     below 16px and does not reliably restore the previous scale. Keep every
+     editable control at a zoom-safe size on phones, including embedded
+     pickers, while retaining compact desktop typography. */
+  @media (max-width: 767px) {
+    input,
+    textarea,
+    select {
+      font-size: 16px !important;
+    }
   }
 
   /* Skip to main content - accessibility */

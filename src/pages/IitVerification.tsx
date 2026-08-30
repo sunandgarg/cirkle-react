@@ -17,8 +17,11 @@ import { loadOnboardingProgress, saveOnboardingProgress } from "@/lib/onboarding
 import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
 
 const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
+  const officialUrl = defaultIitLogo(iit.studentDomain);
+  const [source, setSource] = useState(customUrl || officialUrl);
   const [failed, setFailed] = useState(false);
   const [wide, setWide] = useState(false);
+  const usesWhiteOfficialMark = source === officialUrl && iit.studentDomain === "iitd.ac.in";
   const initials = iit.name
     .replace("IIT ", "")
     .replace(" (ISM)", "")
@@ -28,18 +31,31 @@ const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) 
     .slice(0, 3)
     .toUpperCase();
 
+  useEffect(() => {
+    setSource(customUrl || officialUrl);
+    setFailed(false);
+    setWide(false);
+  }, [customUrl, officialUrl]);
+
   return (
-    <div className="relative w-11 h-11 rounded-xl bg-white border border-border/70 shadow-sm flex items-center justify-center overflow-hidden shrink-0">
+    <div className={`relative w-11 h-11 rounded-xl border border-border/70 shadow-sm flex items-center justify-center overflow-hidden shrink-0 ${usesWhiteOfficialMark ? "bg-[#5b1734]" : "bg-white"}`}>
       {failed ? (
         <span className="text-sm font-black tracking-tight text-primary">{initials}</span>
       ) : (
         <img
-          src={customUrl || defaultIitLogo(iit.studentDomain)}
+          src={source}
           alt={`${iit.name} logo`}
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
-          onError={() => setFailed(true)}
+          onError={() => {
+            if (source !== officialUrl) {
+              setSource(officialUrl);
+              setWide(false);
+              return;
+            }
+            setFailed(true);
+          }}
           onLoad={(event) => {
             const image = event.currentTarget;
             setWide(image.naturalWidth / Math.max(image.naturalHeight, 1) > 1.65);

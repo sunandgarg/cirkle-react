@@ -32,7 +32,9 @@ describe("KLIPY GIF picker", () => {
     render(<GifPicker onSelect={vi.fn()} onEmojiSelect={vi.fn()} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "GIFs" }));
 
-    expect(await screen.findByPlaceholderText("Search KLIPY")).toBeInTheDocument();
+    const search = await screen.findByPlaceholderText("Search KLIPY");
+    expect(search).toBeInTheDocument();
+    expect(search).toHaveClass("text-base");
     expect(screen.getByText("Powered by KLIPY")).toBeInTheDocument();
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("klipy-search", {
       body: { q: "", type: "gifs", limit: 20 },

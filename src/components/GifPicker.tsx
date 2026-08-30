@@ -82,7 +82,7 @@ const GifPicker = ({ onSelect, onEmojiSelect, onClose }: GifPickerProps) => {
   };
 
   return (
-    <div className="bg-card border border-border rounded-xl shadow-xl overflow-hidden animate-fade-in w-full max-w-sm">
+    <div className="w-full min-w-0 overflow-hidden rounded-2xl border border-border bg-card shadow-xl animate-fade-in sm:max-w-sm" data-testid="gif-picker">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <div className="flex items-center gap-0">
           <button
@@ -115,7 +115,7 @@ const GifPicker = ({ onSelect, onEmojiSelect, onClose }: GifPickerProps) => {
             onChange={(e) => handleQueryChange(e.target.value)}
             placeholder="Search KLIPY"
             aria-label="Search KLIPY GIFs"
-            className="h-8 pl-8 text-xs bg-secondary border-border rounded-lg"
+            className="h-11 pl-9 text-base bg-secondary border-border rounded-xl md:h-9 md:text-sm"
           />
         </div>
       </div>}
@@ -134,7 +134,7 @@ const GifPicker = ({ onSelect, onEmojiSelect, onClose }: GifPickerProps) => {
             </section>
           ))}
         </div>
-      ) : <div className="grid grid-cols-2 gap-1 px-2 pb-2 max-h-60 overflow-y-auto">
+      ) : <div className="grid min-w-0 grid-cols-2 gap-1.5 overflow-y-auto overscroll-contain px-2 pb-2 max-h-[min(38dvh,17rem)]">
         {loading && (
           <div className="col-span-2 flex items-center justify-center py-8">
             <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
@@ -144,12 +144,13 @@ const GifPicker = ({ onSelect, onEmojiSelect, onClose }: GifPickerProps) => {
           <button
             key={gif.id}
             onClick={() => { registerShare(gif.slug); onSelect(gif.url); }}
-            className="rounded-lg overflow-hidden hover:ring-2 hover:ring-primary transition-all"
+            className="min-w-0 overflow-hidden rounded-xl bg-muted/40 hover:ring-2 hover:ring-primary transition-all"
+            aria-label={`Send GIF: ${gif.title || "GIF"}`}
           >
             <img
               src={gif.preview}
               alt={gif.title}
-              className="w-full h-24 object-cover"
+              className="aspect-square h-auto w-full object-contain"
               loading="lazy"
             />
           </button>

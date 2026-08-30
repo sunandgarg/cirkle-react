@@ -21,13 +21,13 @@ supabase db push
 
 ## Verification and test-data functions
 
-The IIT verification flow uses Zavu as the primary transactional provider and
-AWS SES as its fallback. Generate a unique pepper; never reuse a frontend or
+The IIT verification flow uses AWS SES as the primary transactional provider and
+Zavu as its fallback. Generate a unique pepper; never reuse a frontend or
 database key.
 
 ```bash
 supabase secrets set ZAVU_API_KEY=... ZAVU_SENDER_ID=... \
-  EMAIL_PROVIDER_PRIMARY=zavu EMAIL_PROVIDER_FALLBACK=ses \
+  EMAIL_PROVIDER_PRIMARY=ses EMAIL_PROVIDER_FALLBACK=zavu \
   VERIFICATION_CODE_PEPPER=... \
   'VERIFICATION_EMAIL_FROM=Cirkle <verify@cirkle.world>' SEED_DATA_ENABLED=true
 supabase functions deploy send-verification-email

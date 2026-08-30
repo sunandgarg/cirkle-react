@@ -36,7 +36,7 @@ https://cirkle.pages.dev/reset-password
 
 Add the equivalent `https://cirkle.world/**` entry when the custom domain is
 active. Password-recovery emails are sent by the `request-password-reset` Edge
-Function through the same Zavu-primary, Amazon-SES-fallback delivery chain.
+Function through the same Amazon-SES-primary, Zavu-fallback delivery chain.
 Supabase Auth SMTP settings are only used by any remaining built-in Supabase
 email flows.
 
@@ -49,13 +49,13 @@ http://localhost:8091/**
 
 ## Transactional email providers
 
-Zavu is the primary transactional provider. AWS SES remains configured as a
+AWS SES is the primary transactional provider. Zavu remains configured as a
 fallback, so the application can switch providers without another code deploy.
 Set these Supabase Edge Function secrets:
 
 ```bash
 supabase secrets set ZAVU_API_KEY=... ZAVU_SENDER_ID=... \
-  EMAIL_PROVIDER_PRIMARY=zavu EMAIL_PROVIDER_FALLBACK=ses \
+  EMAIL_PROVIDER_PRIMARY=ses EMAIL_PROVIDER_FALLBACK=zavu \
   --project-ref bugwubrwvlqayxwcazfd
 ```
 
@@ -63,7 +63,7 @@ The Zavu key is server-only and must never use a `VITE_` prefix. The Zavu
 sender must use the verified `cirkle.world` email domain and
 `verify@cirkle.world` identity.
 
-For the SES fallback, set:
+For the SES primary provider, set:
 
 Set these Supabase Edge Function secrets:
 
