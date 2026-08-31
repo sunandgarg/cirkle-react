@@ -80,7 +80,7 @@ const Jobs = () => {
 
   const apply = useMutation({
     mutationFn: async (job: any) => {
-      if (!user || !isVerified) throw new Error("Verify your IIT profile before applying.");
+      if (!user || !isVerified) throw new Error("Verify your community profile before applying.");
       const { error } = await supabase.from("applications").insert({
         job_id: job.id, applicant_id: user.id, note: "Easy Apply", resume_url: null,
       });
@@ -140,7 +140,7 @@ const Jobs = () => {
       <header className="sticky top-0 z-20 shrink-0 border-b border-border/70 bg-background/95 backdrop-blur-xl">
         <div className="mx-auto max-w-5xl px-4 pb-3 pt-4 sm:px-6">
           <div className="flex items-start justify-between gap-3">
-            <div><h1 className="text-xl font-bold tracking-tight text-foreground">Jobs</h1><p className="mt-0.5 text-xs text-muted-foreground">Verified opportunities for the IIT community</p></div>
+            <div><h1 className="text-xl font-bold tracking-tight text-foreground">Jobs</h1><p className="mt-0.5 text-xs text-muted-foreground">Verified opportunities for your community</p></div>
             <div className="flex items-center gap-2"><span className="rounded-full bg-secondary px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">{filteredJobs.length} open</span><button aria-label="Refresh jobs" onClick={() => refetch()} disabled={isFetching} className="rounded-full border border-border p-2 text-muted-foreground hover:text-primary"><RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} /></button></div>
           </div>
           <div className="relative mt-4"><Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search role, company, skill, or location" className="h-11 rounded-xl border-border bg-card pl-10" /></div>
@@ -168,7 +168,7 @@ const Jobs = () => {
               })}</div>
                 : <EmptyState icon={BriefcaseBusiness} title={activeFilter === "Saved" ? "No saved jobs yet" : "No matching jobs"} description={activeFilter === "Saved" ? "Tap the bookmark on a job to keep it here." : "Try a broader search or another filter."} />}
 
-          {!user || !isVerified ? <div className="mt-4 rounded-2xl border border-primary/15 bg-primary/5 p-5 text-center"><Lock className="mx-auto h-6 w-6 text-primary" /><h3 className="mt-2 text-sm font-bold">{user ? "Verify once to apply" : "Join the verified IIT network"}</h3><p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">Browse every public opening now. {user ? "Complete your IIT verification before applying." : "Sign in to save your identity and apply to opportunities."}</p><Button className="mt-4 rounded-xl" onClick={() => navigate(user ? "/iit-verify" : "/auth")}>{user ? "Complete verification" : "Sign in"}</Button></div> : null}
+          {!user || !isVerified ? <div className="mt-4 rounded-2xl border border-primary/15 bg-primary/5 p-5 text-center"><Lock className="mx-auto h-6 w-6 text-primary" /><h3 className="mt-2 text-sm font-bold">{user ? "Verify once to apply" : "Join the verified community network"}</h3><p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">Browse every public opening now. {user ? "Complete your community verification before applying." : "Sign in to save your identity and apply to opportunities."}</p><Button className="mt-4 rounded-xl" onClick={() => navigate(user ? "/iit-verify" : "/auth")}>{user ? "Complete verification" : "Sign in"}</Button></div> : null}
         </div>
       </main>
     </div>

@@ -358,7 +358,7 @@ const Blogs = () => {
         <div className="max-w-5xl mx-auto px-4 py-8 sm:py-12">
           <h2 className="text-2xl sm:text-4xl font-bold text-foreground">Cirkle News</h2>
           <p className="text-sm sm:text-base text-muted-foreground mt-2 max-w-2xl">
-            Updates on the latest career opportunities, campus life, placements, exams and more from across the IIT community.
+            Useful ideas, opportunities and member stories from across Cirkle communities.
           </p>
           <div className="mt-5 flex flex-wrap items-center gap-2">
             <div className="relative flex-1 min-w-[220px] max-w-md">
