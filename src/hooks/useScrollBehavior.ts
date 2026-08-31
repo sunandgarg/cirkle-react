@@ -6,6 +6,10 @@ interface ScrollBehaviorState {
   showNavBar: boolean;
 }
 
+export const isEditableElementActive = (activeElement: Element | null) =>
+  activeElement instanceof HTMLElement
+  && Boolean(activeElement.closest("input, textarea, [contenteditable='true']"));
+
 export const useScrollBehavior = (scrollRef: React.RefObject<HTMLDivElement | null>) => {
   const [state, setState] = useState<ScrollBehaviorState>({
     showHeader: true,
@@ -34,6 +38,18 @@ export const useScrollBehavior = (scrollRef: React.RefObject<HTMLDivElement | nu
       const currentY = el.scrollTop;
       const delta = currentY - lastScrollY.current;
       const distFromBottom = el.scrollHeight - currentY - el.clientHeight;
+
+      // Opening the iOS keyboard changes the visual viewport and can produce a
+      // synthetic upward scroll. Never interpret that browser adjustment as a
+      // member asking us to hide the control they are actively typing into.
+      if (isEditableElementActive(document.activeElement)) {
+        setState({ showHeader: true, showInput: true, showNavBar: true });
+        accumulatedUp.current = 0;
+        accumulatedDown.current = 0;
+        lastScrollY.current = currentY;
+        ticking.current = false;
+        return;
+      }
 
       // Near bottom - restore everything
       if (distFromBottom < BOTTOM_PROXIMITY) {

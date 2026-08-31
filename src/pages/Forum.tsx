@@ -60,6 +60,7 @@ import {
   appSyncRealtimeEnabled, getForumAppSyncChannels, publishAppSync, subscribeAppSync,
 } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
+import { useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
@@ -596,6 +597,7 @@ const Forum = () => {
 
   // Smart scroll hide/show
   const { showInput, showNavBar, showHeader, restoreAll } = useScrollBehavior(scrollContainerRef);
+  const visualViewportHeight = useVisualViewportHeight();
 
   useEffect(() => {
     const scrollContainer = scrollContainerRef.current;
@@ -1855,7 +1857,11 @@ const Forum = () => {
   }
 
   return (
-    <div className="flex flex-col bg-background overflow-hidden w-full" style={{ height: '100dvh' } as any}>
+    <div
+      className="flex flex-col bg-background overflow-hidden w-full"
+      data-testid="forum-shell"
+      style={{ height: `${visualViewportHeight}px`, maxHeight: "100dvh" }}
+    >
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
       {/* ═══ CHANNEL SIDEBAR (Desktop: 280px) ═══ */}
@@ -2242,7 +2248,14 @@ const Forum = () => {
                     value={content}
                     onChange={(e) => handleContentChange(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    onFocus={() => { setShowAttachMenu(false); setShowGifPicker(false); restoreAll(); }}
+                    onFocus={() => {
+                      setShowAttachMenu(false);
+                      setShowGifPicker(false);
+                      restoreAll();
+                      requestAnimationFrame(() => {
+                        if (shouldFollowLiveRef.current) scrollToBottom();
+                      });
+                    }}
                     placeholder={(activeScopeDef as any)?.label || "Forum"}
                     rows={1}
                     style={{ transition: 'height 100ms ease' }}
