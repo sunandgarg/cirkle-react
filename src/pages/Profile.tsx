@@ -27,6 +27,7 @@ import { buildSocialLinks, MENTOR_CATEGORIES, readSocialLinks, SOCIAL_FIELDS, so
 import { compressProfileImage, convertToWebP } from "@/lib/imageUtils";
 import { findCompanyOption, shouldOfferInitialCompanyLogo } from "@/lib/companyCatalog";
 import { effectiveMemberStatus } from "@/lib/memberStatus";
+import { reportError } from "@/lib/errorTelemetry";
 
 const PROFILE_TABS = [
   { label: "About Me", compact: "About" },
@@ -421,11 +422,16 @@ const Profile = () => {
   });
 
   const sendConnect = useMutation({
+    mutationKey: ["send_connection_request"],
     mutationFn: async () => {
-      const { error } = await supabase.from("connections").insert({ requester_id: user!.id, receiver_id: targetId!, community_id: "default", status: "pending" });
+      const { error } = await (supabase as any).rpc("send_connection_request", { p_receiver_id: targetId!, p_note: null });
       if (error) throw error;
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connection-status"] }); toast.success("Request sent!"); },
+    onError: (error: any) => {
+      reportError(error, { flow: "connections", action: "send_profile_request", metadata: { peerId: targetId } });
+      toast.error(error.message || "Could not send connection request");
+    },
   });
 
   const uploadImage = async (file: File, bucket: string, field: string) => {
@@ -605,7 +611,7 @@ const Profile = () => {
               <>
                 {connectionStatus === "none" && <Button className="flex-1 rounded-xl h-9 gap-1 text-xs" onClick={() => sendConnect.mutate()}><UserPlus className="w-3.5 h-3.5" /> Connect</Button>}
                 {connectionStatus === "pending" && <Button variant="outline" className="flex-1 rounded-xl h-9 text-xs" disabled><Check className="w-3.5 h-3.5 mr-1" /> Pending</Button>}
-                {connectionStatus === "accepted" && <Button variant="outline" className="flex-1 rounded-xl h-9 gap-1 text-xs" onClick={() => navigate("/chats")}><MessageSquare className="w-3.5 h-3.5" /> Message</Button>}
+                {connectionStatus === "accepted" && <Button variant="outline" className="flex-1 rounded-xl h-9 gap-1 text-xs" onClick={() => navigate(`/chats?peer=${targetId}`)}><MessageSquare className="w-3.5 h-3.5" /> Message</Button>}
                 <Button variant="outline" className="rounded-xl h-9 px-3" onClick={() => { navigator.clipboard.writeText(shareUrl); toast.success("Link copied!"); }}><Share2 className="w-3.5 h-3.5" /></Button>
               </>
             )}

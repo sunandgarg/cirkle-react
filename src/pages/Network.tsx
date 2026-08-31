@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback } from "react";
 import EmptyState from "@/components/EmptyState";
+import { reportError } from "@/lib/errorTelemetry";
 import { Users, Search, BadgeCheck, MessageSquare, UserPlus, ShieldCheck } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
@@ -77,6 +78,7 @@ const Network = () => {
   );
 
   const sendRequest = useMutation({
+    mutationKey: ["send_connection_request"],
     mutationFn: async ({ receiverId, note }: { receiverId: string; note: string }) => {
       const { error } = await (supabase as any).rpc("send_connection_request", {
         p_receiver_id: receiverId, p_note: note.trim() || null,
@@ -84,10 +86,14 @@ const Network = () => {
       if (error) throw error;
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connections"] }); setInvitee(null); setInviteNote(""); toast.success("Invitation sent"); },
-    onError: (error: any) => toast.error(error.message || "Could not send invitation"),
+    onError: (error: any) => {
+      reportError(error, { flow: "connections", action: "send_invitation", metadata: { receiverId: invitee?.user_id } });
+      toast.error(error.message || "Could not send invitation");
+    },
   });
 
   const respondRequest = useMutation({
+    mutationKey: ["respond_connection_request"],
     mutationFn: async ({ memberId, status }: { memberId: string; status: string }) => {
       const connection = getConnection(memberId) as any;
       if (!connection?.id) throw new Error("Invitation not found");
@@ -95,10 +101,14 @@ const Network = () => {
       if (error) throw error;
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connections"] }); toast.success("Invitation updated"); },
-    onError: (error: any) => toast.error(error.message || "Could not update invitation"),
+    onError: (error: any) => {
+      reportError(error, { flow: "connections", action: "respond_invitation" });
+      toast.error(error.message || "Could not update invitation");
+    },
   });
 
   const withdrawRequest = useMutation({
+    mutationKey: ["withdraw_connection_request"],
     mutationFn: async (memberId: string) => {
       const connection = getConnection(memberId) as any;
       if (!connection?.id) throw new Error("Invitation not found");
@@ -106,7 +116,10 @@ const Network = () => {
       if (error) throw error;
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connections"] }); toast.success("Invitation withdrawn"); },
-    onError: (error: any) => toast.error(error.message || "Could not withdraw invitation"),
+    onError: (error: any) => {
+      reportError(error, { flow: "connections", action: "withdraw_invitation" });
+      toast.error(error.message || "Could not withdraw invitation");
+    },
   });
 
   const openInvite = (member: any) => { setInvitee(member); setInviteNote(""); };

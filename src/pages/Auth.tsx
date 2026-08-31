@@ -12,6 +12,7 @@ import { applyThemePreference, readThemePreference, type ThemePreference } from 
 import { Monitor, Moon, Sun } from "lucide-react";
 import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
 import { resolveMemberAccessState } from "@/lib/memberAccess";
+import { reportError } from "@/lib/errorTelemetry";
 
 const GoogleMark = () => (
   <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 shrink-0">
@@ -102,6 +103,7 @@ const Auth = () => {
       setAuthStep("otp");
       toast.success("Verification code sent to your email");
     } catch (error: any) {
+      reportError(error, { flow: "authentication", action: "request_email_otp", metadata: { method: "email_otp" } });
       toast.error(error.message || "Could not send email code. Please try again.");
     } finally {
       setLoading(false);
@@ -120,6 +122,7 @@ const Auth = () => {
       });
       if (error) throw error;
     } catch (error: any) {
+      reportError(error, { flow: "authentication", action: "start_google_oauth", metadata: { provider: "google" } });
       toast.error(error.message || "Google sign-in could not be completed. Please use email verification.");
       setLoading(false);
     }
@@ -140,7 +143,8 @@ const Auth = () => {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       toast.success("Signed in securely");
-    } catch {
+    } catch (error) {
+      reportError(error, { flow: "authentication", action: "password_login", severity: "warning" });
       toast.error("Email or password is incorrect. You can also use an email code.");
       setLoading(false);
     }
@@ -171,6 +175,7 @@ const Auth = () => {
       setRecoveryEmail(normalizedEmail);
       setRecoverySent(true);
     } catch (error: unknown) {
+      reportError(error, { flow: "authentication", action: "request_password_reset", severity: "warning" });
       const message = error instanceof Error ? error.message.toLowerCase() : "";
       toast.error(message.includes("rate") ? "Too many requests. Please wait before trying again." : "Could not send the recovery email. Please try again.");
     } finally {
@@ -198,6 +203,7 @@ const Auth = () => {
       toast.success("Email verified");
       navigate("/iit-verify", { replace: true });
     } catch (error: any) {
+      reportError(error, { flow: "authentication", action: "verify_email_otp", metadata: { method: "email_otp" } });
       toast.error(error.message || "Could not verify the code. Please try again.");
       setLoading(false);
     }

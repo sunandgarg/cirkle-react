@@ -1,6 +1,7 @@
 import React, { Component, type ErrorInfo, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
+import { reportError } from "@/lib/errorTelemetry";
 
 interface Props {
   children: ReactNode;
@@ -24,6 +25,12 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    reportError(error, {
+      flow: "react_render",
+      action: "error_boundary",
+      severity: "fatal",
+      metadata: { componentStack: errorInfo.componentStack || "" },
+    });
     this.props.onError?.(error, errorInfo);
   }
 

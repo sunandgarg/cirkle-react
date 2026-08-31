@@ -1,7 +1,7 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/hooks/useAuth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -9,6 +9,7 @@ import AppLayout from "@/components/AppLayout";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { lazy, Suspense } from "react";
 import CookieConsentBar from "@/components/CookieConsentBar";
+import { reportError } from "@/lib/errorTelemetry";
 
 // ─── Lazy-loaded routes (code splitting per route) ───
 const Landing = lazy(() => import("@/pages/Landing"));
@@ -40,6 +41,20 @@ const PageLoader = () => (
 
 // Global QueryClient - data stays cached until explicit refresh
 const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error, query) => reportError(error, {
+      flow: "data_query",
+      action: String(query.queryKey[0] || "unknown_query"),
+      metadata: { queryKey: query.queryKey },
+    }),
+  }),
+  mutationCache: new MutationCache({
+    onError: (error, _variables, _context, mutation) => reportError(error, {
+      flow: "data_mutation",
+      action: String(mutation.options.mutationKey?.[0] || "unnamed_mutation"),
+      metadata: { mutationKey: mutation.options.mutationKey || [] },
+    }),
+  }),
   defaultOptions: {
     queries: {
       staleTime: Infinity,

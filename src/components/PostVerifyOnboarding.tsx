@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import { clearOnboardingProgress, loadOnboardingProgress, saveOnboardingProgress } from "@/lib/onboardingProgress";
 import { convertToWebP } from "@/lib/imageUtils";
 import { findCompanyOption, shouldOfferInitialCompanyLogo } from "@/lib/companyCatalog";
+import { reportError } from "@/lib/errorTelemetry";
 
 const YEARS = Array.from({ length: 56 }, (_, i) => String(2035 - i));
 
@@ -219,6 +220,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
       setStep("course_pending");
       toast.success("Course sent for admin approval");
     } catch (error: any) {
+      reportError(error, { flow: "member_onboarding", action: "submit_custom_course" });
       toast.error(error.message || "Could not submit your course");
     } finally {
       setLoading(false);
@@ -240,6 +242,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
       setSpecialisation("");
       setStep("degree");
     } catch (error: any) {
+      reportError(error, { flow: "member_onboarding", action: "change_custom_course", severity: "warning" });
       toast.error(error.message || "Could not change your course");
     } finally {
       setLoading(false);
@@ -301,6 +304,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
       setCompanyLogoUrl(data.publicUrl);
       toast.success("Company logo ready");
     } catch (error: any) {
+      reportError(error, { flow: "member_onboarding", action: "upload_company_logo" });
       toast.error(error.message || "Logo upload failed");
     } finally {
       setUploadingCompanyLogo(false);
@@ -375,6 +379,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
       toast.success("Profile complete! Welcome to Cirkle 🎉");
       onComplete();
     } catch (err: any) {
+      reportError(err, { flow: "member_onboarding", action: "complete_profile" });
       toast.error(err.message || "Failed to save profile");
     } finally {
       setLoading(false);

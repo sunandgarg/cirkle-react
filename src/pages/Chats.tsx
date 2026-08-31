@@ -22,6 +22,7 @@ import {
 import { getForumBroadcastRow } from "@/lib/forumRealtime";
 import { createRealtimeRecoveryController } from "@/lib/realtimeRecovery";
 import { mergeChatTimeline, uniqueChatMessages as uniqueMessages } from "@/lib/chatMessages";
+import { reportError } from "@/lib/errorTelemetry";
 import VoiceRecorder from "@/components/forum/VoiceRecorder";
 import {
   appSyncRealtimeEnabled, chatAppSyncChannels, publishAppSync,
@@ -639,7 +640,11 @@ const Chats = () => {
   const startDM = useCallback(async (peerId: string) => {
     if (!user || !friendIds.includes(peerId)) return;
     const { data: roomId, error } = await supabase.rpc("get_or_create_direct_chat", { p_peer_id: peerId });
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      reportError(error, { flow: "direct_messages", action: "open_connection_chat", metadata: { peerId } });
+      toast.error(error.message);
+      return;
+    }
     const peer = friendProfiles.find((profile) => profile.user_id === peerId);
     setActiveRoom({
       id: roomId,

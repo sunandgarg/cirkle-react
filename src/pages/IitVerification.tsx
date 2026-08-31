@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
+import { clearSupabaseAuthSession, supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,8 @@ import { resolvePostAuthRoute } from "@/lib/sessionResume";
 import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
 import { loadOnboardingProgress, saveOnboardingProgress } from "@/lib/onboardingProgress";
 import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
+import { isMissingAuthIdentityError } from "@/lib/authSessionRecovery";
+import { reportError } from "@/lib/errorTelemetry";
 
 const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
   const officialUrl = defaultIitLogo(iit.studentDomain);
@@ -261,7 +263,15 @@ const IitVerification = () => {
       await refetchProfile();
       setStep(profile?.is_verified ? "onboarding" : "select_iit");
     } catch (error: any) {
-      toast.error(error.message || "Could not save your details");
+      reportError(error, { flow: "member_onboarding", action: "save_account_details", metadata: { step } });
+      if (isMissingAuthIdentityError(error)) {
+        clearSupabaseAuthSession();
+        await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+        toast.error("Your previous session is no longer valid. Please sign in again.");
+        navigate("/auth", { replace: true });
+      } else {
+        toast.error(error.message || "Could not save your details");
+      }
     } finally {
       setLoading(false);
     }
@@ -341,6 +351,7 @@ const IitVerification = () => {
       toast.success("Verification code sent to your email!");
       setStep("verify_otp");
     } catch (err: any) {
+      reportError(err, { flow: "iit_verification", action: "send_verification_code", metadata: { institute: selectedIit?.name, memberType: studentStatus } });
       toast.error(err.message || "Failed to send verification code");
     } finally {
       setLoading(false);
@@ -372,6 +383,7 @@ const IitVerification = () => {
       if (data?.error) throw new Error(data.error);
       await completeEmailVerification();
     } catch (err: any) {
+      reportError(err, { flow: "iit_verification", action: "verify_code", metadata: { institute: selectedIit?.name, memberType: studentStatus } });
       toast.error(err.message || "Verification failed");
     } finally {
       setLoading(false);
@@ -425,6 +437,7 @@ const IitVerification = () => {
       setStep("documents_pending");
       toast.success("Document submitted securely");
     } catch (error: any) {
+      reportError(error, { flow: "iit_verification", action: "submit_document", metadata: { institute: selectedIit?.name, documentType } });
       toast.error(error.message || "Could not submit your document");
     } finally {
       setLoading(false);
@@ -447,6 +460,7 @@ const IitVerification = () => {
         toast.info("Your verification is still being reviewed");
       }
     } catch (error: any) {
+      reportError(error, { flow: "iit_verification", action: "refresh_document_status", severity: "warning" });
       toast.error(error.message || "Could not check verification status");
     }
   };

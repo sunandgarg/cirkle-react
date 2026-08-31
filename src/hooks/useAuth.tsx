@@ -3,7 +3,8 @@ import { clearSupabaseAuthSession, supabase } from "@/integrations/supabase/clie
 import { clearChatCache } from "@/lib/chatCache";
 import type { Tables } from "@/integrations/supabase/types";
 import type { User } from "@supabase/supabase-js";
-import { isInvalidRefreshTokenError } from "@/lib/authSessionRecovery";
+import { isInvalidRefreshTokenError, isMissingAuthIdentityError } from "@/lib/authSessionRecovery";
+import { reportError } from "@/lib/errorTelemetry";
 
 type Profile = Tables<"profiles">;
 
@@ -95,6 +96,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // A read failure is not proof that a member is unverified. Preserve the
       // session and cache, but do not send the user back through verification.
       console.warn("Failed to resolve server account state, keeping session:", err);
+      reportError(err, { flow: "authentication", action: "load_profile", metadata: { userId: u.id } });
       setUser(u);
       setProfileError("We could not load your account status. Check your connection and try again.");
     } finally {
@@ -159,17 +161,32 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         const { data: { session }, error } = await supabase.auth.getSession();
         if (error) {
           if (isInvalidRefreshTokenError(error)) {
+            reportError(error, { flow: "authentication", action: "recover_refresh_token", severity: "warning" });
             clearSupabaseAuthSession();
             await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
           }
           settleSignedOut();
           return;
         }
+        if (session) {
+          const { data: authoritative, error: identityError } = await supabase.auth.getUser();
+          const identityMismatch = authoritative.user?.id && authoritative.user.id !== session.user.id;
+          if ((identityError && isMissingAuthIdentityError(identityError)) || identityMismatch) {
+            const errorToReport = identityError || new Error("Session user does not match the authoritative auth user");
+            reportError(errorToReport, { flow: "authentication", action: "validate_server_identity", severity: "warning" });
+            clearSupabaseAuthSession();
+            await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+            settleSignedOut();
+            return;
+          }
+          if (identityError) throw identityError;
+        }
         if (!session) {
           settleSignedOut();
         }
-      } catch {
+      } catch (error) {
         // Network failure on init - don't force logout, just stop loading
+        reportError(error, { flow: "authentication", action: "restore_session" });
         setProfileResolved(false);
         setProfileError("We could not restore your session. You can sign in again safely.");
         setLoading(false);

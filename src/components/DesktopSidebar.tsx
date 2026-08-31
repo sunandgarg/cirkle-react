@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from "react-router-dom";
-import { Users, Waypoints, Briefcase, MessageSquareText, Settings, ShieldCheck, Calendar, User } from "lucide-react";
+import { Users, Waypoints, Briefcase, Settings, ShieldCheck, Calendar, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -21,7 +21,7 @@ const MAIN_TABS = [
 ];
 
 const extraLinks = [
-  { path: "/chats", label: "Messages", icon: MessageSquareText, requiresVerification: true },
+  { path: "/network", label: "My Network", icon: Users, requiresVerification: true },
   { path: "/calendar", label: "Events", icon: Calendar, requiresVerification: false },
   { path: "/profile", label: "Profile", icon: User, requiresVerification: false },
   { path: "/settings", label: "Settings", icon: Settings, requiresVerification: false },

@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, Shield, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays, Mail, RotateCcw, LayoutDashboard, UserPlus, Phone, Clock3 } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, Shield, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays, Mail, RotateCcw, LayoutDashboard, UserPlus, Phone, Clock3, Bug } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -18,6 +18,7 @@ import AdminEvents from "@/components/admin/AdminEvents";
 import AdminJobs from "@/components/admin/AdminJobs";
 import AdminAnalyticsDashboard from "@/components/admin/AdminAnalyticsDashboard";
 import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
+import AdminErrorLogs from "@/components/admin/AdminErrorLogs";
 
 const NAV_KEYS = [
   { key: "forum", label: "Cirkle" },
@@ -547,7 +548,7 @@ const Admin = () => {
 
       <main className="max-w-6xl mx-auto px-4 py-4 pb-[calc(2rem+env(safe-area-inset-bottom))]">
         <Tabs defaultValue="dashboard">
-          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10 gap-1 p-1">
+          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-6 xl:grid-cols-11 gap-1 p-1">
             <TabsTrigger value="dashboard" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><LayoutDashboard className="w-3.5 h-3.5 mr-1" /> Dashboard</TabsTrigger>
             <TabsTrigger value="users" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Users className="w-3.5 h-3.5 mr-1" /> Users</TabsTrigger>
             <TabsTrigger value="jobs" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Briefcase className="w-3.5 h-3.5 mr-1" /> Jobs</TabsTrigger>
@@ -557,6 +558,7 @@ const Admin = () => {
             <TabsTrigger value="documents" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><ClipboardCheck className="w-3.5 h-3.5 mr-1" /> Documents</TabsTrigger>
             <TabsTrigger value="courses" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><GraduationCap className="w-3.5 h-3.5 mr-1" /> Courses</TabsTrigger>
             <TabsTrigger value="suggestions" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><ClipboardCheck className="w-3.5 h-3.5 mr-1" /> Suggestions</TabsTrigger>
+            <TabsTrigger value="errors" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Bug className="w-3.5 h-3.5 mr-1" /> Errors</TabsTrigger>
             <TabsTrigger value="settings" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Settings2 className="w-3.5 h-3.5 mr-1" /> Settings</TabsTrigger>
           </TabsList>
 
@@ -852,6 +854,10 @@ const Admin = () => {
                 </div>;
               })}
             </div>
+          </TabsContent>
+
+          <TabsContent value="errors" className="space-y-3">
+            <AdminErrorLogs />
           </TabsContent>
 
           {/* Settings Tab */}

@@ -3,6 +3,7 @@ import {
   authStorageKeyFor,
   clearStoredAuthSession,
   isInvalidRefreshTokenError,
+  isMissingAuthIdentityError,
   migrateLegacyAuthSession,
   resolveSupabaseProjectId,
 } from "@/lib/authSessionRecovery";
@@ -20,6 +21,12 @@ describe("authentication session recovery", () => {
     expect(isInvalidRefreshTokenError(new Error("network unavailable"))).toBe(false);
   });
 
+  it("recognizes deleted-account and orphaned-profile identity errors", () => {
+    expect(isMissingAuthIdentityError({ status: 403, message: "User from sub claim in JWT does not exist" })).toBe(true);
+    expect(isMissingAuthIdentityError({ message: 'violates foreign key constraint "profiles_user_id_fkey"' })).toBe(true);
+    expect(isMissingAuthIdentityError(new Error("network unavailable"))).toBe(false);
+  });
+
   it("migrates the old undefined-key session once and can clear all auth material", () => {
     localStorage.setItem("cirkle-auth-undefined", "session");
     localStorage.setItem("cirkle-auth-undefined-code-verifier", "verifier");
@@ -33,4 +40,3 @@ describe("authentication session recovery", () => {
     expect(localStorage.getItem(`${key}-code-verifier`)).toBeNull();
   });
 });
-

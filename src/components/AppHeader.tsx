@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ShieldCheck, CloudMoon, Sun, Sunset, Coffee } from "lucide-react";
+import { ShieldCheck, CloudMoon, Sun, Sunset, Coffee, Users } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import NotificationBell from "@/components/NotificationBell";
 
@@ -63,6 +63,9 @@ const AppHeader = () => {
 
         {/* Right: Admin + Notifications only - search removed per requirement */}
         <div className="flex items-center gap-1">
+          <button onClick={() => navigate("/network")} className="p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-accent transition-colors" aria-label="My Network" title="My Network">
+            <Users className="w-4.5 h-4.5" />
+          </button>
           {isAdmin && (
             <button onClick={() => navigate("/admin")} className="p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-accent transition-colors" aria-label="Admin">
               <ShieldCheck className="w-4.5 h-4.5" />
