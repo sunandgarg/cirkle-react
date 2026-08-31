@@ -12,6 +12,8 @@ import { ALL_COURSES, getSpecialisations } from "@/data/courseSpecialisations";
 import { clearMobileTestCourseRequest, clearMobileTestSession, readMobileTestSession, saveMobileTestCourseRequest, updateMobileTestSession, withdrawMobileTestCourseRequest } from "@/lib/mobileVerification";
 import { useQuery } from "@tanstack/react-query";
 import { clearOnboardingProgress, loadOnboardingProgress, saveOnboardingProgress } from "@/lib/onboardingProgress";
+import { convertToWebP } from "@/lib/imageUtils";
+import { findCompanyOption, shouldOfferInitialCompanyLogo } from "@/lib/companyCatalog";
 
 const YEARS = Array.from({ length: 56 }, (_, i) => String(2035 - i));
 
@@ -40,6 +42,8 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
   const [location, setLocation] = useState(profile?.location || "");
   const [linkedin, setLinkedin] = useState("");
   const [company, setCompany] = useState("");
+  const [companyLogoUrl, setCompanyLogoUrl] = useState("");
+  const [uploadingCompanyLogo, setUploadingCompanyLogo] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [termsText, setTermsText] = useState("I agree to the Cirkle Terms of Service and Privacy Policy.");
   const mobileTestSession = readMobileTestSession();
@@ -72,6 +76,30 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
     refetchOnWindowFocus: true,
   });
 
+  const { data: customCompanyOptions = [] } = useQuery({
+    queryKey: ["onboarding-company-options", user?.id],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from("custom_options")
+        .select("id,category,value,status,created_by,logo_url")
+        .eq("category", "company")
+        .order("value");
+      if (error) throw error;
+      return data ?? [];
+    },
+    enabled: !!user && !mobileTestSession,
+    staleTime: 60_000,
+  });
+
+  const onboardingCompanyOptions = useMemo(() => [
+    ...new Set([
+      ...companies,
+      ...customCompanyOptions.map((option: any) => option.value as string),
+    ]),
+  ].sort(), [customCompanyOptions]);
+  const selectedCompanyOption = findCompanyOption(company, customCompanyOptions);
+  const isNewCustomCompany = shouldOfferInitialCompanyLogo(company, false, companies, customCompanyOptions);
+
   useEffect(() => {
     supabase.from("app_settings").select("value").eq("key", "terms_text").maybeSingle()
       .then(({ data }) => { if (data?.value) setTermsText(data.value); });
@@ -96,6 +124,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
     if (saved.location) setLocation(saved.location);
     if (saved.linkedin) setLinkedin(saved.linkedin);
     if (saved.company) setCompany(saved.company);
+    if (saved.companyLogoUrl) setCompanyLogoUrl(saved.companyLogoUrl);
     if (saved.acceptedTerms) setAcceptedTerms(true);
     const savedStep = savedProgress?.flow_step?.replace(/^profile:/, "") as Step | undefined;
     if (savedStep && STEP_ORDER.includes(savedStep)) setStep(savedStep);
@@ -113,11 +142,12 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
         location,
         linkedin: linkedin.trim(),
         company,
+        companyLogoUrl,
         acceptedTerms,
       }).catch((error) => console.warn("Could not save profile checkpoint", error));
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [acceptedTerms, company, degree, linkedin, location, mobileTestSession, name, otherCourse, specialisation, step, user, year]);
+  }, [acceptedTerms, company, companyLogoUrl, degree, linkedin, location, mobileTestSession, name, otherCourse, specialisation, step, user, year]);
 
   useEffect(() => {
     if (mobileTestSession?.courseApprovalStatus === "pending" && mobileTestSession.customCourseName) {
@@ -256,6 +286,27 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
     else window.history.back();
   };
 
+  const uploadCompanyLogo = async (file: File) => {
+    if (!user || !isNewCustomCompany) return;
+    setUploadingCompanyLogo(true);
+    try {
+      const optimized = await convertToWebP(file, 0.82, 512);
+      const path = `${user.id}/${crypto.randomUUID()}.webp`;
+      const { error } = await supabase.storage.from("entity-logos").upload(path, optimized, {
+        contentType: "image/webp",
+        cacheControl: "31536000",
+      });
+      if (error) throw error;
+      const { data } = supabase.storage.from("entity-logos").getPublicUrl(path);
+      setCompanyLogoUrl(data.publicUrl);
+      toast.success("Company logo ready");
+    } catch (error: any) {
+      toast.error(error.message || "Logo upload failed");
+    } finally {
+      setUploadingCompanyLogo(false);
+    }
+  };
+
   const handleComplete = async () => {
     if (!user) return;
     setLoading(true);
@@ -276,6 +327,17 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
         onComplete();
         return;
       }
+      let companyOption = selectedCompanyOption as any;
+      if (isNewCustomCompany) {
+        const { data, error } = await (supabase as any).rpc("submit_custom_option", {
+          p_category: "company",
+          p_value: company.trim(),
+          p_logo_url: companyLogoUrl || null,
+        });
+        if (error) throw error;
+        companyOption = data?.[0];
+      }
+
       // One database transaction owns education, primary profile linkage and
       // optional details. A refresh can no longer observe a half-saved profile.
       const { error: onboardingError } = await (supabase as any).rpc("complete_member_onboarding", {
@@ -291,6 +353,22 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
         p_phone: phone || null,
       });
       if (onboardingError) throw onboardingError;
+
+      if (company.trim() && companyOption) {
+        const optionId = companyOption.option_id || companyOption.id;
+        const optionLogo = companyOption.option_logo_url || companyOption.logo_url || null;
+        const { error: experienceError } = await (supabase as any)
+          .from("professional_experience")
+          .update({
+            is_other_company: true,
+            company_option_id: optionId,
+            logo_url: optionLogo,
+          })
+          .eq("user_id", user.id)
+          .eq("is_current", true)
+          .ilike("company_name", company.trim());
+        if (experienceError) throw experienceError;
+      }
 
       await clearOnboardingProgress(user.id);
       await refetchProfile();
@@ -506,14 +584,32 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1.5 block">Current Company</label>
                   <SearchableSelect
-                    options={companies}
+                    options={onboardingCompanyOptions}
                     value={company}
-                    onChange={setCompany}
+                    onChange={(value) => {
+                      setCompany(value);
+                      if (findCompanyOption(value, customCompanyOptions) || companies.some((item) => item.toLowerCase() === value.trim().toLowerCase())) {
+                        setCompanyLogoUrl("");
+                      }
+                    }}
                     placeholder="Search company..."
                     allowOther={true}
                     className="rounded-xl"
                   />
                 </div>
+                {isNewCustomCompany && (
+                  <div className="rounded-2xl border border-border bg-secondary/50 p-3">
+                    <p className="text-sm font-medium text-foreground">Company logo (optional)</p>
+                    <div className="mt-2 flex items-center gap-3">
+                      {companyLogoUrl ? <img src={companyLogoUrl} alt="Company preview" className="h-12 w-12 rounded-xl border border-border bg-white object-contain p-1" /> : <div className="grid h-12 w-12 place-items-center rounded-xl bg-background"><Briefcase className="h-5 w-5 text-muted-foreground" /></div>}
+                      <label className="cursor-pointer rounded-xl border border-border bg-background px-3 py-2 text-xs font-semibold hover:border-primary">
+                        {uploadingCompanyLogo ? "Uploading..." : "Upload logo"}
+                        <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={uploadingCompanyLogo} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadCompanyLogo(file); event.target.value = ""; }} />
+                      </label>
+                    </div>
+                    <p className="mt-2 text-[10px] leading-4 text-muted-foreground">Available only while submitting a new company. The logo is converted to WebP and reviewed with the company.</p>
+                  </div>
+                )}
 
                 {/* Terms acceptance */}
                 <label className="flex min-h-12 cursor-pointer select-none items-start gap-3 rounded-2xl border border-border bg-secondary/50 p-3">

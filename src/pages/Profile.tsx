@@ -25,6 +25,8 @@ import { clearMobileTestSession } from "@/lib/mobileVerification";
 import { defaultIitLogo, IIT_LIST } from "@/data/iitInstitutes";
 import { buildSocialLinks, MENTOR_CATEGORIES, readSocialLinks, SOCIAL_FIELDS, socialLabel, type CustomSocialLink } from "@/lib/profileOptions";
 import { compressProfileImage, convertToWebP } from "@/lib/imageUtils";
+import { findCompanyOption, shouldOfferInitialCompanyLogo } from "@/lib/companyCatalog";
+import { effectiveMemberStatus } from "@/lib/memberStatus";
 
 const PROFILE_TABS = [
   { label: "About Me", compact: "About" },
@@ -163,6 +165,8 @@ const Profile = () => {
   const institutionOptions = [...new Set([...institutions, ...approvedOrMine("institution")])].sort();
   const locationOptions = [...new Set([...locations, ...approvedOrMine("location")])].sort();
   const mentorCategoryOptions = [...new Set([...MENTOR_CATEGORIES, ...approvedOrMine("mentor_category")])].sort();
+  const selectedCompanyOption = findCompanyOption(expForm.company_name, customOptions);
+  const isNewCustomCompany = shouldOfferInitialCompanyLogo(expForm.company_name, !!editingExperienceId, companies, customOptions);
 
   const { data: connectionStatus } = useQuery({
     queryKey: ["connection-status", targetId],
@@ -334,10 +338,14 @@ const Profile = () => {
   const addExperience = useMutation({
     mutationFn: async () => {
       if (!user || !expForm.company_name) throw new Error("Company required");
-      const isOtherCompany = !companies.includes(expForm.company_name);
+      const isOtherCompany = !companies.some((company) => company.toLowerCase() === expForm.company_name.trim().toLowerCase());
       let companyOption: any = null;
       if (isOtherCompany) {
-        const { data, error } = await (supabase as any).rpc("submit_custom_option", { p_category: "company", p_value: expForm.company_name, p_logo_url: expForm.logo_url || null });
+        const { data, error } = await (supabase as any).rpc("submit_custom_option", {
+          p_category: "company",
+          p_value: expForm.company_name,
+          p_logo_url: !editingExperienceId && !selectedCompanyOption ? expForm.logo_url || null : null,
+        });
         if (error) throw error;
         companyOption = data?.[0];
       }
@@ -347,7 +355,7 @@ const Profile = () => {
         if (error) throw error;
         locationOption = data?.[0];
       }
-      const payload = {
+      const payload: Record<string, unknown> = {
         user_id: user.id,
         company_name: expForm.company_name,
         job_title: expForm.job_title || null,
@@ -356,10 +364,16 @@ const Profile = () => {
         is_current: expForm.is_current,
         location: expForm.location || null,
         is_other_company: isOtherCompany,
-        logo_url: expForm.logo_url || companyOption?.option_logo_url || null,
         company_option_id: companyOption?.option_id || null,
         location_option_id: locationOption?.option_id || null,
       };
+      if (!editingExperienceId) {
+        payload.logo_url = expForm.logo_url || companyOption?.option_logo_url || null;
+      } else {
+        const originalExperience = experience?.find((item: any) => item.id === editingExperienceId);
+        const companyChanged = originalExperience?.company_name?.trim().toLowerCase() !== expForm.company_name.trim().toLowerCase();
+        if (companyChanged) payload.logo_url = companyOption?.option_logo_url || null;
+      }
       const query = editingExperienceId
         ? (supabase as any).from("professional_experience").update(payload).eq("id", editingExperienceId).eq("user_id", user.id)
         : (supabase as any).from("professional_experience").insert(payload);
@@ -457,6 +471,10 @@ const Profile = () => {
   if (!user && isOwn) { navigate("/auth"); return null; }
 
   const displayProfile = isOwn ? (profile || myProfile) : profile;
+  const primaryEducation = education?.find((item: any) => item.id === (displayProfile as any)?.primary_education_id)
+    || education?.find((item: any) => item.is_verified)
+    || education?.[0];
+  const displayMemberStatus = effectiveMemberStatus((displayProfile as any)?.student_status, (primaryEducation as any)?.passing_year);
   const skills = (displayProfile as any)?.skills || [];
   const socialLinks = (displayProfile as any)?.social_links as any || {};
   const profileSlug = (displayProfile as any)?.slug;
@@ -685,7 +703,7 @@ const Profile = () => {
               {editingSection === "experience" && (
                 <div className="space-y-3">
                   <div><Label className="text-xs">Company *</Label><div className="mt-1"><SearchableSelect options={companyOptions} value={expForm.company_name} onChange={v => setExpForm({ ...expForm, company_name: v })} placeholder="Select company..." /></div></div>
-                  {!companies.includes(expForm.company_name) && expForm.company_name && <div className="rounded-xl border border-border bg-secondary/35 p-3"><Label className="text-xs">Company logo (optional)</Label><div className="mt-2 flex items-center gap-3">{expForm.logo_url ? <img src={expForm.logo_url} alt="Company preview" className="h-12 w-12 rounded-xl border border-border bg-white object-contain p-1" /> : <div className="grid h-12 w-12 place-items-center rounded-xl bg-secondary"><Briefcase className="h-5 w-5 text-muted-foreground" /></div>}<label className="cursor-pointer rounded-xl border border-border bg-background px-3 py-2 text-xs font-semibold hover:border-primary">{uploadingPhoto === "company_logo" ? "Uploading..." : "Upload logo"}<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={uploadingPhoto === "company_logo"} onChange={event => { const file = event.target.files?.[0]; if (file) void uploadCompanyLogo(file); event.target.value = ""; }} /></label></div><p className="mt-2 text-[10px] text-muted-foreground">Converted to WebP; the company and logo enter admin review together.</p></div>}
+                  {isNewCustomCompany && <div className="rounded-xl border border-border bg-secondary/35 p-3"><Label className="text-xs">Company logo (optional)</Label><div className="mt-2 flex items-center gap-3">{expForm.logo_url ? <img src={expForm.logo_url} alt="Company preview" className="h-12 w-12 rounded-xl border border-border bg-white object-contain p-1" /> : <div className="grid h-12 w-12 place-items-center rounded-xl bg-secondary"><Briefcase className="h-5 w-5 text-muted-foreground" /></div>}<label className="cursor-pointer rounded-xl border border-border bg-background px-3 py-2 text-xs font-semibold hover:border-primary">{uploadingPhoto === "company_logo" ? "Uploading..." : "Upload logo"}<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={uploadingPhoto === "company_logo"} onChange={event => { const file = event.target.files?.[0]; if (file) void uploadCompanyLogo(file); event.target.value = ""; }} /></label></div><p className="mt-2 text-[10px] text-muted-foreground">Shown only for a new company. The WebP logo and company enter admin review together.</p></div>}
                   <div><Label className="text-xs">Job Title</Label><Input value={expForm.job_title} onChange={e => setExpForm({ ...expForm, job_title: e.target.value })} className="bg-secondary border-border mt-1" /></div>
                   <div className="grid grid-cols-2 gap-2">
                     <div><Label className="text-xs">Start Date</Label><Input type="month" value={expForm.start_date} onChange={e => setExpForm({ ...expForm, start_date: e.target.value })} className="bg-secondary border-border mt-1" /></div>
@@ -738,7 +756,7 @@ const Profile = () => {
               <div className="space-y-3 pt-2 border-t border-border">
                 {((displayProfile as any)?.location || pendingLocationValue) && <div className="flex items-center gap-2.5 text-sm text-muted-foreground"><MapPin className="w-4 h-4 text-primary flex-shrink-0" /> {pendingLocationValue || (displayProfile as any).location}{pendingLocationValue && <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] font-bold text-amber-700 dark:text-amber-300">Private · pending</span>}</div>}
                 {(displayProfile as any)?.date_of_birth && <div className="flex items-center gap-2.5 text-sm text-muted-foreground"><Calendar className="w-4 h-4 text-primary flex-shrink-0" /> {format(new Date((displayProfile as any).date_of_birth + "T00:00:00"), "do MMM, yyyy")}</div>}
-                {(displayProfile as any)?.iit_name && <div className="flex min-w-0 items-center gap-2.5 text-sm text-muted-foreground">{getIitLogo((displayProfile as any).iit_name) ? <img src={getIitLogo((displayProfile as any).iit_name)!} alt="" className="h-6 w-6 flex-shrink-0 rounded-md border border-border bg-white object-contain p-0.5" /> : <GraduationCap className="w-4 h-4 text-primary flex-shrink-0" />}<span className="min-w-0 break-words">{(displayProfile as any).iit_name}{(displayProfile as any)?.student_status && <span className="text-xs"> · {formatMemberStatus((displayProfile as any).student_status)}</span>}</span>{(displayProfile as any)?.is_verified && <BadgeCheck aria-label="Verified IIT identity" className="h-4 w-4 flex-shrink-0 fill-primary text-primary-foreground" />}</div>}
+                {(displayProfile as any)?.iit_name && <div className="flex min-w-0 items-center gap-2.5 text-sm text-muted-foreground">{getIitLogo((displayProfile as any).iit_name) ? <img src={getIitLogo((displayProfile as any).iit_name)!} alt="" className="h-6 w-6 flex-shrink-0 rounded-md border border-border bg-white object-contain p-0.5" /> : <GraduationCap className="w-4 h-4 text-primary flex-shrink-0" />}<span className="min-w-0 break-words">{(displayProfile as any).iit_name}{displayMemberStatus && <span className="text-xs"> · {formatMemberStatus(displayMemberStatus)}</span>}</span>{(displayProfile as any)?.is_verified && <BadgeCheck aria-label="Verified IIT identity" className="h-4 w-4 flex-shrink-0 fill-primary text-primary-foreground" />}</div>}
                 {(displayProfile as any)?.is_mentor && <div className="flex items-center gap-2.5 text-sm text-primary"><BadgeCheck className="w-4 h-4 flex-shrink-0" /> Mentor{((displayProfile as any).mentor_category || pendingMentorCategory) && <span className="text-xs bg-primary/10 px-2 py-0.5 rounded-full">{pendingMentorCategory || (displayProfile as any).mentor_category}</span>}{pendingMentorCategory && <span className="text-[9px] text-amber-700 dark:text-amber-300">Private · pending</span>}</div>}
               </div>
             </div>

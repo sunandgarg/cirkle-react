@@ -15,6 +15,7 @@ export type OnboardingProgressData = {
   location?: string;
   linkedin?: string;
   company?: string;
+  companyLogoUrl?: string;
   acceptedTerms?: boolean;
 };
 
