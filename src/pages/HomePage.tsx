@@ -1083,15 +1083,16 @@ const HomePage = () => {
             {preview ? "Change Photo" : "Upload Photo"}
             <input
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png"
               className="hidden"
               onChange={async (e) => {
                 const file = e.target.files?.[0];
                 if (!file || !user) return;
-                const { convertToWebP } = await import("@/lib/imageUtils");
-                const optimized = await convertToWebP(file, 0.8, isAvatar ? 400 : 1200);
-                const path = `${user.id}/${step.key}-${Date.now()}.webp`;
-                const { error } = await supabase.storage.from("avatars").upload(path, optimized, { upsert: true });
+                const { compressProfileImage } = await import("@/lib/imageUtils");
+                const optimized = await compressProfileImage(file, isAvatar ? 800 : 1920);
+                const extension = optimized.type === "image/png" ? "png" : "jpg";
+                const path = `${user.id}/${step.key}-${Date.now()}.${extension}`;
+                const { error } = await supabase.storage.from("avatars").upload(path, optimized, { upsert: false, contentType: optimized.type, cacheControl: "31536000" });
                 if (error) {
                   toast.error("Upload failed");
                   return;

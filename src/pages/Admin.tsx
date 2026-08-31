@@ -36,6 +36,8 @@ const Admin = () => {
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [reviewingDocument, setReviewingDocument] = useState<string | null>(null);
   const [reviewingCourse, setReviewingCourse] = useState<string | null>(null);
+  const [reviewingSuggestion, setReviewingSuggestion] = useState<string | null>(null);
+  const [suggestionDrafts, setSuggestionDrafts] = useState<Record<string, { value: string; logo_url: string }>>({});
   const [testDataAction, setTestDataAction] = useState<"seed" | "purge" | null>(null);
   const [memberDialogOpen, setMemberDialogOpen] = useState(false);
   const [creatingMember, setCreatingMember] = useState(false);
@@ -136,6 +138,22 @@ const Admin = () => {
       const { data: profiles } = await supabase.from("profiles").select("user_id,name,avatar_url").in("user_id", ids);
       const profileMap = new Map((profiles ?? []).map((item: any) => [item.user_id, item]));
       return requests.map((item) => ({ ...item, profile: profileMap.get(item.user_id) }));
+    },
+    enabled: !!isAdmin,
+    staleTime: 30_000,
+  });
+
+  const { data: profileSuggestions = [] } = useQuery({
+    queryKey: ["admin-profile-suggestions"],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).from("custom_options").select("*").order("created_at", { ascending: false }).limit(500);
+      if (error) throw error;
+      const options = (data ?? []) as any[];
+      const submitterIds = [...new Set(options.map((option) => option.created_by).filter(Boolean))];
+      if (!submitterIds.length) return options;
+      const { data: profiles } = await supabase.from("profiles").select("user_id,name,avatar_url").in("user_id", submitterIds);
+      const profileMap = new Map((profiles ?? []).map((profile: any) => [profile.user_id, profile]));
+      return options.map((option) => ({ ...option, submitter: profileMap.get(option.created_by) }));
     },
     enabled: !!isAdmin,
     staleTime: 30_000,
@@ -273,6 +291,32 @@ const Admin = () => {
     }
   };
 
+  const reviewProfileSuggestion = async (suggestion: any, status: "approved" | "rejected") => {
+    const draft = suggestionDrafts[suggestion.id] || { value: suggestion.value, logo_url: suggestion.logo_url || "" };
+    if (!draft.value.trim()) { toast.error("A catalog value is required"); return; }
+    setReviewingSuggestion(suggestion.id);
+    try {
+      const { error } = await (supabase as any).rpc("review_custom_option", {
+        p_option_id: suggestion.id,
+        p_status: status,
+        p_value: draft.value.trim(),
+        p_logo_url: draft.logo_url.trim() || null,
+      });
+      if (error) throw error;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-profile-suggestions"] }),
+        queryClient.invalidateQueries({ queryKey: ["profile-custom-options"] }),
+        queryClient.invalidateQueries({ queryKey: ["education"] }),
+        queryClient.invalidateQueries({ queryKey: ["professional_experience"] }),
+      ]);
+      toast.success(status === "approved" ? "Suggestion approved and added to the shared catalog" : "Suggestion rejected and kept private to its submitter");
+    } catch (error: any) {
+      toast.error(error.message || "Could not review suggestion");
+    } finally {
+      setReviewingSuggestion(null);
+    }
+  };
+
   const dismissReports = async (postId: string) => {
     await supabase.from("reports").delete().eq("entity_id", postId);
     queryClient.invalidateQueries({ queryKey: ["admin-reports"] });
@@ -326,9 +370,9 @@ const Admin = () => {
   };
 
   const handleIconUpload = async (tabKey: string, file: File) => {
-    const ext = file.name.split(".").pop();
-    const path = `${tabKey}-${Date.now()}.${ext}`;
-    const { error: uploadError } = await supabase.storage.from("nav-icons").upload(path, file, { upsert: true });
+    const optimized = await convertToWebP(file, 0.82, 256);
+    const path = `${tabKey}-${Date.now()}.webp`;
+    const { error: uploadError } = await supabase.storage.from("nav-icons").upload(path, optimized, { upsert: true, contentType: "image/webp", cacheControl: "31536000" });
     if (uploadError) { toast.error(uploadError.message); return; }
     const { data: urlData } = supabase.storage.from("nav-icons").getPublicUrl(path);
     const existing = navConfig?.[tabKey];
@@ -503,7 +547,7 @@ const Admin = () => {
 
       <main className="max-w-6xl mx-auto px-4 py-4 pb-[calc(2rem+env(safe-area-inset-bottom))]">
         <Tabs defaultValue="dashboard">
-          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-3 sm:grid-cols-9 gap-1 p-1">
+          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10 gap-1 p-1">
             <TabsTrigger value="dashboard" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><LayoutDashboard className="w-3.5 h-3.5 mr-1" /> Dashboard</TabsTrigger>
             <TabsTrigger value="users" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Users className="w-3.5 h-3.5 mr-1" /> Users</TabsTrigger>
             <TabsTrigger value="jobs" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Briefcase className="w-3.5 h-3.5 mr-1" /> Jobs</TabsTrigger>
@@ -512,6 +556,7 @@ const Admin = () => {
             <TabsTrigger value="reports" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Ban className="w-3.5 h-3.5 mr-1" /> Reports</TabsTrigger>
             <TabsTrigger value="documents" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><ClipboardCheck className="w-3.5 h-3.5 mr-1" /> Documents</TabsTrigger>
             <TabsTrigger value="courses" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><GraduationCap className="w-3.5 h-3.5 mr-1" /> Courses</TabsTrigger>
+            <TabsTrigger value="suggestions" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><ClipboardCheck className="w-3.5 h-3.5 mr-1" /> Suggestions</TabsTrigger>
             <TabsTrigger value="settings" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Settings2 className="w-3.5 h-3.5 mr-1" /> Settings</TabsTrigger>
           </TabsList>
 
@@ -784,6 +829,27 @@ const Admin = () => {
                     <p className="text-[10px] text-muted-foreground">Submitted {new Date(request.created_at).toLocaleString()}</p>
                   </div>
                 );
+              })}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="suggestions" className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div><h2 className="text-sm font-bold text-foreground">Profile catalog moderation</h2><p className="mt-0.5 text-xs text-muted-foreground">Approve member-added companies, institutions, locations, specialisations and mentor categories. Pending values remain private.</p></div>
+              <span className="shrink-0 rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300">{profileSuggestions.filter((item: any) => item.status === "pending").length} pending</span>
+            </div>
+            {profileSuggestions.length === 0 && <div className="rounded-xl border border-border bg-card py-12 text-center"><ClipboardCheck className="mx-auto mb-2 h-10 w-10 text-muted-foreground" /><p className="text-sm font-semibold">No profile suggestions</p><p className="mt-1 text-xs text-muted-foreground">Member-created catalog values will appear here.</p></div>}
+            <div className="grid gap-3 lg:grid-cols-2">
+              {profileSuggestions.map((suggestion: any) => {
+                const draft = suggestionDrafts[suggestion.id] || { value: suggestion.value, logo_url: suggestion.logo_url || "" };
+                const isPending = suggestion.status === "pending";
+                return <div key={suggestion.id} className="space-y-3 rounded-xl border border-border bg-card p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-wider text-primary">{suggestion.category.replace(/_/g, " ")}</p><p className="truncate text-xs text-muted-foreground">Submitted by {suggestion.submitter?.name || "Member"}</p></div><span className={`rounded-full px-2 py-1 text-[10px] font-bold capitalize ${suggestion.status === "approved" ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : suggestion.status === "rejected" ? "bg-destructive/10 text-destructive" : "bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>{suggestion.status}</span></div>
+                  <div className="flex items-center gap-3">{draft.logo_url ? <img src={draft.logo_url} alt="" className="h-12 w-12 rounded-xl border border-border bg-white object-contain p-1" /> : null}<div className="min-w-0 flex-1"><Label className="text-[10px]">Public catalog name</Label><Input value={draft.value} disabled={!isPending} onChange={event => setSuggestionDrafts(current => ({ ...current, [suggestion.id]: { ...draft, value: event.target.value } }))} className="mt-1 h-10 rounded-xl bg-secondary" /></div></div>
+                  {suggestion.category === "company" && <div><Label className="text-[10px]">Approved logo URL</Label><Input value={draft.logo_url} disabled={!isPending} onChange={event => setSuggestionDrafts(current => ({ ...current, [suggestion.id]: { ...draft, logo_url: event.target.value } }))} className="mt-1 h-10 rounded-xl bg-secondary" placeholder="Uploaded company logo URL" /></div>}
+                  {isPending && <div className="grid grid-cols-2 gap-2"><Button size="sm" className="h-9 text-xs" disabled={reviewingSuggestion === suggestion.id} onClick={() => void reviewProfileSuggestion(suggestion, "approved")}><CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Approve</Button><Button size="sm" variant="destructive" className="h-9 text-xs" disabled={reviewingSuggestion === suggestion.id} onClick={() => void reviewProfileSuggestion(suggestion, "rejected")}><XCircle className="mr-1 h-3.5 w-3.5" /> Reject</Button></div>}
+                  <p className="text-[10px] text-muted-foreground">Submitted {new Date(suggestion.created_at).toLocaleString()}{suggestion.reviewed_at ? ` · Reviewed ${new Date(suggestion.reviewed_at).toLocaleString()}` : ""}</p>
+                </div>;
               })}
             </div>
           </TabsContent>

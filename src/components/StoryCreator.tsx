@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { convertToWebP } from "@/lib/imageUtils";
 
 interface StoryCreatorProps {
   onClose: () => void;
@@ -36,11 +37,11 @@ const StoryCreator = ({ onClose }: StoryCreatorProps) => {
       let imageUrl: string | null = null;
 
       if (imageFile) {
-        const ext = imageFile.name.split(".").pop();
-        const path = `${user.id}/${Date.now()}.${ext}`;
+        const optimized = await convertToWebP(imageFile, 0.78, 1600);
+        const path = `${user.id}/${Date.now()}.webp`;
         const { error: uploadError } = await supabase.storage
           .from("stories")
-          .upload(path, imageFile);
+          .upload(path, optimized, { contentType: "image/webp", cacheControl: "31536000" });
         if (uploadError) throw uploadError;
         const { data: urlData } = supabase.storage.from("stories").getPublicUrl(path);
         imageUrl = urlData.publicUrl;

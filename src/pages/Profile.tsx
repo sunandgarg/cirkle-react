@@ -22,6 +22,9 @@ import { ALL_COURSES, getSpecialisations } from "@/data/courseSpecialisations";
 import { companies } from "@/data/companiesList";
 import { locations } from "@/data/locationsList";
 import { clearMobileTestSession } from "@/lib/mobileVerification";
+import { defaultIitLogo, IIT_LIST } from "@/data/iitInstitutes";
+import { buildSocialLinks, MENTOR_CATEGORIES, readSocialLinks, SOCIAL_FIELDS, socialLabel, type CustomSocialLink } from "@/lib/profileOptions";
+import { compressProfileImage, convertToWebP } from "@/lib/imageUtils";
 
 const PROFILE_TABS = [
   { label: "About Me", compact: "About" },
@@ -37,9 +40,9 @@ const formatMemberStatus = (status?: string | null) => status
   ? status.replace(/_/g, " ").replace(/\b\w/g, (character) => character.toUpperCase())
   : "";
 
-const getCompanyLogo = (name: string) => {
-  const key = name.toLowerCase().trim();
-  return `https://logo.clearbit.com/${key.replace(/\s+/g, "")}.com`;
+const getIitLogo = (name?: string | null) => {
+  const institute = IIT_LIST.find((item) => item.name.toLowerCase() === name?.trim().toLowerCase());
+  return institute ? defaultIitLogo(institute.studentDomain) : null;
 };
 
 const Profile = () => {
@@ -69,8 +72,12 @@ const Profile = () => {
   const [expertiseList, setExpertiseList] = useState<string[]>([]);
   const [pricingForm, setPricingForm] = useState({ is_mentor: false, mentor_category: "", mentor_price_chat: "", mentor_price_audio: "", mentor_price_video: "" });
   const [socialForm, setSocialForm] = useState<Record<string, string>>({});
+  const [customSocialLinks, setCustomSocialLinks] = useState<CustomSocialLink[]>([]);
   const [eduForm, setEduForm] = useState({ institution: "", degree: "", branch_area: "", passing_year: "", location: "" });
-  const [expForm, setExpForm] = useState({ company_name: "", job_title: "", start_date: "", end_date: "", location: "", is_current: false });
+  const [editingEducationId, setEditingEducationId] = useState<string | null>(null);
+  const [expForm, setExpForm] = useState({ company_name: "", job_title: "", start_date: "", end_date: "", location: "", is_current: false, logo_url: "" });
+  const [editingExperienceId, setEditingExperienceId] = useState<string | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState<"avatar_url" | "cover_photo_url" | "company_logo" | null>(null);
 
   // Resolve slug to user_id
   const { data: slugProfile } = useQuery({
@@ -128,6 +135,35 @@ const Profile = () => {
     enabled: !!targetId, staleTime: 5 * 60 * 1000, refetchOnMount: false,
   });
 
+  const { data: customOptions = [] } = useQuery({
+    queryKey: ["profile-custom-options", user?.id],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).from("custom_options").select("*").order("value");
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+    enabled: !!user,
+    staleTime: 60_000,
+  });
+
+  const { data: pendingProfileOptions = [] } = useQuery({
+    queryKey: ["pending-profile-options", user?.id],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).from("pending_profile_options").select("*").eq("user_id", user!.id);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+    enabled: !!user && isOwn,
+  });
+
+  const approvedOrMine = (category: string) => customOptions
+    .filter((option: any) => option.category === category && (option.status === "approved" || option.created_by === user?.id))
+    .map((option: any) => option.value as string);
+  const companyOptions = [...new Set([...companies, ...approvedOrMine("company")])].sort();
+  const institutionOptions = [...new Set([...institutions, ...approvedOrMine("institution")])].sort();
+  const locationOptions = [...new Set([...locations, ...approvedOrMine("location")])].sort();
+  const mentorCategoryOptions = [...new Set([...MENTOR_CATEGORIES, ...approvedOrMine("mentor_category")])].sort();
+
   const { data: connectionStatus } = useQuery({
     queryKey: ["connection-status", targetId],
     queryFn: async () => {
@@ -175,9 +211,19 @@ const Profile = () => {
       setAboutForm({ name: (profile as any).name || "", headline: (profile as any).headline || "", bio: (profile as any).bio || "", location: (profile as any).location || "", date_of_birth: (profile as any).date_of_birth || "" });
       setExpertiseList((profile as any).skills || []);
       setPricingForm({ is_mentor: !!(profile as any).is_mentor, mentor_category: (profile as any).mentor_category || "", mentor_price_chat: (profile as any).mentor_price_chat?.toString() || "", mentor_price_audio: (profile as any).mentor_price_audio?.toString() || "", mentor_price_video: (profile as any).mentor_price_video?.toString() || "" });
-      setSocialForm((profile as any).social_links as any || {});
+      const parsedSocial = readSocialLinks((profile as any).social_links as any || {});
+      setSocialForm(parsedSocial.fixed);
+      setCustomSocialLinks(parsedSocial.custom);
     }
   }, [profile]);
+
+  useEffect(() => {
+    if (!isOwn || pendingProfileOptions.length === 0) return;
+    const pendingLocation = pendingProfileOptions.find((item: any) => item.field === "location");
+    const pendingCategory = pendingProfileOptions.find((item: any) => item.field === "mentor_category");
+    if (pendingLocation) setAboutForm((current) => ({ ...current, location: pendingLocation.value }));
+    if (pendingCategory) setPricingForm((current) => ({ ...current, mentor_category: pendingCategory.value }));
+  }, [isOwn, pendingProfileOptions]);
 
   const saveSection = useMutation({
     mutationFn: async (section: string) => {
@@ -185,35 +231,49 @@ const Profile = () => {
       let update: any = {};
       if (section === "about") {
         if (!aboutForm.name?.trim()) throw new Error("Name is required");
+        const locationValue = aboutForm.location.trim();
+        const isCustomLocation = !!locationValue && !locations.includes(locationValue) && !customOptions.some((option: any) => option.category === "location" && option.status === "approved" && option.value === locationValue);
+        if (isCustomLocation) {
+          const { error } = await (supabase as any).rpc("submit_profile_custom_value", { p_field: "location", p_value: locationValue });
+          if (error) throw error;
+        }
         update = {
           name: aboutForm.name.trim(),
           headline: aboutForm.headline.trim() || null,
           bio: aboutForm.bio.trim() || null,
-          location: aboutForm.location.trim() || null,
+          ...(isCustomLocation ? {} : { location: locationValue || null }),
           date_of_birth: aboutForm.date_of_birth || null,
         };
       } else if (section === "expertise") {
         update = { skills: expertiseList };
       } else if (section === "pricing") {
+        const categoryValue = pricingForm.mentor_category.trim();
+        const isCustomCategory = !!categoryValue && !MENTOR_CATEGORIES.includes(categoryValue as any) && !customOptions.some((option: any) => option.category === "mentor_category" && option.status === "approved" && option.value === categoryValue);
+        if (pricingForm.is_mentor && isCustomCategory) {
+          const { error } = await (supabase as any).rpc("submit_profile_custom_value", { p_field: "mentor_category", p_value: categoryValue });
+          if (error) throw error;
+        }
         update = {
           is_mentor: pricingForm.is_mentor,
-          mentor_category: pricingForm.mentor_category || null,
+          ...(isCustomCategory ? {} : { mentor_category: categoryValue || null }),
           mentor_price_chat: pricingForm.mentor_price_chat ? (parseInt(pricingForm.mentor_price_chat) || null) : null,
           mentor_price_audio: pricingForm.mentor_price_audio ? (parseInt(pricingForm.mentor_price_audio) || null) : null,
           mentor_price_video: pricingForm.mentor_price_video ? (parseInt(pricingForm.mentor_price_video) || null) : null,
         };
       } else if (section === "social") {
-        update = { social_links: socialForm };
+        update = { social_links: buildSocialLinks(socialForm, customSocialLinks) };
       }
       const { error } = await supabase.from("profiles").update(update as any).eq("user_id", user.id);
       if (error) throw new Error(error.message);
     },
     onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ["profile"] });
+      queryClient.invalidateQueries({ queryKey: ["profile-custom-options"] });
+      queryClient.invalidateQueries({ queryKey: ["pending-profile-options"] });
       await refetchProfile();
       await refetchAuthProfile();
       setEditingSection(null);
-      toast.success("Saved successfully!");
+      toast.success("Saved successfully", { description: "Custom catalog values stay private until an admin approves them." });
     },
     onError: (err: any) => toast.error(err.message),
   });
@@ -224,7 +284,15 @@ const Profile = () => {
       const isOtherInstitution = !institutions.includes(eduForm.institution);
       const knownSpecs = eduForm.degree ? getSpecialisations(eduForm.degree) : [];
       const isOtherBranch = eduForm.branch_area ? !knownSpecs.includes(eduForm.branch_area) : false;
-      const { error } = await supabase.from("education").insert({
+      const submitOption = async (category: string, value: string) => {
+        const { data, error } = await (supabase as any).rpc("submit_custom_option", { p_category: category, p_value: value, p_logo_url: null });
+        if (error) throw error;
+        return data?.[0] as any;
+      };
+      const institutionOption = isOtherInstitution ? await submitOption("institution", eduForm.institution) : null;
+      const branchOption = isOtherBranch ? await submitOption("branch", eduForm.branch_area) : null;
+      const locationOption = eduForm.location && !locations.includes(eduForm.location) ? await submitOption("location", eduForm.location) : null;
+      const payload = {
         user_id: user.id,
         institution: eduForm.institution,
         degree: eduForm.degree || null,
@@ -233,38 +301,53 @@ const Profile = () => {
         location: eduForm.location || null,
         is_other_institution: isOtherInstitution,
         is_other_branch: isOtherBranch,
-      });
+        institution_option_id: institutionOption?.option_id || null,
+        branch_option_id: branchOption?.option_id || null,
+        location_option_id: locationOption?.option_id || null,
+      };
+      const query = editingEducationId
+        ? (supabase as any).from("education").update(payload).eq("id", editingEducationId).eq("user_id", user.id)
+        : (supabase as any).from("education").insert(payload);
+      const { error } = await query;
       if (error) throw new Error(error.message);
-      // Save custom options
-      if (isOtherInstitution) {
-        try { await supabase.from("custom_options").insert({ category: "institution", value: eduForm.institution, created_by: user.id }); } catch {}
-      }
-      if (isOtherBranch) {
-        try { await supabase.from("custom_options").insert({ category: "branch", value: eduForm.branch_area, created_by: user.id }); } catch {}
-      }
     },
     onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ["education", targetId] });
       await refetchEducation();
       setEditingSection(null);
+      setEditingEducationId(null);
       setEduForm({ institution: "", degree: "", branch_area: "", passing_year: "", location: "" });
-      toast.success("Education added!");
+      toast.success(editingEducationId ? "Education updated" : "Education added", { description: "Custom values remain visible only to you until approved." });
     },
     onError: (err: any) => toast.error(err.message),
   });
 
   const deleteEducation = useMutation({
     mutationFn: async (id: string) => {
-      await supabase.from("education").delete().eq("id", id);
+      const { error } = await supabase.from("education").delete().eq("id", id);
+      if (error) throw error;
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["education", targetId] }); refetchEducation(); toast.success("Deleted"); },
+    onError: (error: any) => toast.error(error.message || "This education cannot be deleted"),
   });
 
   const addExperience = useMutation({
     mutationFn: async () => {
       if (!user || !expForm.company_name) throw new Error("Company required");
       const isOtherCompany = !companies.includes(expForm.company_name);
-      const { error } = await supabase.from("professional_experience").insert({
+      let companyOption: any = null;
+      if (isOtherCompany) {
+        const { data, error } = await (supabase as any).rpc("submit_custom_option", { p_category: "company", p_value: expForm.company_name, p_logo_url: expForm.logo_url || null });
+        if (error) throw error;
+        companyOption = data?.[0];
+      }
+      let locationOption: any = null;
+      if (expForm.location && !locations.includes(expForm.location)) {
+        const { data, error } = await (supabase as any).rpc("submit_custom_option", { p_category: "location", p_value: expForm.location, p_logo_url: null });
+        if (error) throw error;
+        locationOption = data?.[0];
+      }
+      const payload = {
         user_id: user.id,
         company_name: expForm.company_name,
         job_title: expForm.job_title || null,
@@ -273,27 +356,34 @@ const Profile = () => {
         is_current: expForm.is_current,
         location: expForm.location || null,
         is_other_company: isOtherCompany,
-      });
+        logo_url: expForm.logo_url || companyOption?.option_logo_url || null,
+        company_option_id: companyOption?.option_id || null,
+        location_option_id: locationOption?.option_id || null,
+      };
+      const query = editingExperienceId
+        ? (supabase as any).from("professional_experience").update(payload).eq("id", editingExperienceId).eq("user_id", user.id)
+        : (supabase as any).from("professional_experience").insert(payload);
+      const { error } = await query;
       if (error) throw new Error(error.message);
-      if (isOtherCompany) {
-        try { await supabase.from("custom_options").insert({ category: "company", value: expForm.company_name, created_by: user.id }); } catch {}
-      }
     },
     onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ["professional_experience", targetId] });
       await refetchExperience();
       setEditingSection(null);
-      setExpForm({ company_name: "", job_title: "", start_date: "", end_date: "", location: "", is_current: false });
-      toast.success("Experience added!");
+      setEditingExperienceId(null);
+      setExpForm({ company_name: "", job_title: "", start_date: "", end_date: "", location: "", is_current: false, logo_url: "" });
+      toast.success(editingExperienceId ? "Experience updated" : "Experience added", { description: "Custom companies remain private until approved." });
     },
     onError: (err: any) => toast.error(err.message),
   });
 
   const deleteExperience = useMutation({
     mutationFn: async (id: string) => {
-      await supabase.from("professional_experience").delete().eq("id", id);
+      const { error } = await supabase.from("professional_experience").delete().eq("id", id);
+      if (error) throw error;
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["professional_experience", targetId] }); refetchExperience(); toast.success("Deleted"); },
+    onError: (error: any) => toast.error(error.message || "Could not delete experience"),
   });
 
   const saveSlug = useMutation({
@@ -326,18 +416,40 @@ const Profile = () => {
 
   const uploadImage = async (file: File, bucket: string, field: string) => {
     if (!user) return;
+    const profileField = field as "avatar_url" | "cover_photo_url";
+    setUploadingPhoto(profileField);
     try {
-      const { convertToWebP } = await import("@/lib/imageUtils");
-      const optimized = await convertToWebP(file, 0.8, field === "cover_photo_url" ? 1200 : 400);
-      const path = `${user.id}/${field}-${Date.now()}.webp`;
-      const { error: uploadError } = await supabase.storage.from(bucket).upload(path, optimized, { upsert: true });
-      if (uploadError) { toast.error("Upload failed"); return; }
+      const optimized = await compressProfileImage(file, field === "cover_photo_url" ? 1920 : 800);
+      const extension = optimized.type === "image/png" ? "png" : "jpg";
+      const path = `${user.id}/${field}-${Date.now()}.${extension}`;
+      const { error: uploadError } = await supabase.storage.from(bucket).upload(path, optimized, { upsert: false, contentType: optimized.type, cacheControl: "31536000" });
+      if (uploadError) throw uploadError;
       const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
-      await supabase.from("profiles").update({ [field]: urlData.publicUrl } as any).eq("user_id", user.id);
+      const { error: profileError } = await supabase.from("profiles").update({ [field]: urlData.publicUrl } as any).eq("user_id", user.id);
+      if (profileError) throw profileError;
       await refetchProfile();
       await refetchAuthProfile();
-      toast.success("Photo updated!");
-    } catch (err: any) { toast.error("Upload error: " + err.message); }
+      toast.success("Photo updated", { description: "Optimized toward a 30% size reduction while preserving JPEG/PNG format." });
+    } catch (err: any) { toast.error(err.message || "Photo upload failed"); }
+    finally { setUploadingPhoto(null); }
+  };
+
+  const uploadCompanyLogo = async (file: File) => {
+    if (!user) return;
+    setUploadingPhoto("company_logo");
+    try {
+      const optimized = await convertToWebP(file, 0.82, 512);
+      const path = `${user.id}/${crypto.randomUUID()}.webp`;
+      const { error } = await supabase.storage.from("entity-logos").upload(path, optimized, { contentType: "image/webp", cacheControl: "31536000" });
+      if (error) throw error;
+      const { data } = supabase.storage.from("entity-logos").getPublicUrl(path);
+      setExpForm((current) => ({ ...current, logo_url: data.publicUrl }));
+      toast.success("Company logo ready");
+    } catch (error: any) {
+      toast.error(error.message || "Logo upload failed");
+    } finally {
+      setUploadingPhoto(null);
+    }
   };
 
   const handleLogout = async () => { clearMobileTestSession(); await supabase.auth.signOut({ scope: "local" }); navigate("/"); };
@@ -349,6 +461,8 @@ const Profile = () => {
   const socialLinks = (displayProfile as any)?.social_links as any || {};
   const profileSlug = (displayProfile as any)?.slug;
   const slugUpdatedAt = (displayProfile as any)?.slug_updated_at;
+  const pendingLocationValue = isOwn ? pendingProfileOptions.find((item: any) => item.field === "location")?.value : null;
+  const pendingMentorCategory = isOwn ? pendingProfileOptions.find((item: any) => item.field === "mentor_category")?.value : null;
   const formatCount = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n);
 
   const shareUrl = profileSlug ? `${window.location.origin}/u/${profileSlug}` : window.location.href;
@@ -394,8 +508,8 @@ const Profile = () => {
           <div className="flex items-center gap-2">
             {isOwn && (
               <>
-                <button aria-label="Change cover photo" onClick={() => coverInputRef.current?.click()} className="grid h-10 w-10 place-items-center rounded-full border border-white/30 bg-card/80 shadow-sm backdrop-blur-md transition-transform active:scale-95" title="Change cover"><Camera className="w-4 h-4 text-foreground" /></button>
-                <input ref={coverInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadImage(f, "avatars", "cover_photo_url"); e.target.value = ""; }} />
+                <button aria-label="Change cover photo" disabled={!!uploadingPhoto} onClick={() => coverInputRef.current?.click()} className="grid h-10 w-10 place-items-center rounded-full border border-white/30 bg-card/80 shadow-sm backdrop-blur-md transition-transform active:scale-95 disabled:opacity-50" title="Change cover"><Camera className="w-4 h-4 text-foreground" /></button>
+                <input ref={coverInputRef} type="file" accept="image/jpeg,image/png" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadImage(f, "avatars", "cover_photo_url"); e.target.value = ""; }} />
                 <button aria-label="Open settings" onClick={() => navigate("/settings")} className="grid h-10 w-10 place-items-center rounded-full border border-white/30 bg-card/80 shadow-sm backdrop-blur-md transition-transform active:scale-95"><Settings className="w-4 h-4 text-foreground" /></button>
               </>
             )}
@@ -415,8 +529,8 @@ const Profile = () => {
               )}
               {isOwn && (
                 <>
-                  <button aria-label="Change profile photo" onClick={() => avatarInputRef.current?.click()} className="absolute bottom-0 right-0 grid h-8 w-8 place-items-center rounded-full border-[3px] border-card bg-primary text-primary-foreground shadow-md transition-transform active:scale-95"><Camera className="w-3 h-3" /></button>
-                  <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadImage(f, "avatars", "avatar_url"); e.target.value = ""; }} />
+                  <button aria-label="Change profile photo" disabled={!!uploadingPhoto} onClick={() => avatarInputRef.current?.click()} className="absolute bottom-0 right-0 grid h-8 w-8 place-items-center rounded-full border-[3px] border-card bg-primary text-primary-foreground shadow-md transition-transform active:scale-95 disabled:opacity-50"><Camera className="w-3 h-3" /></button>
+                  <input ref={avatarInputRef} type="file" accept="image/jpeg,image/png" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadImage(f, "avatars", "avatar_url"); e.target.value = ""; }} />
                 </>
               )}
             </div>
@@ -495,8 +609,8 @@ const Profile = () => {
           <div className="fixed inset-0 z-[60] flex items-end justify-center bg-background/80 backdrop-blur-sm sm:items-center">
             <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md animate-fade-in overflow-y-auto rounded-t-[24px] border border-border bg-card p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:max-h-[85dvh] sm:rounded-[24px] sm:p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-bold text-foreground">Edit {editingSection === "about" ? "About Me" : editingSection === "expertise" ? "Expertise" : editingSection === "pricing" ? "Pricing" : editingSection === "social" ? "Social Handles" : editingSection === "education" ? "Add Education" : "Add Experience"}</h3>
-                <button onClick={() => setEditingSection(null)} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
+                <h3 className="font-bold text-foreground">{editingSection === "about" ? "Edit About Me" : editingSection === "expertise" ? "Edit Expertise" : editingSection === "pricing" ? "Edit Pricing" : editingSection === "social" ? "Edit Social Handles" : editingSection === "education" ? (editingEducationId ? "Edit Education" : "Add Education") : (editingExperienceId ? "Edit Experience" : "Add Experience")}</h3>
+                <button onClick={() => { setEditingSection(null); setEditingEducationId(null); setEditingExperienceId(null); }} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
               </div>
 
               {editingSection === "about" && (
@@ -504,7 +618,7 @@ const Profile = () => {
                   <div><Label className="text-xs">Name</Label><Input value={aboutForm.name} onChange={e => setAboutForm({ ...aboutForm, name: e.target.value })} className="bg-secondary border-border mt-1" /></div>
                   <div><Label className="text-xs">Headline</Label><Input value={aboutForm.headline} onChange={e => setAboutForm({ ...aboutForm, headline: e.target.value })} className="bg-secondary border-border mt-1" /></div>
                   <div><Label className="text-xs">Bio</Label><Textarea value={aboutForm.bio} onChange={e => setAboutForm({ ...aboutForm, bio: e.target.value })} className="bg-secondary border-border mt-1" rows={3} /></div>
-                  <div><Label className="text-xs">Location</Label><Input value={aboutForm.location} onChange={e => setAboutForm({ ...aboutForm, location: e.target.value })} className="bg-secondary border-border mt-1" /></div>
+                  <div><Label className="text-xs">Location</Label><div className="mt-1"><SearchableSelect options={locationOptions} value={aboutForm.location} onChange={value => setAboutForm({ ...aboutForm, location: value })} placeholder="Select location..." /></div><p className="mt-1 text-[10px] text-muted-foreground">New locations are sent to admin review and remain private meanwhile.</p></div>
                   <div><Label className="text-xs">Date of Birth</Label><Input type="date" value={aboutForm.date_of_birth} onChange={e => setAboutForm({ ...aboutForm, date_of_birth: e.target.value })} className="bg-secondary border-border mt-1" /></div>
                   <Button className="w-full rounded-xl" onClick={() => saveSection.mutate("about")} disabled={saveSection.isPending}>{saveSection.isPending ? "Saving..." : "Save"}</Button>
                 </div>
@@ -528,7 +642,7 @@ const Profile = () => {
                   </div>
                   {pricingForm.is_mentor && (
                     <>
-                      <div><Label className="text-xs">Category</Label><Input value={pricingForm.mentor_category} onChange={e => setPricingForm({ ...pricingForm, mentor_category: e.target.value })} className="bg-secondary border-border mt-1" /></div>
+                      <div><Label className="text-xs">Category</Label><div className="mt-1"><SearchableSelect options={mentorCategoryOptions} value={pricingForm.mentor_category} onChange={value => setPricingForm({ ...pricingForm, mentor_category: value })} placeholder="Select mentoring category..." /></div><p className="mt-1 text-[10px] text-muted-foreground">Choose a common category or suggest a new one.</p></div>
                       <div className="grid grid-cols-3 gap-2">
                         <div><Label className="text-[10px]">Chat ₹</Label><Input type="number" value={pricingForm.mentor_price_chat} onChange={e => setPricingForm({ ...pricingForm, mentor_price_chat: e.target.value })} className="bg-secondary border-border h-9 text-xs" /></div>
                         <div><Label className="text-[10px]">Audio ₹</Label><Input type="number" value={pricingForm.mentor_price_audio} onChange={e => setPricingForm({ ...pricingForm, mentor_price_audio: e.target.value })} className="bg-secondary border-border h-9 text-xs" /></div>
@@ -542,27 +656,36 @@ const Profile = () => {
 
               {editingSection === "social" && (
                 <div className="space-y-3">
-                  {["linkedin", "twitter", "github", "website", "instagram"].map(key => (
-                    <div key={key}><Label className="text-xs capitalize">{key}</Label><Input placeholder={`https://${key}.com/...`} value={socialForm[key] || ""} onChange={e => setSocialForm({ ...socialForm, [key]: e.target.value })} className="bg-secondary border-border mt-1" /></div>
+                  {SOCIAL_FIELDS.map(({ key, label, placeholder }) => (
+                    <div key={key}><Label className="text-xs">{label}</Label><Input inputMode="url" placeholder={placeholder} value={socialForm[key] || ""} onChange={e => setSocialForm({ ...socialForm, [key]: e.target.value })} className="bg-secondary border-border mt-1" /></div>
                   ))}
+                  {customSocialLinks.map((link, index) => (
+                    <div key={link.id} className="rounded-xl border border-border bg-secondary/35 p-3 space-y-2">
+                      <div className="flex items-center justify-between"><Label className="text-xs">Other link</Label><button type="button" aria-label="Remove link" onClick={() => setCustomSocialLinks((current) => current.filter((item) => item.id !== link.id))} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button></div>
+                      <Input placeholder="Label, e.g. Portfolio" maxLength={40} value={link.label} onChange={event => setCustomSocialLinks((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))} className="bg-secondary border-border" />
+                      <Input inputMode="url" placeholder="https://..." value={link.url} onChange={event => setCustomSocialLinks((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, url: event.target.value } : item))} className="bg-secondary border-border" />
+                    </div>
+                  ))}
+                  <Button type="button" variant="outline" className="w-full rounded-xl" onClick={() => setCustomSocialLinks((current) => [...current, { id: crypto.randomUUID(), label: "", url: "" }])}><Plus className="mr-1.5 h-4 w-4" /> Add another link</Button>
                   <Button className="w-full rounded-xl" onClick={() => saveSection.mutate("social")} disabled={saveSection.isPending}>{saveSection.isPending ? "Saving..." : "Save"}</Button>
                 </div>
               )}
 
               {editingSection === "education" && (
                 <div className="space-y-3">
-                  <div><Label className="text-xs">Institution *</Label><div className="mt-1"><SearchableSelect options={institutions} value={eduForm.institution} onChange={v => setEduForm({ ...eduForm, institution: v })} placeholder="Select institution..." /></div></div>
+                  <div><Label className="text-xs">Institution *</Label><div className="mt-1"><SearchableSelect options={institutionOptions} value={eduForm.institution} onChange={v => setEduForm({ ...eduForm, institution: v })} placeholder="Select institution..." /></div></div>
                   <div><Label className="text-xs">Course</Label><div className="mt-1"><SearchableSelect options={[...ALL_COURSES]} value={eduForm.degree} onChange={v => setEduForm({ ...eduForm, degree: v, branch_area: "" })} placeholder="Select course..." /></div></div>
                   <div><Label className="text-xs">Specialisation</Label><div className="mt-1"><SearchableSelect options={eduForm.degree ? getSpecialisations(eduForm.degree) : []} value={eduForm.branch_area} onChange={v => setEduForm({ ...eduForm, branch_area: v })} placeholder={eduForm.degree ? "Select specialisation..." : "Select course first"} /></div></div>
                   <div><Label className="text-xs">Passing Year</Label><div className="mt-1"><SearchableSelect options={passingYears} value={eduForm.passing_year} onChange={v => setEduForm({ ...eduForm, passing_year: v })} placeholder="Select year..." /></div></div>
-                  <div><Label className="text-xs">Location</Label><div className="mt-1"><SearchableSelect options={locations} value={eduForm.location} onChange={v => setEduForm({ ...eduForm, location: v })} placeholder="Select location..." /></div></div>
-                  <Button className="w-full rounded-xl" onClick={() => addEducation.mutate()} disabled={addEducation.isPending}>{addEducation.isPending ? "Adding..." : "Add Education"}</Button>
+                  <div><Label className="text-xs">Location</Label><div className="mt-1"><SearchableSelect options={locationOptions} value={eduForm.location} onChange={v => setEduForm({ ...eduForm, location: v })} placeholder="Select location..." /></div></div>
+                  <Button className="w-full rounded-xl" onClick={() => addEducation.mutate()} disabled={addEducation.isPending}>{addEducation.isPending ? "Saving..." : editingEducationId ? "Save Education" : "Add Education"}</Button>
                 </div>
               )}
 
               {editingSection === "experience" && (
                 <div className="space-y-3">
-                  <div><Label className="text-xs">Company *</Label><div className="mt-1"><SearchableSelect options={companies} value={expForm.company_name} onChange={v => setExpForm({ ...expForm, company_name: v })} placeholder="Select company..." /></div></div>
+                  <div><Label className="text-xs">Company *</Label><div className="mt-1"><SearchableSelect options={companyOptions} value={expForm.company_name} onChange={v => setExpForm({ ...expForm, company_name: v })} placeholder="Select company..." /></div></div>
+                  {!companies.includes(expForm.company_name) && expForm.company_name && <div className="rounded-xl border border-border bg-secondary/35 p-3"><Label className="text-xs">Company logo (optional)</Label><div className="mt-2 flex items-center gap-3">{expForm.logo_url ? <img src={expForm.logo_url} alt="Company preview" className="h-12 w-12 rounded-xl border border-border bg-white object-contain p-1" /> : <div className="grid h-12 w-12 place-items-center rounded-xl bg-secondary"><Briefcase className="h-5 w-5 text-muted-foreground" /></div>}<label className="cursor-pointer rounded-xl border border-border bg-background px-3 py-2 text-xs font-semibold hover:border-primary">{uploadingPhoto === "company_logo" ? "Uploading..." : "Upload logo"}<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={uploadingPhoto === "company_logo"} onChange={event => { const file = event.target.files?.[0]; if (file) void uploadCompanyLogo(file); event.target.value = ""; }} /></label></div><p className="mt-2 text-[10px] text-muted-foreground">Converted to WebP; the company and logo enter admin review together.</p></div>}
                   <div><Label className="text-xs">Job Title</Label><Input value={expForm.job_title} onChange={e => setExpForm({ ...expForm, job_title: e.target.value })} className="bg-secondary border-border mt-1" /></div>
                   <div className="grid grid-cols-2 gap-2">
                     <div><Label className="text-xs">Start Date</Label><Input type="month" value={expForm.start_date} onChange={e => setExpForm({ ...expForm, start_date: e.target.value })} className="bg-secondary border-border mt-1" /></div>
@@ -571,8 +694,8 @@ const Profile = () => {
                   <label className="flex items-center gap-2 text-xs text-foreground">
                     <input type="checkbox" checked={expForm.is_current} onChange={e => setExpForm({ ...expForm, is_current: e.target.checked })} /> Currently working here
                   </label>
-                  <div><Label className="text-xs">Location</Label><div className="mt-1"><SearchableSelect options={locations} value={expForm.location} onChange={v => setExpForm({ ...expForm, location: v })} placeholder="Select location..." /></div></div>
-                  <Button className="w-full rounded-xl" onClick={() => addExperience.mutate()} disabled={addExperience.isPending}>{addExperience.isPending ? "Adding..." : "Add Experience"}</Button>
+                  <div><Label className="text-xs">Location</Label><div className="mt-1"><SearchableSelect options={locationOptions} value={expForm.location} onChange={v => setExpForm({ ...expForm, location: v })} placeholder="Select location..." /></div></div>
+                  <Button className="w-full rounded-xl" onClick={() => addExperience.mutate()} disabled={addExperience.isPending}>{addExperience.isPending ? "Saving..." : editingExperienceId ? "Save Experience" : "Add Experience"}</Button>
                 </div>
               )}
             </div>
@@ -613,10 +736,10 @@ const Profile = () => {
               {(displayProfile as any)?.bio ? <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap">{(displayProfile as any).bio}</p>
                 : <p className="text-sm text-muted-foreground/50 italic">No bio added yet</p>}
               <div className="space-y-3 pt-2 border-t border-border">
-                {(displayProfile as any)?.location && <div className="flex items-center gap-2.5 text-sm text-muted-foreground"><MapPin className="w-4 h-4 text-primary flex-shrink-0" /> {(displayProfile as any).location}</div>}
+                {((displayProfile as any)?.location || pendingLocationValue) && <div className="flex items-center gap-2.5 text-sm text-muted-foreground"><MapPin className="w-4 h-4 text-primary flex-shrink-0" /> {pendingLocationValue || (displayProfile as any).location}{pendingLocationValue && <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] font-bold text-amber-700 dark:text-amber-300">Private · pending</span>}</div>}
                 {(displayProfile as any)?.date_of_birth && <div className="flex items-center gap-2.5 text-sm text-muted-foreground"><Calendar className="w-4 h-4 text-primary flex-shrink-0" /> {format(new Date((displayProfile as any).date_of_birth + "T00:00:00"), "do MMM, yyyy")}</div>}
-                {(displayProfile as any)?.iit_name && <div className="flex min-w-0 items-center gap-2.5 text-sm text-muted-foreground"><GraduationCap className="w-4 h-4 text-primary flex-shrink-0" /><span className="min-w-0 break-words">{(displayProfile as any).iit_name}{(displayProfile as any)?.student_status && <span className="text-xs"> · {formatMemberStatus((displayProfile as any).student_status)}</span>}</span></div>}
-                {(displayProfile as any)?.is_mentor && <div className="flex items-center gap-2.5 text-sm text-primary"><BadgeCheck className="w-4 h-4 flex-shrink-0" /> Mentor{(displayProfile as any).mentor_category && <span className="text-xs bg-primary/10 px-2 py-0.5 rounded-full">{(displayProfile as any).mentor_category}</span>}</div>}
+                {(displayProfile as any)?.iit_name && <div className="flex min-w-0 items-center gap-2.5 text-sm text-muted-foreground">{getIitLogo((displayProfile as any).iit_name) ? <img src={getIitLogo((displayProfile as any).iit_name)!} alt="" className="h-6 w-6 flex-shrink-0 rounded-md border border-border bg-white object-contain p-0.5" /> : <GraduationCap className="w-4 h-4 text-primary flex-shrink-0" />}<span className="min-w-0 break-words">{(displayProfile as any).iit_name}{(displayProfile as any)?.student_status && <span className="text-xs"> · {formatMemberStatus((displayProfile as any).student_status)}</span>}</span>{(displayProfile as any)?.is_verified && <BadgeCheck aria-label="Verified IIT identity" className="h-4 w-4 flex-shrink-0 fill-primary text-primary-foreground" />}</div>}
+                {(displayProfile as any)?.is_mentor && <div className="flex items-center gap-2.5 text-sm text-primary"><BadgeCheck className="w-4 h-4 flex-shrink-0" /> Mentor{((displayProfile as any).mentor_category || pendingMentorCategory) && <span className="text-xs bg-primary/10 px-2 py-0.5 rounded-full">{pendingMentorCategory || (displayProfile as any).mentor_category}</span>}{pendingMentorCategory && <span className="text-[9px] text-amber-700 dark:text-amber-300">Private · pending</span>}</div>}
               </div>
             </div>
           )}
@@ -625,19 +748,20 @@ const Profile = () => {
             <div className="rounded-[24px] border border-border/80 bg-card p-5 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-bold text-foreground text-sm">Education</h3>
-                {isOwn && <button onClick={() => setEditingSection("education")} className="text-xs text-primary font-medium flex items-center gap-1 hover:underline"><Plus className="w-3 h-3" /> Add</button>}
+                {isOwn && <button onClick={() => { setEditingEducationId(null); setEduForm({ institution: "", degree: "", branch_area: "", passing_year: "", location: "" }); setEditingSection("education"); }} className="text-xs text-primary font-medium flex items-center gap-1 hover:underline"><Plus className="w-3 h-3" /> Add</button>}
               </div>
               {education && education.length > 0 ? (
                 <div className="space-y-4">
                   {education.map((edu: any) => (
                     <div key={edu.id} className="flex min-w-0 gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0"><GraduationCap className="w-5 h-5 text-primary" /></div>
+                      <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0 overflow-hidden">{getIitLogo(edu.institution) ? <img src={getIitLogo(edu.institution)!} alt="" className="h-full w-full bg-white object-contain p-1" /> : <GraduationCap className="w-5 h-5 text-primary" />}</div>
                       <div className="min-w-0 flex-1">
-                        <p className="break-words font-semibold text-sm text-foreground">{edu.institution}</p>
+                        <p className="flex items-center gap-1 break-words font-semibold text-sm text-foreground">{edu.institution}{edu.is_verified && <BadgeCheck aria-label="Verified education" className="h-4 w-4 flex-shrink-0 fill-primary text-primary-foreground" />}</p>
                         <p className="text-xs text-muted-foreground">{[edu.degree, edu.branch_area].filter(Boolean).join(" - ")}</p>
                         {edu.passing_year && <p className="text-[10px] text-muted-foreground/70 mt-0.5">Class of {edu.passing_year}</p>}
+                        {edu.approval_status && edu.approval_status !== "approved" && <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold ${edu.approval_status === "rejected" ? "bg-destructive/10 text-destructive" : "bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>{edu.approval_status === "pending" ? "Private · awaiting approval" : "Private · changes requested"}</span>}
                       </div>
-                      {isOwn && <button onClick={() => deleteEducation.mutate(edu.id)} className="p-1 text-muted-foreground hover:text-destructive"><Trash2 className="w-3.5 h-3.5" /></button>}
+                      {isOwn && <div className="flex gap-0.5">{!edu.is_verified && <button aria-label="Edit education" onClick={() => { setEditingEducationId(edu.id); setEduForm({ institution: edu.institution || "", degree: edu.degree || "", branch_area: edu.branch_area || "", passing_year: edu.passing_year || "", location: edu.location || "" }); setEditingSection("education"); }} className="p-1 text-muted-foreground hover:text-primary"><Pencil className="w-3.5 h-3.5" /></button>}{!edu.is_verified && <button aria-label="Delete education" onClick={() => deleteEducation.mutate(edu.id)} className="p-1 text-muted-foreground hover:text-destructive"><Trash2 className="w-3.5 h-3.5" /></button>}</div>}
                     </div>
                   ))}
                 </div>
@@ -649,22 +773,22 @@ const Profile = () => {
             <div className="rounded-[24px] border border-border/80 bg-card p-5 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-bold text-foreground text-sm">Professional Details</h3>
-                {isOwn && <button onClick={() => setEditingSection("experience")} className="text-xs text-primary font-medium flex items-center gap-1 hover:underline"><Plus className="w-3 h-3" /> Add</button>}
+                {isOwn && <button onClick={() => { setEditingExperienceId(null); setExpForm({ company_name: "", job_title: "", start_date: "", end_date: "", location: "", is_current: false, logo_url: "" }); setEditingSection("experience"); }} className="text-xs text-primary font-medium flex items-center gap-1 hover:underline"><Plus className="w-3 h-3" /> Add</button>}
               </div>
               {experience && experience.length > 0 ? (
                 <div className="space-y-4">
                   {experience.map((exp: any) => {
-                    const logoUrl = exp.logo_url || getCompanyLogo(exp.company_name);
+                    const logoUrl = exp.logo_url;
                     return (
                       <div key={exp.id} className="flex min-w-0 gap-3">
-                        <img src={logoUrl} alt={exp.company_name} className="w-10 h-10 rounded-lg object-contain bg-secondary p-1 flex-shrink-0"
-                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                        {logoUrl ? <img src={logoUrl} alt={exp.company_name} className="w-10 h-10 rounded-lg object-contain bg-white border border-border p-1 flex-shrink-0" /> : <div className="grid h-10 w-10 flex-shrink-0 place-items-center rounded-lg bg-primary/10"><Briefcase className="h-5 w-5 text-primary" /></div>}
                         <div className="min-w-0 flex-1">
                           <p className="break-words font-semibold text-sm text-foreground">{exp.job_title || "Role"} at {exp.company_name}</p>
                           <p className="text-xs text-muted-foreground">{exp.start_date || ""}{exp.start_date && " - "}{exp.is_current ? "Present" : exp.end_date || ""}</p>
                           {exp.location && <p className="text-[10px] text-muted-foreground/70 mt-0.5">{exp.location}</p>}
+                          {exp.approval_status && exp.approval_status !== "approved" && <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold ${exp.approval_status === "rejected" ? "bg-destructive/10 text-destructive" : "bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>{exp.approval_status === "pending" ? "Private · awaiting approval" : "Private · changes requested"}</span>}
                         </div>
-                        {isOwn && <button onClick={() => deleteExperience.mutate(exp.id)} className="p-1 text-muted-foreground hover:text-destructive"><Trash2 className="w-3.5 h-3.5" /></button>}
+                        {isOwn && <div className="flex gap-0.5"><button aria-label="Edit experience" onClick={() => { setEditingExperienceId(exp.id); setExpForm({ company_name: exp.company_name || "", job_title: exp.job_title || "", start_date: exp.start_date?.slice(0, 7) || "", end_date: exp.end_date?.slice(0, 7) || "", location: exp.location || "", is_current: !!exp.is_current, logo_url: exp.logo_url || "" }); setEditingSection("experience"); }} className="p-1 text-muted-foreground hover:text-primary"><Pencil className="w-3.5 h-3.5" /></button><button aria-label="Delete experience" onClick={() => deleteExperience.mutate(exp.id)} className="p-1 text-muted-foreground hover:text-destructive"><Trash2 className="w-3.5 h-3.5" /></button></div>}
                       </div>
                     );
                   })}
@@ -713,7 +837,7 @@ const Profile = () => {
                 <div className="space-y-3">
                   {Object.entries(socialLinks).map(([key, val]) => val ? (
                     <a key={key} href={val as string} target="_blank" rel="noopener noreferrer" className="flex min-w-0 items-start gap-2.5 border-b border-border py-2 text-sm text-primary last:border-0 hover:underline">
-                      <LinkIcon className="mt-0.5 w-4 h-4 text-muted-foreground flex-shrink-0" /><span className="capitalize">{key}:</span><span className="min-w-0 break-all">{val as string}</span>
+                      <LinkIcon className="mt-0.5 w-4 h-4 text-muted-foreground flex-shrink-0" /><span>{socialLabel(key)}:</span><span className="min-w-0 break-all">{val as string}</span>
                     </a>
                   ) : null)}
                 </div>
@@ -723,7 +847,8 @@ const Profile = () => {
 
           {activeTab === 6 && (
             <div className="rounded-[24px] border border-border/80 bg-card p-5 shadow-sm">
-              <h3 className="font-bold text-foreground text-sm mb-3">Activity</h3>
+              <h3 className="font-bold text-foreground text-sm">Activity</h3>
+              <p className="mb-3 mt-1 text-[11px] text-muted-foreground">Public feed posts and reshares appear here. Private chats, forum messages, consultations and anonymous activity never appear on a profile.</p>
               <div className="space-y-3">
                 {userActivity && userActivity.length > 0 ? userActivity.map((activity: any, i: number) => (
                   <div key={i} className="bg-secondary/50 rounded-xl p-3">

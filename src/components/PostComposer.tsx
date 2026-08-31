@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { convertToWebP } from "@/lib/imageUtils";
 
 const getInitials = (name?: string | null): string => {
   if (!name) return "U";
@@ -27,9 +28,9 @@ const PostComposer = () => {
       if (!user) return;
       let imageUrl: string | null = null;
       if (imageFile) {
-        const ext = imageFile.name.split(".").pop();
-        const path = `${user.id}/${Date.now()}.${ext}`;
-        const { error: uploadError } = await supabase.storage.from("post-images").upload(path, imageFile);
+        const optimized = await convertToWebP(imageFile, 0.78, 1600);
+        const path = `${user.id}/${Date.now()}.webp`;
+        const { error: uploadError } = await supabase.storage.from("post-images").upload(path, optimized, { contentType: "image/webp", cacheControl: "31536000" });
         if (uploadError) throw uploadError;
         const { data: urlData } = supabase.storage.from("post-images").getPublicUrl(path);
         imageUrl = urlData.publicUrl;
