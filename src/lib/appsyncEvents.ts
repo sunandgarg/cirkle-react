@@ -14,6 +14,7 @@ const provider = import.meta.env.VITE_CHAT_REALTIME_PROVIDER;
 const realtimeEndpoint = import.meta.env.VITE_APPSYNC_REALTIME_ENDPOINT;
 const httpEndpoint = import.meta.env.VITE_APPSYNC_HTTP_ENDPOINT;
 const BACKGROUND_IDLE_MS = 30_000;
+const DISPATCH_RETRY_DELAYS_MS = [0, 750, 2_000, 5_000] as const;
 
 export const appSyncRealtimeEnabled = provider === "appsync" && Boolean(realtimeEndpoint && httpEndpoint);
 
@@ -208,7 +209,44 @@ export const chatAppSyncChannels = (roomId: string) => ({
   presence_channel: `/chat-presence/${roomId}`,
 });
 
+type DispatchResult = { error: unknown };
+type DispatchInvoke = () => Promise<DispatchResult>;
+type DispatchWait = (delayMs: number) => Promise<void>;
+
+const waitForDispatchRetry: DispatchWait = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs));
+
+export const dispatchRealtimeOutboxWithRetry = async (
+  invoke: DispatchInvoke,
+  wait: DispatchWait = waitForDispatchRetry,
+  retryDelays: readonly number[] = DISPATCH_RETRY_DELAYS_MS,
+) => {
+  for (const delayMs of retryDelays) {
+    if (delayMs) await wait(delayMs);
+    try {
+      const { error } = await invoke();
+      if (!error) return true;
+    } catch {
+      // A later bounded attempt handles transient network and edge failures.
+    }
+  }
+  return false;
+};
+
+let dispatchInFlight: Promise<void> | null = null;
+let dispatchRequested = false;
+
 export const requestRealtimeDispatch = () => {
   if (!appSyncRealtimeEnabled) return;
-  void supabase.functions.invoke("dispatch-realtime-outbox", { body: {} });
+  dispatchRequested = true;
+  if (dispatchInFlight) return;
+  dispatchInFlight = (async () => {
+    do {
+      dispatchRequested = false;
+      await dispatchRealtimeOutboxWithRetry(
+        () => supabase.functions.invoke("dispatch-realtime-outbox", { body: {} }),
+      );
+      // A message persisted while a dispatch was already running needs one
+      // additional drain. Coalescing avoids a request storm during bursts.
+    } while (dispatchRequested);
+  })().finally(() => { dispatchInFlight = null; });
 };

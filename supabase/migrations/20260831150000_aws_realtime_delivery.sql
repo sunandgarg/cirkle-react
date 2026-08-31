@@ -205,6 +205,7 @@ $$;
 revoke all on function public.get_admin_users_detailed(integer) from public;
 grant execute on function public.get_admin_users_detailed(integer) to authenticated;
 
--- Delivered audit rows are retained for operational diagnosis. A scheduled AWS
--- retry invokes the dispatcher; a later maintenance job can prune rows older
--- than seven days without making this migration depend on pg_cron.
+-- Delivered audit rows are retained for operational diagnosis. Authenticated
+-- clients retry dispatcher calls with bounded backoff, while cursor recovery
+-- keeps the database authoritative after offline periods. A later maintenance
+-- job can prune rows older than seven days without depending on pg_cron.

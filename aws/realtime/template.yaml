@@ -8,9 +8,6 @@ Parameters:
   SupabasePublishableKey:
     Type: String
     NoEcho: true
-  SupabaseDispatchUrl:
-    Type: String
-    Default: https://bugwubrwvlqayxwcazfd.supabase.co/functions/v1/dispatch-realtime-outbox
   BridgeSecret:
     Type: String
     NoEcho: true
@@ -162,19 +159,10 @@ Resources:
           APPSYNC_HTTP_DOMAIN: !GetAtt EventApi.Dns.Http
           APPSYNC_API_KEY: !GetAtt EventApiKey.ApiKey
           BRIDGE_SECRET: !Ref BridgeSecret
-          SUPABASE_DISPATCH_URL: !Ref SupabaseDispatchUrl
       Code:
         ZipFile: |
           const chunks = (items, size) => Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size));
           exports.handler = async event => {
-            if (event?.source === "aws.events") {
-              const response = await fetch(process.env.SUPABASE_DISPATCH_URL, {
-                method: "POST",
-                headers: { "content-type": "application/json", "x-cirkle-dispatch-secret": process.env.BRIDGE_SECRET },
-                body: "{}"
-              });
-              return { statusCode: response.status };
-            }
             const supplied = event?.headers?.["x-cirkle-delivery-secret"] || event?.headers?.["X-Cirkle-Delivery-Secret"];
             if (!supplied || supplied !== process.env.BRIDGE_SECRET) return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
             const body = typeof event.body === "string" ? JSON.parse(event.body) : event.body || {};
@@ -220,24 +208,6 @@ Resources:
       FunctionName: !Ref RealtimePublisher
       Principal: "*"
       InvokedViaFunctionUrl: true
-
-  RetrySchedule:
-    Type: AWS::Events::Rule
-    Properties:
-      Name: cirkle-realtime-outbox-retry
-      Description: Retries durable Supabase deliveries every minute.
-      ScheduleExpression: rate(1 minute)
-      State: ENABLED
-      Targets:
-        - Arn: !GetAtt RealtimePublisher.Arn
-          Id: RealtimePublisher
-  RetryPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Ref RealtimePublisher
-      Principal: events.amazonaws.com
-      SourceArn: !GetAtt RetrySchedule.Arn
 
   PushDispatchTopic:
     Type: AWS::SNS::Topic

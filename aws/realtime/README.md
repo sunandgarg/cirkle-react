@@ -2,8 +2,9 @@
 
 This stack makes AppSync Events the low-latency transport while Supabase remains
 the durable source of truth. It creates Lambda-authorized room subscriptions,
-a server-only publisher, a one-minute retry schedule, CloudWatch retention and
-an SNS topic reserved for push delivery.
+a server-only publisher, CloudWatch retention and an SNS topic reserved for
+push delivery. Authenticated clients trigger a coalesced dispatcher with bounded
+backoff; database cursors recover anything missed while a browser is offline.
 
 Deploy in `ap-south-1` with CloudFormation. Generate a random 32-byte bridge
 secret, pass it to the stack as `BridgeSecret`, and set the identical value as
