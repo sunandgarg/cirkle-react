@@ -41,7 +41,12 @@ class AppSyncEventsClient {
         if (document.hidden) this.scheduleBackgroundClose();
         else this.resumeForeground();
       });
-      window.addEventListener("pagehide", () => this.scheduleBackgroundClose());
+      // Mobile browsers can freeze JavaScript as soon as the page is moved to
+      // the background. Close synchronously for lifecycle events where a
+      // delayed timer is not guaranteed to run. A normal hidden tab still gets
+      // the 30-second grace period above.
+      document.addEventListener("freeze", () => this.closeSocket());
+      window.addEventListener("pagehide", () => this.closeSocket());
       window.addEventListener("pageshow", () => this.resumeForeground());
       window.addEventListener("online", () => { if (this.listeners.size) void this.connect(); });
     }
