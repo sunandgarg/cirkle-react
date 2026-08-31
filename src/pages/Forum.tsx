@@ -60,7 +60,7 @@ import {
   appSyncRealtimeEnabled, getForumAppSyncChannels, publishAppSync, subscribeAppSync,
 } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
-import { useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
+import { shouldAnchorLatestDuringKeyboard, useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
@@ -408,6 +408,7 @@ const Forum = () => {
   const sendIdentityRef = useRef<ForumSendIdentity | null>(null);
   const processingOutboxRef = useRef(false);
   const outboxPreviewUrlsRef = useRef<Map<string, string>>(new Map());
+  const anchorLatestDuringKeyboardRef = useRef(false);
 
   // Slow mode state
   const [slowModeEnabled, setSlowModeEnabled] = useState(false);
@@ -598,6 +599,18 @@ const Forum = () => {
   // Smart scroll hide/show
   const { showInput, showNavBar, showHeader, restoreAll } = useScrollBehavior(scrollContainerRef);
   const visualViewportHeight = useVisualViewportHeight();
+
+  // Keep the latest message anchored only when the member was already near
+  // the end of the conversation. Opening the keyboard while reading history
+  // must never pull them through the timeline.
+  useEffect(() => {
+    if (!anchorLatestDuringKeyboardRef.current || document.activeElement !== textareaRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const scroller = scrollContainerRef.current;
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [visualViewportHeight]);
 
   useEffect(() => {
     const scrollContainer = scrollContainerRef.current;
@@ -2251,11 +2264,12 @@ const Forum = () => {
                     onFocus={() => {
                       setShowAttachMenu(false);
                       setShowGifPicker(false);
+                      const scroller = scrollContainerRef.current;
+                      anchorLatestDuringKeyboardRef.current = Boolean(scroller)
+                        && shouldAnchorLatestDuringKeyboard(scroller.scrollHeight, scroller.scrollTop, scroller.clientHeight);
                       restoreAll();
-                      requestAnimationFrame(() => {
-                        if (shouldFollowLiveRef.current) scrollToBottom();
-                      });
                     }}
+                    onBlur={() => { anchorLatestDuringKeyboardRef.current = false; }}
                     placeholder={(activeScopeDef as any)?.label || "Forum"}
                     rows={1}
                     style={{ transition: 'height 100ms ease' }}

@@ -12,11 +12,14 @@ import GlobalSearchOverlay from "./GlobalSearchOverlay";
 import { useEffect } from "react";
 import ProfileCompletionBanner from "./ProfileCompletionBanner";
 import { supabase } from "@/integrations/supabase/client";
+import { shouldShowProfileCompletion } from "@/lib/profileCompletion";
 
 const AppLayout = () => {
   const { user, profile, isVerified, refetchProfile, profileResolved } = useAuth();
   const location = useLocation();
   const [searchOpen, setSearchOpen] = useState(false);
+  const isForum = location.pathname.startsWith("/cirkle-forum");
+  const showProfileCompletion = shouldShowProfileCompletion(location.pathname);
 
   // Prefetch all critical data on login
   usePrefetch(user?.id, profile);
@@ -54,6 +57,15 @@ const AppLayout = () => {
     });
   }, [location.pathname, location.search, profileResolved, user?.id]);
 
+  // Forum owns its message scroller. Locking the document-level viewport keeps
+  // mobile browsers from panning the entire application when the composer is
+  // focused and the software keyboard changes the visual viewport.
+  useEffect(() => {
+    if (!isForum) return;
+    document.documentElement.dataset.appView = "forum";
+    return () => { delete document.documentElement.dataset.appView; };
+  }, [isForum]);
+
   // If verified but onboarding not completed, show onboarding wizard
   const needsOnboarding = profileResolved && user && isVerified && profile && !profile.onboarding_completed;
 
@@ -83,17 +95,19 @@ const AppLayout = () => {
     );
   }
 
-  const isForum = location.pathname.startsWith("/cirkle-forum");
-
   return (
     <div className="fixed inset-0 bg-background flex w-full overflow-hidden">
       <DesktopSidebar />
       <div className="flex-1 flex flex-col min-w-0 max-w-full overflow-hidden">
         {!isForum && <AppHeader />}
-        {user && profile && isVerified && profile.onboarding_completed && !location.pathname.startsWith("/profile") && (
+        {user && profile && isVerified && profile.onboarding_completed && showProfileCompletion && (
           <ProfileCompletionBanner userId={user.id} profile={profile as unknown as Record<string, unknown>} />
         )}
-        <main id="main-content" className={`flex-1 ${isForum ? '' : 'pb-[72px]'} lg:pb-0 overflow-y-auto overflow-x-hidden overscroll-y-contain`} style={{ WebkitOverflowScrolling: 'touch' }}>
+        <main
+          id="main-content"
+          className={`flex-1 min-h-0 overflow-x-hidden ${isForum ? "overflow-hidden overscroll-none" : "overflow-y-auto overscroll-y-contain pb-[72px] lg:pb-0"}`}
+          style={isForum ? undefined : { WebkitOverflowScrolling: "touch" }}
+        >
           <ErrorBoundary>
             <Outlet />
           </ErrorBoundary>

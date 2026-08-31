@@ -5,6 +5,13 @@ export const resolveVisualViewportHeight = (
   windowInnerHeight?: number,
 ) => Math.max(1, Math.round(visualViewportHeight || windowInnerHeight || 1));
 
+export const shouldAnchorLatestDuringKeyboard = (
+  scrollHeight: number,
+  scrollTop: number,
+  clientHeight: number,
+  threshold = 160,
+) => scrollHeight - scrollTop - clientHeight < threshold;
+
 /**
  * `100dvh` is still reported against the layout viewport in some iOS browser
  * configurations while the software keyboard is open. The Visual Viewport API
@@ -43,4 +50,3 @@ export const useVisualViewportHeight = () => {
 
   return height;
 };
-

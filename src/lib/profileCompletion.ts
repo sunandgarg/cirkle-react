@@ -6,6 +6,12 @@ export type ProfileCompletionItem = {
   complete: boolean;
 };
 
+const PROFILE_REMINDER_ROUTES = ["/consult", "/jobs", "/calendar"] as const;
+
+/** Keep completion nudges on intent-heavy surfaces, never inside chat. */
+export const shouldShowProfileCompletion = (pathname: string) =>
+  PROFILE_REMINDER_ROUTES.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+
 const hasText = (value: unknown) => typeof value === "string" && value.trim().length > 0;
 
 export const getProfileCompletion = (profile: ProfileLike) => {

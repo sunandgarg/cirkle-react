@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { getProfileCompletion, nextProfileReminder } from "@/lib/profileCompletion";
+import { getProfileCompletion, nextProfileReminder, shouldShowProfileCompletion } from "@/lib/profileCompletion";
 
 describe("profile completion reminder", () => {
+  it("appears only on consult, jobs and events—not inside forum", () => {
+    expect(shouldShowProfileCompletion("/consult")).toBe(true);
+    expect(shouldShowProfileCompletion("/consult/mentors")).toBe(true);
+    expect(shouldShowProfileCompletion("/jobs/remote")).toBe(true);
+    expect(shouldShowProfileCompletion("/calendar")).toBe(true);
+    expect(shouldShowProfileCompletion("/cirkle-forum")).toBe(false);
+    expect(shouldShowProfileCompletion("/network")).toBe(false);
+    expect(shouldShowProfileCompletion("/profile")).toBe(false);
+  });
+
   it("reports every missing profile section", () => {
     const result = getProfileCompletion({ name: "Sunand", skills: [] });
     expect(result.percent).toBeLessThan(100);

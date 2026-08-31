@@ -156,6 +156,16 @@
     }
   }
 
+  /* Chat is a self-contained viewport. Prevent iOS/Android browsers from
+     scrolling the document to reveal the focused composer; only the message
+     timeline is allowed to move. */
+  html[data-app-view="forum"],
+  html[data-app-view="forum"] body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   button, a, input, textarea, select {
     @apply transition-colors duration-150;
   }

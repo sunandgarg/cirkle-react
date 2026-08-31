@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isEditableElementActive, useScrollBehavior } from "@/hooks/useScrollBehavior";
-import { resolveVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
+import { resolveVisualViewportHeight, shouldAnchorLatestDuringKeyboard } from "@/hooks/useVisualViewportHeight";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -9,6 +9,11 @@ describe("mobile forum viewport", () => {
   it("uses the visible viewport while the software keyboard is open", () => {
     expect(resolveVisualViewportHeight(412.4, 844)).toBe(412);
     expect(resolveVisualViewportHeight(undefined, 844)).toBe(844);
+  });
+
+  it("anchors the latest message without pulling members out of older history", () => {
+    expect(shouldAnchorLatestDuringKeyboard(1_000, 470, 400)).toBe(true);
+    expect(shouldAnchorLatestDuringKeyboard(1_000, 200, 400)).toBe(false);
   });
 
   it("recognises active chat editors so scroll chrome cannot hide them", () => {
