@@ -1,8 +1,9 @@
 import { useState, useEffect, createContext, useContext, useCallback, ReactNode, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { clearSupabaseAuthSession, supabase } from "@/integrations/supabase/client";
 import { clearChatCache } from "@/lib/chatCache";
 import type { Tables } from "@/integrations/supabase/types";
 import type { User } from "@supabase/supabase-js";
+import { isInvalidRefreshTokenError } from "@/lib/authSessionRecovery";
 
 type Profile = Tables<"profiles">;
 
@@ -105,16 +106,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   useEffect(() => {
+    const settleSignedOut = () => {
+      activeUserIdRef.current = null;
+      setUser(null);
+      setProfile(null);
+      setProfileResolved(true);
+      setProfileError(null);
+      setIsAdmin(false);
+      setLoading(false);
+      initializedRef.current = true;
+    };
+
     // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === "SIGNED_OUT") {
-        activeUserIdRef.current = null;
-        setUser(null);
-        setProfile(null);
-        setProfileResolved(true);
-        setProfileError(null);
-        setIsAdmin(false);
-        setLoading(false);
+        settleSignedOut();
         void clearChatCache();
         if ("caches" in window) {
           void caches.delete("cirkle-images-v1");
@@ -151,13 +157,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const init = async () => {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
-        if (!session && !error) {
-          setProfileResolved(true);
-          setLoading(false);
-          initializedRef.current = true;
+        if (error) {
+          if (isInvalidRefreshTokenError(error)) {
+            clearSupabaseAuthSession();
+            await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+          }
+          settleSignedOut();
+          return;
+        }
+        if (!session) {
+          settleSignedOut();
         }
       } catch {
         // Network failure on init - don't force logout, just stop loading
+        setProfileResolved(false);
+        setProfileError("We could not restore your session. You can sign in again safely.");
         setLoading(false);
         initializedRef.current = true;
       }
