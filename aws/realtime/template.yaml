@@ -8,6 +8,13 @@ Parameters:
   SupabasePublishableKey:
     Type: String
     NoEcho: true
+  SupabaseLegacyAnonKey:
+    Type: String
+    NoEcho: true
+    Description: Legacy anon JWT used only for the verified Supabase Edge gateway call.
+  SupabaseDispatchUrl:
+    Type: String
+    Default: https://bugwubrwvlqayxwcazfd.supabase.co/functions/v1/dispatch-realtime-outbox
   BridgeSecret:
     Type: String
     NoEcho: true
@@ -25,6 +32,28 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Tags:
+        - { Key: Application, Value: Cirkle }
+
+  PublisherRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: PublishCirkleRealtimeEvents
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: appsync:EventPublish
+                Resource: !Sub "arn:${AWS::Partition}:appsync:${AWS::Region}:${AWS::AccountId}:apis/${EventApi.ApiId}/channelNamespace/*"
       Tags:
         - { Key: Application, Value: Cirkle }
 
@@ -57,7 +86,9 @@ Resources:
                 const response = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, { headers: headers(token) });
                 if (!response.ok) return { isAuthorized: false, ttlOverride: 0 };
                 const user = await response.json();
-                return { isAuthorized: Boolean(user.id), handlerContext: { userId: user.id || "" }, ttlOverride: 30 };
+                // Five-minute connection caching cuts authorizer traffic by
+                // 90% while keeping account revocation reasonably prompt.
+                return { isAuthorized: Boolean(user.id), handlerContext: { userId: user.id || "" }, ttlOverride: 300 };
               }
               const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/rpc/appsync_can_access_channel`, {
                 method: "POST",
@@ -94,22 +125,16 @@ Resources:
             LambdaAuthorizerConfig:
               AuthorizerUri: !GetAtt RealtimeAuthorizer.Arn
               AuthorizerResultTtlInSeconds: 0
-          - AuthType: API_KEY
+          - AuthType: AWS_IAM
         ConnectionAuthModes:
           - AuthType: AWS_LAMBDA
         DefaultPublishAuthModes:
-          - AuthType: API_KEY
+          - AuthType: AWS_IAM
         DefaultSubscribeAuthModes:
           - AuthType: AWS_LAMBDA
       Tags:
         - { Key: Application, Value: Cirkle }
         - { Key: Environment, Value: Production }
-
-  EventApiKey:
-    Type: AWS::AppSync::ApiKey
-    Properties:
-      ApiId: !GetAtt EventApi.ApiId
-      Description: Server-only Cirkle delivery publisher
 
   ForumNamespace:
     Type: AWS::AppSync::ChannelNamespace
@@ -151,18 +176,72 @@ Resources:
       FunctionName: cirkle-appsync-publisher
       Runtime: nodejs22.x
       Handler: index.handler
-      Role: !GetAtt LambdaRole.Arn
+      Role: !GetAtt PublisherRole.Arn
       Timeout: 20
       MemorySize: 256
       Environment:
         Variables:
           APPSYNC_HTTP_DOMAIN: !GetAtt EventApi.Dns.Http
-          APPSYNC_API_KEY: !GetAtt EventApiKey.ApiKey
           BRIDGE_SECRET: !Ref BridgeSecret
+          SUPABASE_DISPATCH_URL: !Ref SupabaseDispatchUrl
+          SUPABASE_LEGACY_ANON_KEY: !Ref SupabaseLegacyAnonKey
       Code:
         ZipFile: |
+          const crypto = require("node:crypto");
           const chunks = (items, size) => Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size));
+          const sha256 = value => crypto.createHash("sha256").update(value).digest("hex");
+          const hmac = (key, value, encoding) => crypto.createHmac("sha256", key).update(value).digest(encoding);
+          const signedPublishHeaders = body => {
+            const accessKey = process.env.AWS_ACCESS_KEY_ID;
+            const secretKey = process.env.AWS_SECRET_ACCESS_KEY;
+            const sessionToken = process.env.AWS_SESSION_TOKEN;
+            const region = process.env.AWS_REGION;
+            const host = process.env.APPSYNC_HTTP_DOMAIN;
+            if (!accessKey || !secretKey || !region || !host) throw new Error("Lambda IAM credentials are unavailable");
+            const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
+            const dateStamp = amzDate.slice(0, 8);
+            const payloadHash = sha256(body);
+            const canonicalHeaders = [
+              "content-type:application/json",
+              `host:${host}`,
+              `x-amz-content-sha256:${payloadHash}`,
+              `x-amz-date:${amzDate}`,
+              sessionToken ? `x-amz-security-token:${sessionToken}` : null,
+            ].filter(Boolean).join("\n") + "\n";
+            const signedHeaders = `content-type;host;x-amz-content-sha256;x-amz-date${sessionToken ? ";x-amz-security-token" : ""}`;
+            const canonicalRequest = `POST\n/event\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+            const scope = `${dateStamp}/${region}/appsync/aws4_request`;
+            const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${sha256(canonicalRequest)}`;
+            const kDate = hmac(`AWS4${secretKey}`, dateStamp);
+            const kRegion = hmac(kDate, region);
+            const kService = hmac(kRegion, "appsync");
+            const kSigning = hmac(kService, "aws4_request");
+            const signature = hmac(kSigning, stringToSign, "hex");
+            return {
+              "content-type": "application/json",
+              "x-amz-content-sha256": payloadHash,
+              "x-amz-date": amzDate,
+              ...(sessionToken ? { "x-amz-security-token": sessionToken } : {}),
+              authorization: `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+            };
+          };
           exports.handler = async event => {
+            if (event?.source === "aws.events") {
+              const response = await fetch(process.env.SUPABASE_DISPATCH_URL, {
+                method: "POST",
+                headers: {
+                  apikey: process.env.SUPABASE_LEGACY_ANON_KEY,
+                  authorization: `Bearer ${process.env.SUPABASE_LEGACY_ANON_KEY}`,
+                  "content-type": "application/json",
+                  "x-cirkle-dispatch-secret": process.env.BRIDGE_SECRET,
+                },
+                body: "{}",
+                signal: AbortSignal.timeout(15_000),
+              });
+              const result = await response.text();
+              if (!response.ok) throw new Error(`Supabase dispatcher returned ${response.status}: ${result.slice(0, 300)}`);
+              return { statusCode: response.status, body: result };
+            }
             const supplied = event?.headers?.["x-cirkle-delivery-secret"] || event?.headers?.["X-Cirkle-Delivery-Secret"];
             if (!supplied || supplied !== process.env.BRIDGE_SECRET) return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
             const body = typeof event.body === "string" ? JSON.parse(event.body) : event.body || {};
@@ -172,10 +251,11 @@ Resources:
             const succeeded = [], failed = [];
             for (const [channel, items] of groups) for (const batch of chunks(items, 5)) {
               try {
+                const payload = JSON.stringify({ channel, events: batch.map(item => JSON.stringify({ deliveryId: item.id, eventId: item.event_id, ...item.payload })) });
                 const response = await fetch(`https://${process.env.APPSYNC_HTTP_DOMAIN}/event`, {
                   method: "POST",
-                  headers: { "content-type": "application/json", "x-api-key": process.env.APPSYNC_API_KEY },
-                  body: JSON.stringify({ channel, events: batch.map(item => JSON.stringify({ deliveryId: item.id, eventId: item.event_id, ...item.payload })) })
+                  headers: signedPublishHeaders(payload),
+                  body: payload,
                 });
                 const result = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(result.message || `AppSync returned ${response.status}`);
@@ -208,6 +288,24 @@ Resources:
       FunctionName: !Ref RealtimePublisher
       Principal: "*"
       InvokedViaFunctionUrl: true
+
+  RetrySchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: cirkle-realtime-outbox-retry
+      Description: Retries durable Supabase deliveries every minute.
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt RealtimePublisher.Arn
+          Id: RealtimePublisher
+  RetryPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref RealtimePublisher
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RetrySchedule.Arn
 
   PushDispatchTopic:
     Type: AWS::SNS::Topic

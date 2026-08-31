@@ -4,7 +4,8 @@ This stack makes AppSync Events the low-latency transport while Supabase remains
 the durable source of truth. It creates Lambda-authorized room subscriptions,
 a server-only publisher, CloudWatch retention and an SNS topic reserved for
 push delivery. Authenticated clients trigger a coalesced dispatcher with bounded
-backoff; database cursors recover anything missed while a browser is offline.
+backoff; a one-minute secret-protected server retry drains stranded deliveries;
+database cursors recover anything missed while a browser is offline.
 
 Deploy in `ap-south-1` with CloudFormation. Generate a random 32-byte bridge
 secret, pass it to the stack as `BridgeSecret`, and set the identical value as
@@ -19,5 +20,6 @@ VITE_APPSYNC_HTTP_ENDPOINT=<AppSyncHttpEndpoint>
 VITE_APPSYNC_REALTIME_ENDPOINT=<AppSyncRealtimeEndpoint>
 ```
 
-No AppSync API key, AWS credential, Lambda secret or Supabase service-role key
-belongs in the browser build.
+The delivery Lambda publishes with short-lived IAM role credentials and SigV4;
+there is no expiring AppSync API key in the delivery path. No AWS credential,
+Lambda secret or Supabase service-role key belongs in the browser build.
