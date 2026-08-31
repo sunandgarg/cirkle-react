@@ -20,6 +20,9 @@ VITE_APPSYNC_HTTP_ENDPOINT=<AppSyncHttpEndpoint>
 VITE_APPSYNC_REALTIME_ENDPOINT=<AppSyncRealtimeEndpoint>
 ```
 
-The delivery Lambda publishes with short-lived IAM role credentials and SigV4;
-there is no expiring AppSync API key in the delivery path. No AWS credential,
-Lambda secret or Supabase service-role key belongs in the browser build.
+The delivery Lambda publishes with short-lived IAM role credentials and SigV4.
+Its function URL also requires SigV4 from the dedicated, least-privilege
+`cirkle-supabase-realtime-dispatcher` user; the bridge secret remains a second
+server-side check. There is no public Lambda invocation path or expiring AppSync
+API key in the delivery flow. No AWS credential, Lambda secret or Supabase
+service-role key belongs in the browser build.

@@ -13,6 +13,65 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
 });
 
+const encoder = new TextEncoder();
+const toHex = (value: ArrayBuffer | Uint8Array) =>
+  Array.from(value instanceof Uint8Array ? value : new Uint8Array(value))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+
+const sha256 = async (value: string) =>
+  new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)));
+
+const hmac = async (key: string | Uint8Array, value: string) => {
+  const material = typeof key === "string" ? encoder.encode(key) : key;
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    material,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, encoder.encode(value)));
+};
+
+const signedLambdaHeaders = async (publisherUrl: string, body: string, bridgeSecret: string) => {
+  const accessKey = Deno.env.get("AWS_ACCESS_KEY_ID") || "";
+  const secretKey = Deno.env.get("AWS_SECRET_ACCESS_KEY") || "";
+  const sessionToken = Deno.env.get("AWS_SESSION_TOKEN") || "";
+  const region = Deno.env.get("AWS_REGION") || Deno.env.get("AWS_SES_REGION") || "";
+  if (!accessKey || !secretKey || !region) throw new Error("AWS IAM delivery credentials are unavailable");
+
+  const url = new URL(publisherUrl);
+  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const dateStamp = amzDate.slice(0, 8);
+  const payloadHash = toHex(await sha256(body));
+  const canonicalHeaders = [
+    "content-type:application/json",
+    `host:${url.host}`,
+    `x-amz-content-sha256:${payloadHash}`,
+    `x-amz-date:${amzDate}`,
+    sessionToken ? `x-amz-security-token:${sessionToken}` : null,
+  ].filter(Boolean).join("\n") + "\n";
+  const signedHeaders = `content-type;host;x-amz-content-sha256;x-amz-date${sessionToken ? ";x-amz-security-token" : ""}`;
+  const canonicalRequest = `POST\n${url.pathname || "/"}\n${url.searchParams.toString()}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+  const scope = `${dateStamp}/${region}/lambda/aws4_request`;
+  const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${toHex(await sha256(canonicalRequest))}`;
+  const kDate = await hmac(`AWS4${secretKey}`, dateStamp);
+  const kRegion = await hmac(kDate, region);
+  const kService = await hmac(kRegion, "lambda");
+  const kSigning = await hmac(kService, "aws4_request");
+  const signature = toHex(await hmac(kSigning, stringToSign));
+
+  return {
+    "Content-Type": "application/json",
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": amzDate,
+    ...(sessionToken ? { "x-amz-security-token": sessionToken } : {}),
+    "x-cirkle-delivery-secret": bridgeSecret,
+    authorization: `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+  };
+};
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -71,13 +130,11 @@ Deno.serve(async (request) => {
   });
 
   try {
+    const publisherBody = JSON.stringify({ deliveries: preparedDeliveries });
     const publisherResponse = await fetch(publisherUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-cirkle-delivery-secret": bridgeSecret,
-      },
-      body: JSON.stringify({ deliveries: preparedDeliveries }),
+      headers: await signedLambdaHeaders(publisherUrl, publisherBody, bridgeSecret),
+      body: publisherBody,
       signal: AbortSignal.timeout(12_000),
     });
     const publisherResult = await publisherResponse.json().catch(() => ({}));

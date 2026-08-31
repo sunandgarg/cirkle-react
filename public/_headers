@@ -1,0 +1,21 @@
+/*
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; connect-src 'self' https://bugwubrwvlqayxwcazfd.supabase.co wss://bugwubrwvlqayxwcazfd.supabase.co https://xwuvlnknuzcj5b7msvcbtmq3x4.appsync-api.ap-south-1.amazonaws.com wss://xwuvlnknuzcj5b7msvcbtmq3x4.appsync-realtime-api.ap-south-1.amazonaws.com https://*.daily.co wss://*.daily.co; frame-src 'self' https://*.daily.co; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+  Permissions-Policy: camera=(self "https://*.daily.co"), microphone=(self "https://*.daily.co"), geolocation=(), payment=(), usb=()
+  Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-DNS-Prefetch-Control: off
+  X-Frame-Options: DENY
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/iit-logos/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+/sw.js
+  Cache-Control: no-store
+
+/index.html
+  Cache-Control: no-store

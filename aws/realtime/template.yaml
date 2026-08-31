@@ -57,6 +57,29 @@ Resources:
       Tags:
         - { Key: Application, Value: Cirkle }
 
+  SupabaseDispatcherUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: cirkle-supabase-realtime-dispatcher
+      Policies:
+        - PolicyName: InvokeCirkleRealtimePublisher
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunctionUrl
+                  - lambda:InvokeFunction
+                Resource: !GetAtt RealtimePublisher.Arn
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/cirkle.world"
+      Tags:
+        - { Key: Application, Value: Cirkle }
+        - { Key: Purpose, Value: SupabaseRealtimeDispatch }
+
   RealtimeAuthorizer:
     Type: AWS::Lambda::Function
     Properties:
@@ -277,21 +300,21 @@ Resources:
     Type: AWS::Lambda::Url
     Properties:
       TargetFunctionArn: !GetAtt RealtimePublisher.Arn
-      AuthType: NONE
+      AuthType: AWS_IAM
       InvokeMode: BUFFERED
   PublisherUrlPermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunctionUrl
       FunctionName: !Ref RealtimePublisher
-      Principal: "*"
-      FunctionUrlAuthType: NONE
+      Principal: !GetAtt SupabaseDispatcherUser.Arn
+      FunctionUrlAuthType: AWS_IAM
   PublisherInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
       FunctionName: !Ref RealtimePublisher
-      Principal: "*"
+      Principal: !GetAtt SupabaseDispatcherUser.Arn
       InvokedViaFunctionUrl: true
 
   RetrySchedule:
@@ -332,3 +355,4 @@ Outputs:
   AppSyncRealtimeEndpoint: { Value: !Sub "wss://${EventApi.Dns.Realtime}/event/realtime" }
   PublisherFunctionUrl: { Value: !GetAtt PublisherUrl.FunctionUrl }
   PushDispatchTopicArn: { Value: !Ref PushDispatchTopic }
+  SupabaseDispatcherUserName: { Value: !Ref SupabaseDispatcherUser }
