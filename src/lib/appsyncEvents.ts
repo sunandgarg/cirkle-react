@@ -20,7 +20,7 @@ export const appSyncRealtimeEnabled = provider === "appsync" && Boolean(realtime
 const base64Url = (value: string) => btoa(unescape(encodeURIComponent(value)))
   .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 
-const authentication = (endpoint: string, token: string) => ({
+export const buildAppSyncAuthorization = (endpoint: string, token: string) => ({
   Authorization: token,
   host: new URL(endpoint).host,
 });
@@ -82,9 +82,13 @@ class AppSyncEventsClient {
     if (this.connecting) return this.connecting;
     this.connecting = (async () => {
       const token = await this.accessToken();
-      const header = base64Url(JSON.stringify(authentication(realtimeEndpoint, token)));
+      // AppSync validates the WebSocket handshake against the HTTP endpoint
+      // host, even though the socket itself connects to the realtime domain.
+      // Supplying the realtime host causes AWS to reject the handshake before
+      // the Lambda authorizer is invoked.
+      const header = base64Url(JSON.stringify(buildAppSyncAuthorization(httpEndpoint, token)));
       await new Promise<void>((resolve, reject) => {
-        const socket = new WebSocket(`${realtimeEndpoint}?header=${header}&payload=e30`, ["aws-appsync-event-ws", `header-${header}`]);
+        const socket = new WebSocket(realtimeEndpoint, ["aws-appsync-event-ws", `header-${header}`]);
         this.socket = socket;
         let acknowledged = false;
         const timeout = setTimeout(() => { socket.close(); reject(new Error("Realtime connection timed out")); }, 10_000);
@@ -131,7 +135,7 @@ class AppSyncEventsClient {
       id,
       type: "subscribe",
       channel: listener.channel,
-      authorization: authentication(realtimeEndpoint, token),
+      authorization: buildAppSyncAuthorization(httpEndpoint, token),
     }));
   }
 

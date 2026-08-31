@@ -2,7 +2,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-cirkle-dispatch-secret",
+  // supabase-js adds x-client-info to browser function calls. Omitting it
+  // makes the preflight fail, leaving the durable outbox queued until the
+  // scheduled retry runs instead of dispatching the message immediately.
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cirkle-dispatch-secret",
 };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
