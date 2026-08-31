@@ -213,6 +213,13 @@ Resources:
       FunctionName: !Ref RealtimePublisher
       Principal: "*"
       FunctionUrlAuthType: NONE
+  PublisherInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref RealtimePublisher
+      Principal: "*"
+      InvokedViaFunctionUrl: true
 
   RetrySchedule:
     Type: AWS::Events::Rule
@@ -252,4 +259,3 @@ Outputs:
   AppSyncRealtimeEndpoint: { Value: !Sub "wss://${EventApi.Dns.Realtime}/event/realtime" }
   PublisherFunctionUrl: { Value: !GetAtt PublisherUrl.FunctionUrl }
   PushDispatchTopicArn: { Value: !Ref PushDispatchTopic }
-
