@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAppSyncAuthorization, dispatchRealtimeOutboxWithRetry } from "@/lib/appsyncEvents";
+import { buildAppSyncAuthorization, dispatchRealtimeOutboxWithRetry, getAppSyncEventFrames } from "@/lib/appsyncEvents";
 
 describe("AppSync Events authorization", () => {
   it("uses the HTTP API host for realtime handshakes and subscriptions", () => {
@@ -10,6 +10,13 @@ describe("AppSync Events authorization", () => {
       Authorization: "signed-user-token",
       host: "example.appsync-api.ap-south-1.amazonaws.com",
     });
+  });
+
+  it("accepts the scalar event shape used by HTTP AppSync publishes", () => {
+    const frame = JSON.stringify({ eventType: "INSERT", new: { id: "message-1" } });
+    expect(getAppSyncEventFrames({ event: frame })).toEqual([frame]);
+    expect(getAppSyncEventFrames({ event: [frame] })).toEqual([frame]);
+    expect(getAppSyncEventFrames({ events: [frame] })).toEqual([frame]);
   });
 
   it("retries transient dispatcher failures with bounded backoff", async () => {

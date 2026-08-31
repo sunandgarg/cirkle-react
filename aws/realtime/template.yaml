@@ -84,8 +84,12 @@ Resources:
               const context = event.requestContext || {};
               if (context.operation === "EVENT_CONNECT") {
                 const response = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, { headers: headers(token) });
-                if (!response.ok) return { isAuthorized: false, ttlOverride: 0 };
+                if (!response.ok) {
+                  console.warn(JSON.stringify({ operation: context.operation, supabaseStatus: response.status, authorized: false }));
+                  return { isAuthorized: false, ttlOverride: 0 };
+                }
                 const user = await response.json();
+                console.info(JSON.stringify({ operation: context.operation, supabaseStatus: response.status, authorized: Boolean(user.id) }));
                 // Five-minute connection caching cuts authorizer traffic by
                 // 90% while keeping account revocation reasonably prompt.
                 return { isAuthorized: Boolean(user.id), handlerContext: { userId: user.id || "" }, ttlOverride: 300 };
@@ -99,6 +103,7 @@ Resources:
                 })
               });
               const allowed = response.ok && await response.json();
+              console.info(JSON.stringify({ operation: context.operation || "UNKNOWN", channel: context.channel || null, supabaseStatus: response.status, authorized: allowed === true }));
               return { isAuthorized: allowed === true, ttlOverride: allowed === true ? 120 : 0 };
             } catch (error) {
               console.error("authorization failed", error?.message || error);

@@ -94,6 +94,27 @@ describe("forum burst and isolation simulation", () => {
     expect(deleted).toEqual([]);
   });
 
+  it("applies shared reaction totals without erasing viewer-specific reactions", () => {
+    const scope = { type: "GLOBAL", key: "IIT_ALL" };
+    const current = [{
+      id: "reaction-message", scope_type: scope.type, scope_key: scope.key,
+      content: "React here", created_at: "2026-08-31T10:00:00.000Z",
+      reactions: { "👍": 1 }, myReactions: ["👍"],
+    }];
+
+    const next = applyForumRealtimeBatch(current, [{
+      eventType: "UPDATE",
+      new: {
+        id: "reaction-message", scope_type: scope.type, scope_key: scope.key,
+        content: "React here", created_at: "2026-08-31T10:00:00.000Z",
+        reactions: { "👍": 50 },
+      },
+    }], scope);
+
+    expect(next[0].reactions).toEqual({ "👍": 50 });
+    expect(next[0].myReactions).toEqual(["👍"]);
+  });
+
   it("keeps a 1,500-message IIT Delhi MBA General 2026 conversation ordered and threads isolated", () => {
     const scope = { type: "COHORT", key: "IIT_DELHI|MBA|GENERAL|2026" };
     const rootEvents = Array.from({ length: 1_200 }, (_, sequence) => ({

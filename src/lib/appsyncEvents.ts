@@ -8,6 +8,7 @@ type Listener = {
   channel: string;
   onEvent: (event: AppSyncEvent) => void;
   onStatus?: (status: AppSyncStatus) => void;
+  retryAttempt: number;
 };
 
 const provider = import.meta.env.VITE_CHAT_REALTIME_PROVIDER;
@@ -26,11 +27,18 @@ export const buildAppSyncAuthorization = (endpoint: string, token: string) => ({
   host: new URL(endpoint).host,
 });
 
+export const getAppSyncEventFrames = (message: { event?: unknown; events?: unknown }) => {
+  const value = message.event ?? message.events;
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : [value];
+};
+
 class AppSyncEventsClient {
   private socket: WebSocket | null = null;
   private listeners = new Map<string, Listener>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private hiddenTimer: ReturnType<typeof setTimeout> | null = null;
+  private subscriptionRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectAttempt = 0;
   private connecting: Promise<void> | null = null;
   private intentionallyClosedSockets = new WeakSet<WebSocket>();
@@ -54,12 +62,15 @@ class AppSyncEventsClient {
 
   subscribe(channel: string, onEvent: Listener["onEvent"], onStatus?: Listener["onStatus"]) {
     const id = crypto.randomUUID();
-    this.listeners.set(id, { id, channel, onEvent, onStatus });
+    this.listeners.set(id, { id, channel, onEvent, onStatus, retryAttempt: 0 });
     onStatus?.("CONNECTING");
     if (this.socket?.readyState === WebSocket.OPEN) void this.sendSubscription(id);
     else void this.connect().catch(() => onStatus?.("CHANNEL_ERROR"));
     return () => {
       if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ id, type: "unsubscribe" }));
+      const retryTimer = this.subscriptionRetryTimers.get(id);
+      if (retryTimer) clearTimeout(retryTimer);
+      this.subscriptionRetryTimers.delete(id);
       this.listeners.delete(id);
       if (!this.listeners.size) this.closeSocket();
     };
@@ -99,14 +110,27 @@ class AppSyncEventsClient {
         let acknowledged = false;
         const timeout = setTimeout(() => { socket.close(); reject(new Error("Realtime connection timed out")); }, 10_000);
         socket.onopen = () => socket.send(JSON.stringify({ type: "connection_init" }));
-        socket.onmessage = (message) => {
+        socket.onmessage = async (message) => {
           let payload: any;
-          try { payload = JSON.parse(String(message.data)); } catch { return; }
+          try {
+            const raw = typeof message.data === "string"
+              ? message.data
+              : message.data instanceof Blob
+                ? await message.data.text()
+                : new TextDecoder().decode(message.data as ArrayBuffer);
+            payload = JSON.parse(raw);
+          } catch { return; }
           if (payload.type === "connection_ack") {
             clearTimeout(timeout);
             acknowledged = true;
             this.reconnectAttempt = 0;
             resolve();
+            return;
+          }
+          if (!acknowledged && (payload.type === "connection_error" || payload.type === "error")) {
+            clearTimeout(timeout);
+            socket.close();
+            reject(new Error("Realtime connection was rejected"));
             return;
           }
           this.handleMessage(payload);
@@ -147,14 +171,41 @@ class AppSyncEventsClient {
 
   private handleMessage(message: any) {
     const listener = message.id ? this.listeners.get(message.id) : null;
-    if (message.type === "subscribe_success") listener?.onStatus?.("SUBSCRIBED");
-    if (message.type === "subscribe_error" || message.type === "error") listener?.onStatus?.("CHANNEL_ERROR");
+    if (message.type === "subscribe_success" && listener) {
+      listener.retryAttempt = 0;
+      const retryTimer = this.subscriptionRetryTimers.get(listener.id);
+      if (retryTimer) clearTimeout(retryTimer);
+      this.subscriptionRetryTimers.delete(listener.id);
+      listener.onStatus?.("SUBSCRIBED");
+    }
+    if ((message.type === "subscribe_error" || message.type === "error") && listener) {
+      listener.onStatus?.("CHANNEL_ERROR");
+      this.scheduleSubscriptionRetry(listener.id);
+    }
     if (message.type !== "data" || !listener) return;
-    const events = Array.isArray(message.event) ? message.event : Array.isArray(message.events) ? message.events : [];
+    // HTTP-published AppSync Events currently arrive as one string in `event`,
+    // while some SDK/protocol examples use arrays. Accept both wire shapes.
+    const events = getAppSyncEventFrames(message);
     events.forEach((raw: unknown) => {
       try { listener.onEvent(typeof raw === "string" ? JSON.parse(raw) : raw as AppSyncEvent); }
       catch { /* Ignore malformed third-party realtime payloads; durable recovery remains authoritative. */ }
     });
+  }
+
+  private scheduleSubscriptionRetry(id: string) {
+    const listener = this.listeners.get(id);
+    if (!listener || this.subscriptionRetryTimers.has(id)) return;
+    const delay = Math.min(15_000, 500 * 2 ** Math.min(listener.retryAttempt++, 5)) + Math.random() * 750;
+    const timer = setTimeout(() => {
+      this.subscriptionRetryTimers.delete(id);
+      if (!this.listeners.has(id) || (typeof document !== "undefined" && document.hidden)) return;
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        void this.sendSubscription(id).catch(() => this.scheduleSubscriptionRetry(id));
+      } else {
+        void this.connect().catch(() => this.scheduleReconnect());
+      }
+    }, delay);
+    this.subscriptionRetryTimers.set(id, timer);
   }
 
   private scheduleReconnect() {
@@ -169,6 +220,8 @@ class AppSyncEventsClient {
   private closeSocket() {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+    this.subscriptionRetryTimers.forEach((timer) => clearTimeout(timer));
+    this.subscriptionRetryTimers.clear();
     const socket = this.socket;
     if (socket) {
       this.intentionallyClosedSockets.add(socket);

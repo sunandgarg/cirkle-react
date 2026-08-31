@@ -41,6 +41,35 @@ Deno.serve(async (request) => {
   if (claimError) return json({ error: claimError.message }, 500);
   if (!deliveries?.length) return json({ delivered: 0, pending: 0 });
 
+  // A reaction trigger runs inside the writer's transaction, so concurrent
+  // inserts cannot reliably see one another. Rehydrate shared totals after
+  // every transaction has committed and before publishing to AppSync.
+  const reactionPostIds = [...new Set(deliveries
+    .filter((item: { source?: string }) => item.source === "forum_reaction")
+    .map((item: { aggregate_id: string }) => item.aggregate_id))];
+  const reactionTotals = new Map<string, Record<string, number>>();
+  if (reactionPostIds.length) {
+    const { data: reactionRows, error: reactionError } = await admin
+      .from("reactions")
+      .select("entity_id,emoji")
+      .eq("entity_type", "forum_msg")
+      .in("entity_id", reactionPostIds);
+    if (reactionError) return json({ error: reactionError.message }, 500);
+    for (const row of reactionRows || []) {
+      const totals = reactionTotals.get(row.entity_id) || {};
+      totals[row.emoji] = (totals[row.emoji] || 0) + 1;
+      reactionTotals.set(row.entity_id, totals);
+    }
+  }
+  const preparedDeliveries = deliveries.map((item: { source?: string; aggregate_id: string; payload: Record<string, unknown> }) => {
+    if (item.source !== "forum_reaction") return item;
+    const current = (item.payload?.new || {}) as Record<string, unknown>;
+    return {
+      ...item,
+      payload: { ...item.payload, new: { ...current, reactions: reactionTotals.get(item.aggregate_id) || {} } },
+    };
+  });
+
   try {
     const publisherResponse = await fetch(publisherUrl, {
       method: "POST",
@@ -48,7 +77,7 @@ Deno.serve(async (request) => {
         "Content-Type": "application/json",
         "x-cirkle-delivery-secret": bridgeSecret,
       },
-      body: JSON.stringify({ deliveries }),
+      body: JSON.stringify({ deliveries: preparedDeliveries }),
       signal: AbortSignal.timeout(12_000),
     });
     const publisherResult = await publisherResponse.json().catch(() => ({}));

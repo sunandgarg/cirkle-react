@@ -5,6 +5,21 @@ The repository includes two complementary checks:
 - `npm run test:chat-load` is a deterministic local simulation that validates ordering, room isolation, fan-out and cache behavior without touching production.
 - `npm run test:chat-load:live` writes real forum `posts`, reads paginated history, and keeps real private Supabase Realtime subscribers connected against an isolated performance project.
 
+## Production 50-client delivery smoke test
+
+`npm run test:forum:live50` is a deliberately guarded end-to-end smoke test for
+the deployed Supabase + AWS AppSync path. It creates up to 50 temporary verified
+users, subscribes every client, sends simultaneous root messages and replies,
+adds reactions, verifies exact database counts, and deletes every generated user
+and cascading row in `finally`. It also removes stale synthetic accounts from an
+interrupted prior run before starting.
+
+It refuses to run unless `LIVE_FORUM_TEST_ACK` equals
+`PRODUCTION_SYNTHETIC_USERS_WITH_CLEANUP`, `TEST_AGENTS` is between 2 and 50,
+and the Supabase service/publishable keys plus AppSync HTTP/realtime endpoints
+are supplied. This check proves delivery correctness for a small controlled
+burst; it is not a production-capacity or 100-million-message certification.
+
 ## Safety and required environment
 
 Never run the live test against the production database. Use a separate project populated with synthetic users and a room whose members are only test accounts. The script refuses to start unless these variables exist:
