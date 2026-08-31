@@ -1,7 +1,7 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import EmptyState from "@/components/EmptyState";
 import { reportError } from "@/lib/errorTelemetry";
-import { Users, Search, BadgeCheck, MessageSquare, UserPlus, ShieldCheck } from "lucide-react";
+import { Users, Search, BadgeCheck, MessageSquare, UserPlus, ShieldCheck, Inbox, Send, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { resolveConnectionState, type ConnectionRow } from "@/lib/connections";
 
 const getInitials = (name?: string | null): string => {
   if (!name) return "?";
@@ -60,16 +61,42 @@ const Network = () => {
     staleTime: Infinity,
   });
 
+  const connectionPeerIds = useMemo(() => [...new Set((connections ?? []).map((connection: any) =>
+    connection.requester_id === user?.id ? connection.receiver_id : connection.requester_id
+  ).filter(Boolean))], [connections, user?.id]);
+
+  // Discovery is intentionally bounded, but connection requests must never
+  // disappear merely because the other member falls outside that first page.
+  const { data: connectionMembers = [] } = useQuery({
+    queryKey: ["connection-members", connectionPeerIds],
+    queryFn: async () => {
+      const chunks: string[][] = [];
+      for (let index = 0; index < connectionPeerIds.length; index += 100) chunks.push(connectionPeerIds.slice(index, index + 100));
+      const responses = await Promise.all(chunks.map((ids) => supabase.from("profiles").select("*").in("user_id", ids)));
+      const failed = responses.find((response) => response.error);
+      if (failed?.error) throw failed.error;
+      return responses.flatMap((response) => response.data ?? []);
+    },
+    enabled: connectionPeerIds.length > 0,
+    staleTime: 60_000,
+  });
+
+  const networkMembers = useMemo(() => {
+    const merged = new Map<string, any>();
+    for (const member of [...(members ?? []), ...connectionMembers]) merged.set(member.user_id, member);
+    return [...merged.values()];
+  }, [connectionMembers, members]);
+
   const getConnectionStatus = useCallback((memberId: string) => {
     const conn = connections?.find((c: any) =>
       (c.requester_id === user?.id && c.receiver_id === memberId) ||
       (c.receiver_id === user?.id && c.requester_id === memberId)
     );
-    if (!conn) return "none";
-    if ((conn as any).status === "accepted") return "connected";
-    if ((conn as any).status !== "pending") return "none";
-    if ((conn as any).requester_id === user?.id) return "pending_sent";
-    return "pending_received";
+    const state = resolveConnectionState(conn as ConnectionRow | undefined, user?.id);
+    if (state.kind === "connected") return "connected";
+    if (state.kind === "sent") return "pending_sent";
+    if (state.kind === "received") return "pending_received";
+    return "none";
   }, [connections, user?.id]);
 
   const getConnection = (memberId: string) => connections?.find((c: any) =>
@@ -94,13 +121,18 @@ const Network = () => {
 
   const respondRequest = useMutation({
     mutationKey: ["respond_connection_request"],
-    mutationFn: async ({ memberId, status }: { memberId: string; status: string }) => {
+    mutationFn: async ({ memberId, status }: { memberId: string; status: "accepted" | "declined" }) => {
       const connection = getConnection(memberId) as any;
       if (!connection?.id) throw new Error("Invitation not found");
       const { error } = await (supabase as any).rpc("respond_connection_request", { p_request_id: connection.id, p_accept: status === "accepted" });
       if (error) throw error;
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connections"] }); toast.success("Invitation updated"); },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["connections"] });
+      queryClient.invalidateQueries({ queryKey: ["connection-status"] });
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      toast.success(variables.status === "accepted" ? "Connection accepted" : "Request declined");
+    },
     onError: (error: any) => {
       reportError(error, { flow: "connections", action: "respond_invitation" });
       toast.error(error.message || "Could not update invitation");
@@ -123,6 +155,18 @@ const Network = () => {
   });
 
   const openInvite = (member: any) => { setInvitee(member); setInviteNote(""); };
+
+  useEffect(() => {
+    if (!user?.id || !isVerified) return;
+    const channel = supabase
+      .channel(`connections-${user.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "connections" }, () => {
+        queryClient.invalidateQueries({ queryKey: ["connections"] });
+        queryClient.invalidateQueries({ queryKey: ["connection-status"] });
+      })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [isVerified, queryClient, user?.id]);
 
   const shuffled = (arr: any[]) => {
     const seed = new Date().toDateString();
@@ -162,25 +206,34 @@ const Network = () => {
   }, [members, getConnectionStatus]);
 
   const pendingMembers = useMemo(() => {
-    if (!members || !connections) return [];
-    return members.filter((m: any) => {
+    if (!connections) return [];
+    return networkMembers.filter((m: any) => {
       const status = getConnectionStatus(m.user_id);
       return status === "pending_sent" || status === "pending_received";
     });
-  }, [members, connections, getConnectionStatus]);
+  }, [networkMembers, connections, getConnectionStatus]);
 
   const connectedMembers = useMemo(() => {
-    if (!members || !connections) return [];
-    return members.filter((m: any) => getConnectionStatus(m.user_id) === "connected");
-  }, [members, connections, getConnectionStatus]);
+    if (!connections) return [];
+    return networkMembers.filter((m: any) => getConnectionStatus(m.user_id) === "connected");
+  }, [networkMembers, connections, getConnectionStatus]);
+
+  const receivedMembers = useMemo(
+    () => pendingMembers.filter((member: any) => getConnectionStatus(member.user_id) === "pending_received"),
+    [getConnectionStatus, pendingMembers],
+  );
+  const sentMembers = useMemo(
+    () => pendingMembers.filter((member: any) => getConnectionStatus(member.user_id) === "pending_sent"),
+    [getConnectionStatus, pendingMembers],
+  );
 
   const filteredMembers = useMemo(() => {
-    if (!search || !members) return null;
+    if (!search) return null;
     const q = search.toLowerCase();
-    return members.filter((m: any) =>
+    return networkMembers.filter((m: any) =>
       m.name?.toLowerCase().includes(q) || m.headline?.toLowerCase().includes(q) || m.iit_name?.toLowerCase().includes(q)
     );
-  }, [members, search]);
+  }, [networkMembers, search]);
 
   // Gate behind auth/verification AFTER all hooks
   if (!user) return <EmptyState icon={Users} title="Sign in to network" description="Connect with community members." />;
@@ -228,8 +281,8 @@ const Network = () => {
             <button key={t.key} onClick={() => setActiveTab(t.key)}
               className={`text-xs font-semibold px-4 py-2 rounded-full transition-all ${activeTab === t.key ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground bg-secondary hover:bg-accent"}`}>
               {t.label}
-              {t.key === "pending" && pendingMembers.length > 0 && (
-                <span className="ml-1 bg-destructive text-destructive-foreground rounded-full px-1.5 text-[10px]">{pendingMembers.length}</span>
+              {t.key === "pending" && receivedMembers.length > 0 && (
+                <span className="ml-1 bg-destructive text-destructive-foreground rounded-full px-1.5 text-[10px]">{receivedMembers.length}</span>
               )}
             </button>
           ))}
@@ -273,10 +326,17 @@ const Network = () => {
               </div>
             )}
             {activeTab === "pending" && (
-              <div className="space-y-2">
-                {pendingMembers.length ? pendingMembers.map((m: any) => (
-                  <PersonRow key={m.user_id} m={m} status={getConnectionStatus(m.user_id)} connection={getConnection(m.user_id)} onConnect={() => openInvite(m)} onRespond={respondRequest.mutate} onWithdraw={withdrawRequest.mutate} navigate={navigate} />
-                )) : <p className="text-sm text-muted-foreground text-center py-8">No pending requests</p>}
+              <div className="space-y-6">
+                <RequestSection icon={Inbox} title="Received" subtitle="Choose who joins your network" empty="No requests waiting for you">
+                  {receivedMembers.map((m: any) => (
+                    <PersonRow key={m.user_id} m={m} status="pending_received" connection={getConnection(m.user_id)} onConnect={() => openInvite(m)} onRespond={respondRequest.mutate} onWithdraw={withdrawRequest.mutate} navigate={navigate} responding={respondRequest.isPending} />
+                  ))}
+                </RequestSection>
+                <RequestSection icon={Send} title="Sent" subtitle="Requests awaiting a response" empty="You have no sent requests">
+                  {sentMembers.map((m: any) => (
+                    <PersonRow key={m.user_id} m={m} status="pending_sent" connection={getConnection(m.user_id)} onConnect={() => openInvite(m)} onRespond={respondRequest.mutate} onWithdraw={withdrawRequest.mutate} navigate={navigate} responding={withdrawRequest.isPending} />
+                  ))}
+                </RequestSection>
               </div>
             )}
             {activeTab === "connected" && (
@@ -305,6 +365,19 @@ const Network = () => {
         </DialogContent>
       </Dialog>
     </div>
+  );
+};
+
+const RequestSection = ({ icon: Icon, title, subtitle, empty, children }: any) => {
+  const hasItems = Array.isArray(children) ? children.length > 0 : Boolean(children);
+  return (
+    <section aria-label={`${title} connection requests`}>
+      <div className="mb-2 flex items-center gap-2">
+        <div className="grid h-8 w-8 place-items-center rounded-full bg-primary/10"><Icon className="h-4 w-4 text-primary" /></div>
+        <div><h2 className="text-sm font-bold text-foreground">{title}</h2><p className="text-[10px] text-muted-foreground">{subtitle}</p></div>
+      </div>
+      <div className="space-y-2">{hasItems ? children : <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">{empty}</p>}</div>
+    </section>
   );
 };
 
@@ -343,7 +416,7 @@ const PersonCard = ({ m, onConnect, navigate }: any) => (
   </div>
 );
 
-const PersonRow = ({ m, status, connection, onConnect, onRespond, onWithdraw, navigate }: any) => (
+const PersonRow = ({ m, status, connection, onConnect, onRespond, onWithdraw, navigate, responding = false }: any) => (
   <div className="bg-card border border-border rounded-xl p-3.5 flex items-center gap-3 cursor-pointer active:scale-[0.98] transition-transform" onClick={() => navigate(m.slug ? `/u/${m.slug}` : `/profile/${m.user_id}`)}>
     {m.avatar_url ? <img src={m.avatar_url} alt={m.name || ""} className="w-12 h-12 rounded-full object-cover flex-shrink-0" loading="lazy" />
       : <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center flex-shrink-0"><span className="text-sm font-bold text-primary">{getInitials(m.name)}</span></div>}
@@ -361,7 +434,7 @@ const PersonRow = ({ m, status, connection, onConnect, onRespond, onWithdraw, na
           <UserPlus className="w-3.5 h-3.5" /> Connect
         </Button>
       )}
-      {status === "pending_sent" && <Button size="sm" variant="ghost" className="rounded-full text-xs h-8 px-3" onClick={() => onWithdraw(m.user_id)}>Withdraw</Button>}
+      {status === "pending_sent" && <Button size="sm" variant="ghost" disabled={responding} className="rounded-full text-xs h-8 px-3" onClick={() => onWithdraw(m.user_id)}>Withdraw</Button>}
       {status === "connected" && (
         <Button size="sm" variant="outline" className="rounded-full text-xs h-8 gap-1" onClick={() => navigate(`/chats?peer=${m.user_id}`)}>
           <MessageSquare className="w-3 h-3" /> Chat
@@ -371,8 +444,8 @@ const PersonRow = ({ m, status, connection, onConnect, onRespond, onWithdraw, na
         <div className="flex flex-col items-end gap-1">
           {connection?.note && <p className="max-w-40 truncate text-[10px] text-muted-foreground" title={connection.note}>{connection.note}</p>}
           <div className="flex gap-1">
-          <Button size="sm" className="text-xs h-7 rounded-full px-3" onClick={() => onRespond({ memberId: m.user_id, status: "accepted" })}>Accept</Button>
-          <Button size="sm" variant="outline" className="text-xs h-7 rounded-full px-2" onClick={() => onRespond({ memberId: m.user_id, status: "declined" })}>Ignore</Button>
+          <Button size="sm" disabled={responding} className="text-xs h-8 rounded-full px-3" onClick={() => onRespond({ memberId: m.user_id, status: "accepted" })}>Accept</Button>
+          <Button size="sm" disabled={responding} variant="outline" className="text-xs h-8 rounded-full px-3 gap-1" onClick={() => onRespond({ memberId: m.user_id, status: "declined" })}><X className="h-3 w-3" /> Decline</Button>
           </div>
         </div>
       )}

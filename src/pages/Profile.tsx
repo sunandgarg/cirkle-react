@@ -28,6 +28,7 @@ import { compressProfileImage, convertToWebP } from "@/lib/imageUtils";
 import { findCompanyOption, shouldOfferInitialCompanyLogo } from "@/lib/companyCatalog";
 import { effectiveMemberStatus } from "@/lib/memberStatus";
 import { reportError } from "@/lib/errorTelemetry";
+import { resolveConnectionState, type ConnectionRow } from "@/lib/connections";
 
 const PROFILE_TABS = [
   { label: "About Me", compact: "About" },
@@ -169,14 +170,13 @@ const Profile = () => {
   const selectedCompanyOption = findCompanyOption(expForm.company_name, customOptions);
   const isNewCustomCompany = shouldOfferInitialCompanyLogo(expForm.company_name, !!editingExperienceId, companies, customOptions);
 
-  const { data: connectionStatus } = useQuery({
+  const { data: connectionState = { kind: "none" as const } } = useQuery({
     queryKey: ["connection-status", targetId],
     queryFn: async () => {
-      if (!user || isOwn || !targetId) return "none";
+      if (!user || isOwn || !targetId) return { kind: "none" as const };
       const { data } = await supabase.from("connections").select("*")
         .or(`and(requester_id.eq.${user.id},receiver_id.eq.${targetId}),and(requester_id.eq.${targetId},receiver_id.eq.${user.id})`);
-      if (!data || data.length === 0) return "none";
-      return data[0].status;
+      return resolveConnectionState(data?.[0] as ConnectionRow | undefined, user.id);
     },
     enabled: !!user && !isOwn && !!targetId,
   });
@@ -427,10 +427,37 @@ const Profile = () => {
       const { error } = await (supabase as any).rpc("send_connection_request", { p_receiver_id: targetId!, p_note: null });
       if (error) throw error;
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connection-status"] }); toast.success("Request sent!"); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["connection-status"] });
+      queryClient.invalidateQueries({ queryKey: ["connections"] });
+      toast.success("Connection request sent");
+    },
     onError: (error: any) => {
       reportError(error, { flow: "connections", action: "send_profile_request", metadata: { peerId: targetId } });
       toast.error(error.message || "Could not send connection request");
+    },
+  });
+
+  const respondToProfileRequest = useMutation({
+    mutationKey: ["respond_connection_request"],
+    mutationFn: async (accept: boolean) => {
+      if (connectionState.kind !== "received") throw new Error("This request is no longer pending");
+      const { error } = await (supabase as any).rpc("respond_connection_request", {
+        p_request_id: connectionState.connection.id,
+        p_accept: accept,
+      });
+      if (error) throw error;
+      return accept;
+    },
+    onSuccess: (accepted) => {
+      queryClient.invalidateQueries({ queryKey: ["connection-status"] });
+      queryClient.invalidateQueries({ queryKey: ["connections"] });
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      toast.success(accepted ? "Connection accepted" : "Request declined");
+    },
+    onError: (error: any) => {
+      reportError(error, { flow: "connections", action: "respond_from_profile", metadata: { peerId: targetId } });
+      toast.error(error.message || "Could not respond to this request");
     },
   });
 
@@ -609,9 +636,10 @@ const Profile = () => {
               </>
             ) : (
               <>
-                {connectionStatus === "none" && <Button className="flex-1 rounded-xl h-9 gap-1 text-xs" onClick={() => sendConnect.mutate()}><UserPlus className="w-3.5 h-3.5" /> Connect</Button>}
-                {connectionStatus === "pending" && <Button variant="outline" className="flex-1 rounded-xl h-9 text-xs" disabled><Check className="w-3.5 h-3.5 mr-1" /> Pending</Button>}
-                {connectionStatus === "accepted" && <Button variant="outline" className="flex-1 rounded-xl h-9 gap-1 text-xs" onClick={() => navigate(`/chats?peer=${targetId}`)}><MessageSquare className="w-3.5 h-3.5" /> Message</Button>}
+                {connectionState.kind === "none" && <Button className="flex-1 rounded-xl h-9 gap-1 text-xs" disabled={sendConnect.isPending} onClick={() => sendConnect.mutate()}><UserPlus className="w-3.5 h-3.5" /> {sendConnect.isPending ? "Sending…" : "Connect"}</Button>}
+                {connectionState.kind === "sent" && <Button variant="outline" className="flex-1 rounded-xl h-9 text-xs" disabled><Check className="w-3.5 h-3.5 mr-1" /> Request sent</Button>}
+                {connectionState.kind === "received" && <div className="flex min-w-0 flex-1 gap-2"><Button className="h-9 flex-1 rounded-xl text-xs" disabled={respondToProfileRequest.isPending} onClick={() => respondToProfileRequest.mutate(true)}>Accept</Button><Button variant="outline" className="h-9 flex-1 rounded-xl text-xs" disabled={respondToProfileRequest.isPending} onClick={() => respondToProfileRequest.mutate(false)}>Decline</Button></div>}
+                {connectionState.kind === "connected" && <Button variant="outline" className="flex-1 rounded-xl h-9 gap-1 text-xs" onClick={() => navigate(`/chats?peer=${targetId}`)}><MessageSquare className="w-3.5 h-3.5" /> Message</Button>}
                 <Button variant="outline" className="rounded-xl h-9 px-3" onClick={() => { navigator.clipboard.writeText(shareUrl); toast.success("Link copied!"); }}><Share2 className="w-3.5 h-3.5" /></Button>
               </>
             )}

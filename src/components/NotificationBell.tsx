@@ -4,10 +4,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
+import { useNavigate } from "react-router-dom";
 
 const NotificationBell = () => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
 
   const { data: notifications } = useQuery({
@@ -66,7 +68,11 @@ const NotificationBell = () => {
               <div key={n.id} className={`px-4 py-3 border-b border-border last:border-0 ${!n.is_read ? "bg-primary/5" : ""}`}>
                 <p className="text-sm font-medium text-foreground">{n.title}</p>
                 {n.message && <p className="text-xs text-muted-foreground mt-0.5">{n.message}</p>}
-                <p className="text-[10px] text-muted-foreground mt-1">{formatDistanceToNow(new Date(n.created_at), { addSuffix: true })}</p>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <p className="text-[10px] text-muted-foreground">{formatDistanceToNow(new Date(n.created_at), { addSuffix: true })}</p>
+                  {n.type === "connection_request" && <button className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-bold text-primary hover:bg-primary/15" onClick={() => { setOpen(false); navigate("/network?tab=pending"); }}>Review request</button>}
+                  {n.type === "connection_response" && <button className="rounded-full bg-secondary px-2.5 py-1 text-[10px] font-bold text-foreground hover:bg-accent" onClick={() => { setOpen(false); navigate("/network?tab=connected"); }}>View network</button>}
+                </div>
               </div>
             )) : (
               <div className="py-8 text-center"><p className="text-sm text-muted-foreground">No notifications yet</p></div>
