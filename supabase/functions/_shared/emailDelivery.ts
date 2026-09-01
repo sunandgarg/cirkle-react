@@ -11,7 +11,7 @@ export type TransactionalEmail = {
   idempotencyKey?: string;
 };
 
-type EmailProvider = "zeptomail" | "zavu" | "ses";
+type EmailProvider = "brevo" | "zeptomail" | "zavu" | "ses";
 
 type EmailDeliveryOptions = {
   primary?: string;
@@ -23,6 +23,14 @@ const bytesToHex = (buffer: ArrayBuffer) =>
 
 const sha256Hex = async (value: string) =>
   bytesToHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+
+const deterministicUuid = async (value: string) => {
+  const hex = (await sha256Hex(value)).slice(0, 32).split("");
+  hex[12] = "4";
+  hex[16] = ((Number.parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+  const normalized = hex.join("");
+  return `${normalized.slice(0, 8)}-${normalized.slice(8, 12)}-${normalized.slice(12, 16)}-${normalized.slice(16, 20)}-${normalized.slice(20)}`;
+};
 
 const hmac = async (key: ArrayBuffer | Uint8Array, value: string) =>
   crypto.subtle.sign(
@@ -128,6 +136,45 @@ const sendWithZavu = async (email: TransactionalEmail) => {
   }
 };
 
+const sendWithBrevo = async (email: TransactionalEmail) => {
+  const apiKey = Deno.env.get("BREVO_API_KEY") || Deno.env.get("SENDINBLUE_API_KEY");
+  if (!apiKey) throw new Error("Brevo is not configured");
+
+  const from = parseFrom(Deno.env.get("VERIFICATION_EMAIL_FROM") || DEFAULT_FROM);
+  const endpoint = Deno.env.get("BREVO_API_URL") || "https://api.brevo.com/v3/smtp/email";
+  const branded = await prepareEmailBranding(email.html);
+  const idempotencyKey = email.idempotencyKey
+    ? await deterministicUuid(email.idempotencyKey)
+    : undefined;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "api-key": apiKey,
+    },
+    body: JSON.stringify({
+      sender: from,
+      to: [{ email: email.to }],
+      subject: email.subject,
+      textContent: email.text,
+      // Brevo's transactional endpoint does not expose Content-ID for inline
+      // attachments, so use the public Cirkle asset instead of a broken cid URL.
+      htmlContent: branded.html.replace(/cid:cirkle-logo/g, EMAIL_LOGO_URL),
+      ...(idempotencyKey
+        ? { headers: { "Idempotency-Key": idempotencyKey } }
+        : {}),
+      tags: ["cirkle-transactional"],
+    }),
+    signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    console.error("Brevo email delivery failed", response.status, detail.slice(0, 300));
+    throw new Error(`Brevo rejected the email (${response.status})`);
+  }
+};
+
 const parseFrom = (from: string) => {
   const match = from.match(/^\s*"?([^"<]*)"?\s*<([^>]+)>\s*$/);
   if (!match) return { address: from.trim(), name: "Cirkle" };
@@ -175,10 +222,10 @@ const sendWithZeptoMail = async (email: TransactionalEmail) => {
   }
 };
 
-const allProviders: EmailProvider[] = ["zeptomail", "zavu", "ses"];
+const allProviders: EmailProvider[] = ["zeptomail", "brevo", "zavu", "ses"];
 
 const isProvider = (value: string): value is EmailProvider =>
-  value === "zeptomail" || value === "zavu" || value === "ses";
+  value === "brevo" || value === "zeptomail" || value === "zavu" || value === "ses";
 
 const normalizeProvider = (value: string): EmailProvider | undefined => {
   const normalized = value.trim().toLowerCase();
@@ -187,6 +234,9 @@ const normalizeProvider = (value: string): EmailProvider | undefined => {
 };
 
 const hasProviderConfig = (provider: EmailProvider) => {
+  if (provider === "brevo") {
+    return Boolean(Deno.env.get("BREVO_API_KEY") || Deno.env.get("SENDINBLUE_API_KEY"));
+  }
   if (provider === "zeptomail") {
     return Boolean(Deno.env.get("ZEPTOMAIL_API_KEY") || Deno.env.get("ZOHO_ZEPTOMAIL_TOKEN") || Deno.env.get("ZEPTOMAIL_SEND_MAIL_TOKEN"));
   }
@@ -197,7 +247,13 @@ const hasProviderConfig = (provider: EmailProvider) => {
 export const resolveEmailProviderOrder = (primaryValue?: string, fallbackValue?: string): EmailProvider[] => {
   const configuredPrimary = primaryValue ? normalizeProvider(primaryValue) : undefined;
   const primary = configuredPrimary ||
-    (hasProviderConfig("zeptomail") ? "zeptomail" : hasProviderConfig("zavu") ? "zavu" : "ses");
+    (hasProviderConfig("zeptomail")
+      ? "zeptomail"
+      : hasProviderConfig("brevo")
+      ? "brevo"
+      : hasProviderConfig("zavu")
+      ? "zavu"
+      : "ses");
   const configuredFallbacks = (fallbackValue || "")
     .split(",")
     .map(normalizeProvider)
@@ -207,7 +263,13 @@ export const resolveEmailProviderOrder = (primaryValue?: string, fallbackValue?:
 };
 
 const deliver = (provider: EmailProvider, email: TransactionalEmail) =>
-  provider === "zeptomail" ? sendWithZeptoMail(email) : provider === "zavu" ? sendWithZavu(email) : sendWithSes(email);
+  provider === "brevo"
+    ? sendWithBrevo(email)
+    : provider === "zeptomail"
+    ? sendWithZeptoMail(email)
+    : provider === "zavu"
+    ? sendWithZavu(email)
+    : sendWithSes(email);
 
 export const sendTransactionalEmail = async (
   email: TransactionalEmail,

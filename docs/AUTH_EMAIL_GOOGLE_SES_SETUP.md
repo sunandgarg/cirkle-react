@@ -1,4 +1,4 @@
-# Auth, Google, ZeptoMail, Zavu, and AWS SES Setup
+# Auth, Google, Brevo, ZeptoMail, Zavu, and AWS SES Setup
 
 This app now has three account login paths on `/auth`:
 
@@ -52,6 +52,27 @@ http://localhost:8091/**
 Zoho ZeptoMail is the primary transactional provider. Zavu and AWS SES can stay
 configured as automatic fallbacks, so email delivery continues if ZeptoMail is
 temporarily unavailable.
+
+Brevo is also supported through its transactional REST API. Authenticate
+`cirkle.world` in Brevo, register `verify@cirkle.world` as a sender, and then
+store the API key only as a Supabase Edge Function secret:
+
+```bash
+supabase secrets set BREVO_API_KEY=... --project-ref bugwubrwvlqayxwcazfd
+```
+
+Use `brevo` in either provider-order secret after the domain is authenticated.
+For example, to test Brevo specifically for institute verification while
+retaining the existing providers as fallbacks:
+
+```bash
+supabase secrets set \
+  EMAIL_PROVIDER_INSTITUTE_PRIMARY=brevo \
+  EMAIL_PROVIDER_INSTITUTE_FALLBACK=zeptomail,zavu,ses \
+  --project-ref bugwubrwvlqayxwcazfd
+```
+
+`BREVO_API_KEY` is server-only and must never use a `VITE_` prefix.
 Set these Supabase Edge Function secrets:
 
 ```bash
