@@ -136,7 +136,7 @@ const Jobs = () => {
   };
 
   return (
-    <div className="flex min-h-0 flex-col bg-background">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="sticky top-0 z-20 shrink-0 border-b border-border/70 bg-background/95 backdrop-blur-xl">
         <div className="mx-auto max-w-5xl px-4 pb-3 pt-4 sm:px-6">
           <div className="flex items-start justify-between gap-3">
@@ -148,7 +148,7 @@ const Jobs = () => {
         </div>
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
+      <main className="native-scroll-region flex-1">
         <div className="mx-auto max-w-5xl px-4 py-4 pb-24 sm:px-6">
           {error ? <div className="rounded-2xl border border-destructive/25 bg-destructive/5 p-6 text-center"><BriefcaseBusiness className="mx-auto h-8 w-8 text-destructive" /><h2 className="mt-3 text-sm font-bold">Jobs could not be loaded</h2><p className="mt-1 text-xs text-muted-foreground">Check your connection and try again. If this continues, the jobs database migration may still need deployment.</p><Button variant="outline" className="mt-4 rounded-xl" onClick={() => refetch()}><RefreshCw className="h-4 w-4" /> Try again</Button></div>
             : isLoading ? <div className="grid gap-3 md:grid-cols-2">{[1, 2, 3, 4].map((item) => <div key={item} className="h-56 animate-pulse rounded-2xl border border-border bg-card p-4"><div className="h-11 w-11 rounded-xl bg-secondary" /><div className="mt-4 h-4 w-2/3 rounded bg-secondary" /><div className="mt-2 h-3 w-1/2 rounded bg-secondary" /><div className="mt-7 h-14 rounded bg-secondary/70" /></div>)}</div>

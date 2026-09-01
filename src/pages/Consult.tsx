@@ -170,7 +170,7 @@ const Consult = () => {
   }, [bookingExpert, experts, isVerified, searchParams, setSearchParams]);
 
   return (
-    <div className="bg-background flex flex-col min-h-0">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       {/* Booking Modal - topmate.io style */}
       {bookingExpert && (
         <div className="fixed inset-0 z-[60] bg-background/80 backdrop-blur-sm flex items-end sm:items-center justify-center">
@@ -309,7 +309,7 @@ const Consult = () => {
       </div>
 
       {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div className="native-scroll-region flex-1">
         <main className="max-w-5xl mx-auto px-4 py-4 space-y-4 pb-4">
           {activeTab === "bookings" && (
             <>

@@ -727,7 +727,7 @@ const Chats = () => {
           const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 140;
           followLiveRef.current = nearBottom;
           if (nearBottom) setNewMessageCount(0);
-        }} className="relative flex-1 overflow-y-auto px-3 py-4 chat-wallpaper overscroll-contain">
+        }} className="native-scroll-region relative flex-1 px-3 py-4 chat-wallpaper">
           {hasOlder && <div className="flex justify-center mb-3"><Button size="sm" variant="secondary" disabled={loadingOlder} onClick={loadOlder}>{loadingOlder && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}Load earlier messages</Button></div>}
           <div style={{ height: `${messageVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
             {messageVirtualizer.getVirtualItems().map((virtualRow) => {

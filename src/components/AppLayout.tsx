@@ -57,15 +57,6 @@ const AppLayout = () => {
     });
   }, [location.pathname, location.search, profileResolved, user?.id]);
 
-  // Forum owns its message scroller. Locking the document-level viewport keeps
-  // mobile browsers from panning the entire application when the composer is
-  // focused and the software keyboard changes the visual viewport.
-  useEffect(() => {
-    if (!isForum) return;
-    document.documentElement.dataset.appView = "forum";
-    return () => { delete document.documentElement.dataset.appView; };
-  }, [isForum]);
-
   // If verified but onboarding not completed, show onboarding wizard
   const needsOnboarding = profileResolved && user && isVerified && profile && !profile.onboarding_completed;
 
@@ -105,8 +96,7 @@ const AppLayout = () => {
         )}
         <main
           id="main-content"
-          className={`flex-1 min-h-0 overflow-x-hidden ${isForum ? "overflow-hidden overscroll-none" : "overflow-y-auto overscroll-y-contain pb-[72px] lg:pb-0"}`}
-          style={isForum ? undefined : { WebkitOverflowScrolling: "touch" }}
+          className={`flex-1 min-h-0 ${isForum ? "overflow-hidden" : "app-scroll-region pb-[72px] lg:pb-0"}`}
         >
           <ErrorBoundary>
             <Outlet />

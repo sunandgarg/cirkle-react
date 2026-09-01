@@ -535,7 +535,7 @@ const Admin = () => {
   }
 
   return (
-    <div className="h-[100dvh] overflow-y-auto overscroll-contain bg-background [scrollbar-gutter:stable]">
+    <div className="native-scroll-region h-[100dvh] bg-background [scrollbar-gutter:stable]">
       <header className="sticky top-0 z-40 bg-card border-b border-border px-4 py-4">
         <div className="flex items-center gap-3 max-w-6xl mx-auto">
           <button onClick={() => navigate(-1)} className="p-1 text-foreground hover-scale"><ArrowLeft className="w-5 h-5" /></button>

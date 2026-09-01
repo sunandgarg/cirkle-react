@@ -1882,7 +1882,7 @@ const Forum = () => {
         <div className="h-12 flex items-center px-4 border-b border-border flex-shrink-0">
           <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Channels</h2>
         </div>
-        <div className="flex-1 overflow-y-auto scrollbar-hide">
+        <div className="native-scroll-region flex-1 scrollbar-hide">
           <ScopeList
             scopes={scopes} activeScope={activeScope}
             unreadDots={unreadDots}
@@ -1902,7 +1902,7 @@ const Forum = () => {
             Channels
             <button onClick={() => setSidebarOpen(false)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
           </SheetTitle>
-          <div className="flex-1 overflow-y-auto scrollbar-hide">
+          <div className="native-scroll-region flex-1 scrollbar-hide">
             <ScopeList
               scopes={scopes} activeScope={activeScope}
               unreadDots={unreadDots}
@@ -2030,7 +2030,7 @@ const Forum = () => {
           ref={scrollContainerRef}
           onScroll={handleScroll}
           onPointerDown={dismissComposerOverlays}
-          className="forum-chat-wallpaper flex-1 overflow-y-auto overflow-x-hidden min-h-0 overscroll-y-contain"
+          className="forum-chat-wallpaper forum-scroll-region flex-1"
         >
           <div className="mx-auto w-full max-w-5xl px-0">
             {/* Pagination: Beginning marker or spinner */}
@@ -2360,7 +2360,7 @@ const Forum = () => {
             <h3 className="text-sm font-bold text-foreground">Room members</h3>
             <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-bold">{scopeMembers?.length || 0}</span>
           </div>
-          <div className="flex-1 overflow-y-auto p-2 scrollbar-hide">
+          <div className="native-scroll-region flex-1 p-2 scrollbar-hide">
             <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-2 py-2">
               Recent contributors - {scopeMembers?.length || 0}
             </p>
@@ -2401,7 +2401,7 @@ const Forum = () => {
             <Users className="w-4 h-4 text-primary" /> Room members
             <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-bold ml-auto">{scopeMembers?.length || 0}</span>
           </SheetTitle>
-          <div className="overflow-y-auto scrollbar-hide p-2 bg-card" style={{ height: 'calc(100% - 56px)' }}>
+          <div className="native-scroll-region scrollbar-hide p-2 bg-card" style={{ height: 'calc(100% - 56px)' }}>
             <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-2 py-2">
               Recent contributors - {scopeMembers?.length || 0}
             </p>

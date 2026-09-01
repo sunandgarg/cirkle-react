@@ -108,25 +108,6 @@ const Landing = () => {
     if (!loading && user) navigate("/cirkle-forum", { replace: true });
   }, [user, loading, navigate]);
 
-  // Full-screen app routes and dialogs intentionally lock document scrolling.
-  // If a member returns to the public homepage during one of those transitions,
-  // clear any stale inline lock and restore native wheel/touch scrolling.
-  useEffect(() => {
-    const html = document.documentElement;
-    const body = document.body;
-    html.style.overflowY = "auto";
-    body.style.overflowY = "auto";
-    html.style.touchAction = "pan-y";
-    body.style.touchAction = "pan-y";
-
-    return () => {
-      html.style.removeProperty("overflow-y");
-      body.style.removeProperty("overflow-y");
-      html.style.removeProperty("touch-action");
-      body.style.removeProperty("touch-action");
-    };
-  }, []);
-
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
