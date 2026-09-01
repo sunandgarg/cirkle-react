@@ -1,37 +1,85 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, BriefcaseBusiness, Clock3, MessageCircle, RefreshCw, Send, UserPlus, Users } from "lucide-react";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Activity, ArrowDownRight, ArrowUpRight, BadgeCheck, BriefcaseBusiness, CalendarDays,
+  CheckCircle2, CircleDollarSign, Clock3, Eye, FileCheck2, GraduationCap, MessageCircle,
+  RefreshCw, Send, ShieldAlert, Sparkles, UserCheck, UserPlus, Users, Workflow,
+} from "lucide-react";
+import {
+  Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from "recharts";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 
-type DailyPoint = { day: string; registrations: number; active_users: number; sessions: number; messages: number };
+type DailyPoint = {
+  day: string;
+  registrations: number;
+  active_users: number;
+  sessions: number;
+  forum_messages: number;
+  direct_messages: number;
+  messages: number;
+  applications: number;
+};
 type RetentionPoint = { day: number; eligible: number; returned: number; rate: number };
+type DistributionPoint = { label: string; value: number };
 type Analytics = {
   generated_at: string;
   timezone: string;
-  summary: {
-    total_users: number;
-    registrations_today: number;
-    active_users_today: number;
-    sessions_today: number;
-    forum_messages_today: number;
-    direct_messages_today: number;
-    messages_7d: number;
-    messages_total: number;
-    published_jobs: number;
-    applications_today: number;
-  };
+  summary: Record<string, number>;
   daily: DailyPoint[];
   retention: RetentionPoint[];
+  top_iits: DistributionPoint[];
+  member_status: DistributionPoint[];
 };
 
 const compact = new Intl.NumberFormat("en-IN", { notation: "compact", maximumFractionDigits: 1 });
+const integer = new Intl.NumberFormat("en-IN");
+const money = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+const pct = (part: number, whole: number) => whole > 0 ? Math.round((part / whole) * 1000) / 10 : 0;
+const safe = (value: unknown) => Number(value) || 0;
+const titleCase = (value: string) => value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+const dateLabel = (value: string) => new Date(`${value}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+
+const Trend = ({ current, previous }: { current: number; previous: number }) => {
+  if (!previous && !current) return <span className="text-muted-foreground">No change</span>;
+  const change = previous ? ((current - previous) / previous) * 100 : 100;
+  const positive = change >= 0;
+  return <span className={`inline-flex items-center gap-0.5 font-semibold ${positive ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+    {positive ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}{Math.abs(change).toFixed(0)}%
+  </span>;
+};
+
+const KpiCard = ({ label, value, note, icon: Icon, current, previous, tone = "blue" }: {
+  label: string; value: number | string; note: string; icon: typeof Users; current?: number; previous?: number; tone?: "blue" | "green" | "violet" | "amber";
+}) => {
+  const tones = {
+    blue: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+    green: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    violet: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+    amber: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  };
+  return <article className="group rounded-2xl border border-border/70 bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-md">
+    <div className="flex items-start justify-between gap-3">
+      <div className={`grid h-9 w-9 place-items-center rounded-xl ${tones[tone]}`}><Icon className="h-4.5 w-4.5" /></div>
+      {current !== undefined && previous !== undefined && <div className="text-[10px]"><Trend current={current} previous={previous} /></div>}
+    </div>
+    <p className="mt-4 text-2xl font-black tracking-tight text-foreground">{typeof value === "number" ? compact.format(value) : value}</p>
+    <p className="mt-1 text-xs font-bold text-foreground/80">{label}</p>
+    <p className="mt-1 min-h-4 text-[10px] leading-relaxed text-muted-foreground">{note}</p>
+  </article>;
+};
+
+const SectionHeader = ({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) => <div className="flex items-start justify-between gap-3">
+  <div><h3 className="text-sm font-black tracking-tight text-foreground">{title}</h3><p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p></div>{action}
+</div>;
 
 const AdminAnalyticsDashboard = ({ owner }: { owner: boolean }) => {
+  const [range, setRange] = useState<7 | 30 | 90>(30);
   const analytics = useQuery({
-    queryKey: ["owner-analytics", 30],
+    queryKey: ["owner-analytics", range],
     queryFn: async () => {
-      const { data, error } = await (supabase as any).rpc("get_admin_analytics", { p_days: 30 });
+      const { data, error } = await (supabase as any).rpc("get_admin_analytics", { p_days: range });
       if (error) throw error;
       return data as Analytics;
     },
@@ -40,42 +88,135 @@ const AdminAnalyticsDashboard = ({ owner }: { owner: boolean }) => {
     refetchInterval: 5 * 60_000,
   });
 
-  if (!owner) return <div className="rounded-2xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">The business dashboard is restricted to the platform owner.</div>;
-  if (analytics.isLoading) return <div className="grid min-h-64 place-items-center"><RefreshCw className="h-6 w-6 animate-spin text-primary" /></div>;
-  if (analytics.error || !analytics.data) return <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive"><p className="font-bold">Analytics could not load</p><p className="mt-1 text-xs">{(analytics.error as Error)?.message || "Try refreshing after the database migration is active."}</p></div>;
+  const derived = useMemo(() => {
+    const daily = analytics.data?.daily ?? [];
+    const today = daily.at(-1);
+    const yesterday = daily.at(-2);
+    const last7 = daily.slice(-7);
+    const previous7 = daily.slice(-14, -7);
+    const sum = (items: DailyPoint[], key: keyof DailyPoint) => items.reduce((total, item) => total + safe(item[key]), 0);
+    return {
+      today, yesterday,
+      messages7: sum(last7, "messages"), previousMessages7: sum(previous7, "messages"),
+      registrations7: sum(last7, "registrations"), previousRegistrations7: sum(previous7, "registrations"),
+    };
+  }, [analytics.data?.daily]);
 
-  const { summary, daily, retention } = analytics.data;
-  const messagesToday = Number(summary.forum_messages_today) + Number(summary.direct_messages_today);
-  const cards = [
-    ["Total members", summary.total_users, Users, "All registered accounts"],
-    ["Registered today", summary.registrations_today, UserPlus, "New accounts in India time"],
-    ["Active today", summary.active_users_today, Activity, "Unique members seen today"],
-    ["Sessions today", summary.sessions_today, Clock3, "New browser sessions"],
-    ["Messages today", messagesToday, MessageCircle, `${summary.forum_messages_today} forum · ${summary.direct_messages_today} direct`],
-    ["Messages, 7 days", summary.messages_7d, Send, "Forum and direct combined"],
-    ["All messages", summary.messages_total, MessageCircle, "Server-stored total"],
-    ["Live jobs", summary.published_jobs, BriefcaseBusiness, `${summary.applications_today} applications today`],
-  ] as const;
+  if (!owner) return <div className="rounded-2xl border border-border bg-card p-10 text-center"><ShieldAlert className="mx-auto h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-bold">Owner analytics</p><p className="mt-1 text-xs text-muted-foreground">Business intelligence is restricted to the platform owner.</p></div>;
+  if (analytics.isLoading) return <div className="grid min-h-[420px] place-items-center rounded-3xl border border-border/60 bg-card"><div className="text-center"><RefreshCw className="mx-auto h-6 w-6 animate-spin text-primary" /><p className="mt-3 text-xs text-muted-foreground">Building your command centre…</p></div></div>;
+  if (analytics.error || !analytics.data) return <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive"><p className="font-bold">Analytics could not load</p><p className="mt-1 text-xs">{(analytics.error as Error)?.message || "Apply the latest database migration and refresh."}</p></div>;
+
+  const { summary: s, daily, retention, top_iits: topIits = [], member_status: memberStatus = [] } = analytics.data;
+  const messagesToday = safe(s.forum_messages_today) + safe(s.direct_messages_today);
+  const verificationRate = pct(safe(s.verified_users), safe(s.total_users));
+  const onboardingRate = pct(safe(s.onboarding_completed), safe(s.total_users));
+  const dauMau = pct(safe(s.active_users_today), safe(s.active_users_30d));
+  const acceptanceRate = pct(safe(s.accepted_connections), safe(s.accepted_connections) + safe(s.pending_connections));
+  const jobConversion = pct(safe(s.applications_7d), safe(s.published_jobs));
+  const maxIit = Math.max(1, ...topIits.map((item) => safe(item.value)));
+  const totalStatus = memberStatus.reduce((total, item) => total + safe(item.value), 0);
+  const queueTotal = safe(s.open_reports) + safe(s.pending_documents) + safe(s.pending_courses) + safe(s.pending_consultations);
+
+  const primaryCards = [
+    { label: "Total members", value: safe(s.total_users), note: `${compact.format(safe(s.registrations_30d))} joined in the last 30 days`, icon: Users, current: derived.registrations7, previous: derived.previousRegistrations7, tone: "blue" as const },
+    { label: "Daily active members", value: safe(s.active_users_today), note: `${dauMau}% DAU / MAU stickiness`, icon: Activity, current: safe(derived.today?.active_users), previous: safe(derived.yesterday?.active_users), tone: "green" as const },
+    { label: "Messages today", value: messagesToday, note: `${compact.format(safe(s.forum_messages_today))} forum · ${compact.format(safe(s.direct_messages_today))} direct`, icon: MessageCircle, current: messagesToday, previous: safe(derived.yesterday?.messages), tone: "violet" as const },
+    { label: "Operational queue", value: queueTotal, note: queueTotal ? "Items requiring admin attention" : "Everything is caught up", icon: Workflow, tone: queueTotal ? "amber" as const : "green" as const },
+  ];
 
   return <div className="space-y-5">
-    <div className="flex items-start justify-between gap-3">
-      <div><h2 className="text-lg font-black">Business health</h2><p className="text-xs text-muted-foreground">Live first-party product KPIs · Asia/Kolkata</p></div>
-      <Button size="sm" variant="outline" className="rounded-xl" onClick={() => analytics.refetch()} disabled={analytics.isFetching}><RefreshCw className={`h-3.5 w-3.5 ${analytics.isFetching ? "animate-spin" : ""}`} /> Refresh</Button>
+    <section className="relative overflow-hidden rounded-3xl border border-primary/15 bg-gradient-to-br from-primary/[0.09] via-card to-card p-5 sm:p-6">
+      <div className="pointer-events-none absolute -right-16 -top-20 h-52 w-52 rounded-full bg-primary/10 blur-3xl" />
+      <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex gap-3"><div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/20"><Sparkles className="h-5 w-5" /></div><div><p className="text-[10px] font-black uppercase tracking-[0.2em] text-primary">Founder command centre</p><h2 className="mt-1 text-xl font-black tracking-tight sm:text-2xl">Cirkle business health</h2><p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">Live first-party product intelligence across growth, engagement, trust, marketplace and operations.</p></div></div>
+        <div className="flex items-center gap-2 self-start"><div className="hidden rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 sm:block"><span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />Live data</div><Button size="sm" variant="outline" className="h-9 rounded-xl bg-background/70" onClick={() => analytics.refetch()} disabled={analytics.isFetching}><RefreshCw className={`h-3.5 w-3.5 ${analytics.isFetching ? "animate-spin" : ""}`} /><span className="hidden sm:inline">Refresh</span></Button></div>
+      </div>
+      <div className="relative mt-5 grid grid-cols-2 gap-2 border-t border-border/50 pt-4 sm:grid-cols-4"><div><p className="text-[10px] text-muted-foreground">Verified members</p><p className="mt-0.5 text-sm font-black">{verificationRate}%</p></div><div><p className="text-[10px] text-muted-foreground">Onboarding complete</p><p className="mt-0.5 text-sm font-black">{onboardingRate}%</p></div><div><p className="text-[10px] text-muted-foreground">7-day active</p><p className="mt-0.5 text-sm font-black">{compact.format(safe(s.active_users_7d))}</p></div><div><p className="text-[10px] text-muted-foreground">Last updated</p><p className="mt-0.5 text-sm font-black">{new Date(analytics.data.generated_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</p></div></div>
+    </section>
+
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">{primaryCards.map((card) => <KpiCard key={card.label} {...card} />)}</div>
+
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,0.8fr)]">
+      <section className="rounded-3xl border border-border/70 bg-card p-4 shadow-sm sm:p-5">
+        <SectionHeader title="Growth and engagement" description="Member activity and server-persisted messaging volume" action={<div className="flex rounded-xl bg-secondary p-1">{([7, 30, 90] as const).map((days) => <button key={days} onClick={() => setRange(days)} className={`rounded-lg px-2.5 py-1 text-[10px] font-bold transition ${range === days ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>{days}D</button>)}</div>} />
+        <div className="mt-5 h-72 w-full"><ResponsiveContainer width="100%" height="100%"><AreaChart data={daily} margin={{ top: 5, right: 6, left: -26, bottom: 0 }}><defs><linearGradient id="messagesFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.28} /><stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0.01} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" opacity={0.12} vertical={false} /><XAxis dataKey="day" tickFormatter={dateLabel} tick={{ fontSize: 9 }} minTickGap={28} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 9 }} allowDecimals={false} axisLine={false} tickLine={false} /><Tooltip labelFormatter={(value) => new Date(`${value}T00:00:00`).toLocaleDateString("en-IN", { dateStyle: "medium" })} contentStyle={{ borderRadius: 14, border: "1px solid hsl(var(--border))", background: "hsl(var(--card))", fontSize: 11 }} /><Area type="monotone" dataKey="messages" name="Messages" stroke="hsl(var(--primary))" strokeWidth={2.5} fill="url(#messagesFill)" /><Area type="monotone" dataKey="active_users" name="Active members" stroke="#10b981" strokeWidth={2} fill="transparent" /></AreaChart></ResponsiveContainer></div>
+        <div className="mt-3 grid grid-cols-3 divide-x divide-border rounded-2xl bg-secondary/45 p-3 text-center"><div><p className="text-[10px] text-muted-foreground">7-day messages</p><p className="mt-1 text-sm font-black">{compact.format(safe(s.messages_7d))}</p></div><div><p className="text-[10px] text-muted-foreground">30-day messages</p><p className="mt-1 text-sm font-black">{compact.format(safe(s.messages_30d))}</p></div><div><p className="text-[10px] text-muted-foreground">All-time messages</p><p className="mt-1 text-sm font-black">{compact.format(safe(s.messages_total))}</p></div></div>
+      </section>
+
+      <section className="rounded-3xl border border-border/70 bg-card p-4 shadow-sm sm:p-5">
+        <SectionHeader title="Action centre" description="Prioritised queues that need a decision" />
+        <div className="mt-4 space-y-2.5">{[
+          { label: "Member reports", value: s.open_reports, Icon: ShieldAlert, note: "Review safety reports", tone: "text-rose-600 bg-rose-500/10" },
+          { label: "Document reviews", value: s.pending_documents, Icon: FileCheck2, note: "Approve identity evidence", tone: "text-amber-600 bg-amber-500/10" },
+          { label: "Course requests", value: s.pending_courses, Icon: GraduationCap, note: "Validate new programmes", tone: "text-blue-600 bg-blue-500/10" },
+          { label: "Consult requests", value: s.pending_consultations, Icon: Clock3, note: "Coordinate pending sessions", tone: "text-violet-600 bg-violet-500/10" },
+        ].map(({ label, value, Icon, note, tone }) => <div key={label} className="flex items-center gap-3 rounded-2xl border border-border/60 p-3"><div className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${tone}`}><Icon className="h-4 w-4" /></div><div className="min-w-0 flex-1"><p className="truncate text-xs font-bold">{label}</p><p className="truncate text-[10px] text-muted-foreground">{note}</p></div><span className={`min-w-7 rounded-full px-2 py-1 text-center text-[11px] font-black ${safe(value) ? "bg-foreground text-background" : "bg-secondary text-muted-foreground"}`}>{compact.format(safe(value))}</span></div>)}</div>
+        <div className={`mt-4 flex items-center gap-2 rounded-2xl p-3 ${queueTotal ? "bg-amber-500/10 text-amber-800 dark:text-amber-200" : "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"}`}>{queueTotal ? <Clock3 className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}<p className="text-[11px] font-semibold">{queueTotal ? `${integer.format(queueTotal)} total items need attention` : "All operational queues are clear"}</p></div>
+      </section>
     </div>
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{cards.map(([label, value, Icon, note]) => <article key={label} className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-2"><p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{label}</p><Icon className="h-4 w-4 text-primary" /></div>
-      <p className="mt-2 text-2xl font-black">{compact.format(Number(value))}</p><p className="mt-1 truncate text-[10px] text-muted-foreground">{note}</p>
-    </article>)}</div>
 
-    <section className="rounded-2xl border border-border bg-card p-4 sm:p-5">
-      <div><h3 className="text-sm font-bold">30-day activity</h3><p className="text-[11px] text-muted-foreground">Daily active members and server-stored messages</p></div>
-      <div className="mt-4 h-64 w-full"><ResponsiveContainer width="100%" height="100%"><LineChart data={daily} margin={{ top: 5, right: 8, left: -24, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" opacity={0.18} /><XAxis dataKey="day" tickFormatter={(value) => new Date(`${value}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" })} tick={{ fontSize: 10 }} minTickGap={24} /><YAxis tick={{ fontSize: 10 }} allowDecimals={false} /><Tooltip labelFormatter={(value) => new Date(`${value}T00:00:00`).toLocaleDateString("en-IN", { dateStyle: "medium" })} /><Line type="monotone" dataKey="messages" name="Messages" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="active_users" name="Active members" stroke="#10b981" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></div>
-    </section>
+    <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
+      <section className="rounded-3xl border border-border/70 bg-card p-4 shadow-sm sm:p-5">
+        <SectionHeader title="Member quality funnel" description="From registration to a trusted, complete profile" />
+        <div className="mt-5 space-y-4">
+          {[
+            { label: "Registered", value: safe(s.total_users), rate: 100, Icon: Users },
+            { label: "Onboarding complete", value: safe(s.onboarding_completed), rate: onboardingRate, Icon: UserCheck },
+            { label: "Identity verified", value: safe(s.verified_users), rate: verificationRate, Icon: BadgeCheck },
+            { label: "Active in 30 days", value: safe(s.active_users_30d), rate: pct(safe(s.active_users_30d), safe(s.total_users)), Icon: Activity },
+          ].map(({ label, value, rate, Icon }) => (
+            <div key={label}>
+              <div className="mb-1.5 flex items-center justify-between text-[11px]">
+                <span className="flex items-center gap-1.5 font-semibold"><Icon className="h-3.5 w-3.5 text-primary" />{label}</span>
+                <span className="font-black">{compact.format(value)} <span className="font-medium text-muted-foreground">· {rate}%</span></span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-secondary"><div className="h-full rounded-full bg-gradient-to-r from-primary to-blue-400 transition-all" style={{ width: `${Math.min(100, rate)}%` }} /></div>
+            </div>
+          ))}
+        </div>
+      </section>
 
-    <section className="rounded-2xl border border-border bg-card p-4 sm:p-5">
-      <h3 className="text-sm font-bold">Cohort return rate</h3><p className="text-[11px] text-muted-foreground">Members active exactly 1, 2, 3, 7, 14 or 30 days after registration. Tracking improves from this release onward.</p>
-      <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6">{retention.map((point) => <div key={point.day} className="rounded-xl bg-secondary/60 p-3 text-center"><p className="text-[10px] font-bold uppercase text-muted-foreground">Day {point.day}</p><p className="mt-1 text-lg font-black text-primary">{point.rate}%</p><p className="text-[9px] text-muted-foreground">{point.returned}/{point.eligible}</p></div>)}</div>
-    </section>
+      <section className="rounded-3xl border border-border/70 bg-card p-4 shadow-sm sm:p-5">
+        <SectionHeader title="Community distribution" description="Largest institute communities by verified profile data" />
+        <div className="mt-4 space-y-3">
+          {topIits.length ? topIits.map((item, index) => (
+            <div key={item.label} className="flex items-center gap-3">
+              <span className="w-4 text-[10px] font-bold text-muted-foreground">{index + 1}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex justify-between gap-2"><p className="truncate text-[11px] font-semibold">{item.label}</p><p className="text-[10px] font-bold">{compact.format(safe(item.value))}</p></div>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-secondary"><div className="h-full rounded-full bg-primary" style={{ width: `${(safe(item.value) / maxIit) * 100}%`, opacity: 1 - index * 0.08 }} /></div>
+              </div>
+            </div>
+          )) : <p className="py-10 text-center text-xs text-muted-foreground">Institute data will appear as profiles are completed.</p>}
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-border/70 bg-card p-4 shadow-sm sm:p-5 lg:col-span-2 xl:col-span-1">
+        <SectionHeader title="Member lifecycle" description="Current student and alumni mix" />
+        <div className="mt-4 h-40"><ResponsiveContainer width="100%" height="100%"><BarChart data={memberStatus} layout="vertical" margin={{ left: 0, right: 12 }}><CartesianGrid strokeDasharray="3 3" opacity={0.1} horizontal={false} /><XAxis type="number" hide /><YAxis type="category" dataKey="label" width={88} tickFormatter={titleCase} tick={{ fontSize: 9 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => integer.format(Number(value))} contentStyle={{ borderRadius: 14, border: "1px solid hsl(var(--border))", background: "hsl(var(--card))", fontSize: 11 }} /><Bar dataKey="value" name="Members" fill="hsl(var(--primary))" radius={[0, 8, 8, 0]} barSize={16} /></BarChart></ResponsiveContainer></div>
+        <p className="mt-2 text-center text-[10px] text-muted-foreground">{integer.format(totalStatus)} classified profiles</p>
+      </section>
+    </div>
+
+    <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+      <section className="rounded-3xl border border-border/70 bg-card p-4 shadow-sm sm:p-5">
+        <SectionHeader title="Cohort return rate" description="Members active exactly 1, 2, 3, 7, 14 or 30 days after registration" />
+        <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6">{retention.map((point) => <div key={point.day} className="rounded-2xl border border-border/60 bg-secondary/35 p-3 text-center"><p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Day {point.day}</p><p className="mt-1 text-lg font-black text-primary">{point.rate}%</p><p className="mt-0.5 text-[9px] text-muted-foreground">{point.returned}/{point.eligible}</p></div>)}</div>
+      </section>
+      <section className="rounded-3xl border border-border/70 bg-card p-4 shadow-sm sm:p-5">
+        <SectionHeader title="Marketplace pulse" description="Jobs, events, connections and consultations" />
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          {[
+            { label: "Live jobs", value: compact.format(safe(s.published_jobs)), Icon: BriefcaseBusiness, note: `${safe(s.applications_7d)} applications · ${jobConversion}% ratio` },
+            { label: "Upcoming events", value: compact.format(safe(s.upcoming_events)), Icon: CalendarDays, note: `${safe(s.rsvps_30d)} RSVPs in 30 days` },
+            { label: "Accepted connections", value: compact.format(safe(s.accepted_connections)), Icon: UserCheck, note: `${acceptanceRate}% accepted/pending mix` },
+            { label: "Consult revenue", value: money.format(safe(s.consultation_revenue)), Icon: CircleDollarSign, note: `${safe(s.completed_consultations)} completed` },
+          ].map(({ label, value, Icon, note }) => <div key={label} className="rounded-2xl bg-secondary/45 p-3"><Icon className="h-4 w-4 text-primary" /><p className="mt-2 text-lg font-black">{value}</p><p className="text-[10px] font-bold">{label}</p><p className="mt-1 text-[9px] leading-relaxed text-muted-foreground">{note}</p></div>)}
+        </div>
+      </section>
+    </div>
+
+    <footer className="flex flex-col gap-2 rounded-2xl border border-border/60 bg-secondary/25 px-4 py-3 text-[10px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between"><span className="flex items-center gap-1.5"><Eye className="h-3 w-3" />Owner-only aggregate analytics. No private message content is exposed here.</span><span>{analytics.data.timezone} · Auto-refreshes every 5 minutes</span></footer>
   </div>;
 };
 

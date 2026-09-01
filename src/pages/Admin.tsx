@@ -536,19 +536,20 @@ const Admin = () => {
 
   return (
     <div className="native-scroll-region h-[100dvh] bg-background [scrollbar-gutter:stable]">
-      <header className="sticky top-0 z-40 bg-card border-b border-border px-4 py-4">
-        <div className="flex items-center gap-3 max-w-6xl mx-auto">
-          <button onClick={() => navigate(-1)} className="p-1 text-foreground hover-scale"><ArrowLeft className="w-5 h-5" /></button>
-          <div>
-            <h1 className="text-xl font-bold text-foreground">Cirkle Admin</h1>
-            <p className="text-[10px] text-muted-foreground">Business health, members, content and operations</p>
+      <header className="sticky top-0 z-40 border-b border-border/70 bg-card/95 px-4 py-3 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl items-center gap-3">
+          <button onClick={() => navigate(-1)} className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-border/70 text-foreground transition hover:bg-secondary" aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2"><h1 className="truncate text-lg font-black tracking-tight text-foreground sm:text-xl">Cirkle Admin</h1>{isPlatformOwner && <span className="hidden rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-primary sm:inline">Owner workspace</span>}</div>
+            <p className="truncate text-[10px] text-muted-foreground">Business intelligence · Trust and safety · Content operations</p>
           </div>
+          <div className="flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[9px] font-bold text-emerald-700 dark:text-emerald-300"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Operational</div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-4 pb-[calc(2rem+env(safe-area-inset-bottom))]">
+      <main className="mx-auto max-w-7xl px-3 py-4 pb-[calc(2rem+env(safe-area-inset-bottom))] sm:px-4">
         <Tabs defaultValue="dashboard">
-          <TabsList className="w-full bg-secondary rounded-xl h-auto min-h-11 mb-4 grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-6 xl:grid-cols-11 gap-1 p-1">
+          <TabsList className="sticky top-[69px] z-30 mb-5 grid h-auto min-h-11 w-full grid-cols-3 gap-1 rounded-2xl border border-border/70 bg-secondary/95 p-1.5 shadow-sm backdrop-blur-xl sm:grid-cols-5 lg:grid-cols-6">
             <TabsTrigger value="dashboard" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><LayoutDashboard className="w-3.5 h-3.5 mr-1" /> Dashboard</TabsTrigger>
             <TabsTrigger value="users" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Users className="w-3.5 h-3.5 mr-1" /> Users</TabsTrigger>
             <TabsTrigger value="jobs" className="flex-1 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-xs font-semibold"><Briefcase className="w-3.5 h-3.5 mr-1" /> Jobs</TabsTrigger>
