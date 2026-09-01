@@ -134,9 +134,12 @@ const sendWithZeptoMail = async (email: TransactionalEmail) => {
     Deno.env.get("ZOHO_ZEPTOMAIL_TOKEN") ||
     Deno.env.get("ZEPTOMAIL_SEND_MAIL_TOKEN");
   if (!token) throw new Error("ZeptoMail is not configured");
+  const authorization = token.trim().toLowerCase().startsWith("zoho-enczapikey ")
+    ? token.trim()
+    : `Zoho-enczapikey ${token.trim()}`;
 
   const from = parseFrom(Deno.env.get("VERIFICATION_EMAIL_FROM") || DEFAULT_FROM);
-  const endpoint = Deno.env.get("ZEPTOMAIL_API_URL") || "https://api.zeptomail.com/v1.1/email";
+  const endpoint = Deno.env.get("ZEPTOMAIL_API_URL") || "https://api.zeptomail.in/v1.1/email";
   const branded = await prepareEmailBranding(email.html);
   const inlineImages = branded.attachments.map((attachment) => ({
     cid: attachment.ContentId,
@@ -146,7 +149,7 @@ const sendWithZeptoMail = async (email: TransactionalEmail) => {
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
-      Authorization: `Zoho-enczapikey ${token}`,
+      Authorization: authorization,
       "Content-Type": "application/json",
       ...(email.idempotencyKey ? { "Idempotency-Key": email.idempotencyKey } : {}),
     },

@@ -63,8 +63,8 @@ supabase secrets set ZEPTOMAIL_API_KEY=... \
 The ZeptoMail token is server-only and must never use a `VITE_` prefix. The
 sender must use the verified `cirkle.world` email domain and
 `verify@cirkle.world` identity. If your ZeptoMail account uses a regional or
-account-specific endpoint, also set `ZEPTOMAIL_API_URL`; otherwise the default
-`https://api.zeptomail.com/v1.1/email` is used.
+account-specific endpoint, also set `ZEPTOMAIL_API_URL`; Cirkle currently uses
+the India endpoint `https://api.zeptomail.in/v1.1/email`.
 
 If you want to keep Zavu as the first fallback, also keep:
 
