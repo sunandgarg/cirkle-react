@@ -543,7 +543,7 @@ const Admin = () => {
             <div className="flex items-center gap-2"><h1 className="truncate text-lg font-black tracking-tight text-foreground sm:text-xl">Cirkle Admin</h1>{isPlatformOwner && <span className="hidden rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-primary sm:inline">Owner workspace</span>}</div>
             <p className="truncate text-[10px] text-muted-foreground">Business intelligence · Trust and safety · Content operations</p>
           </div>
-          <div className="flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[9px] font-bold text-emerald-700 dark:text-emerald-300"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Operational</div>
+          <div className="flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1.5 text-[9px] font-bold text-primary"><Shield className="h-3 w-3" />Admin access</div>
         </div>
       </header>
 
