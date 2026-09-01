@@ -13,6 +13,11 @@ export type TransactionalEmail = {
 
 type EmailProvider = "zeptomail" | "zavu" | "ses";
 
+type EmailDeliveryOptions = {
+  primary?: string;
+  fallback?: string;
+};
+
 const bytesToHex = (buffer: ArrayBuffer) =>
   Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
 
@@ -204,10 +209,13 @@ export const resolveEmailProviderOrder = (primaryValue?: string, fallbackValue?:
 const deliver = (provider: EmailProvider, email: TransactionalEmail) =>
   provider === "zeptomail" ? sendWithZeptoMail(email) : provider === "zavu" ? sendWithZavu(email) : sendWithSes(email);
 
-export const sendTransactionalEmail = async (email: TransactionalEmail) => {
+export const sendTransactionalEmail = async (
+  email: TransactionalEmail,
+  options: EmailDeliveryOptions = {},
+) => {
   const providers = resolveEmailProviderOrder(
-    Deno.env.get("EMAIL_PROVIDER_PRIMARY"),
-    Deno.env.get("EMAIL_PROVIDER_FALLBACK"),
+    options.primary ?? Deno.env.get("EMAIL_PROVIDER_PRIMARY"),
+    options.fallback ?? Deno.env.get("EMAIL_PROVIDER_FALLBACK"),
   );
   const primary = providers[0];
   const failures: string[] = [];

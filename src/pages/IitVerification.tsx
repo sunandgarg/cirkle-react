@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search, FileUp, Clock3, LockKeyhole, RefreshCw, User, LogOut } from "lucide-react";
+import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search, FileUp, Clock3, LockKeyhole, RefreshCw, User, LogOut, Pencil } from "lucide-react";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, expectedIitEmailDomain, IIT_LIST, iitLogoSettingKey, isMatchingIitEmail, type IitInstitute, type IitMemberStatus } from "@/data/iitInstitutes";
@@ -242,6 +242,12 @@ const IitVerification = () => {
     setStep("verify_email");
   };
 
+  const handleEditVerificationEmail = () => {
+    setOtp("");
+    setExistingRecordMessage("");
+    setStep("verify_email");
+  };
+
   const handleSaveAccountDetails = async () => {
     const cleanPhone = phone.replace(/\D/g, "").slice(0, 10);
     if (accountName.trim().length < 2) {
@@ -348,7 +354,7 @@ const IitVerification = () => {
         setLoading(false);
         return;
       }
-      toast.success("Verification code sent to your email!");
+      toast.success("Verification code sent. Institute mailboxes may take up to 2 minutes.");
       setStep("verify_otp");
     } catch (err: any) {
       reportError(err, { flow: "iit_verification", action: "send_verification_code", metadata: { institute: selectedIit?.name, memberType: studentStatus } });
@@ -817,6 +823,16 @@ const IitVerification = () => {
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">{selectedIit?.name}</span>
               <span className="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded-full">{email}</span>
+              <button
+                type="button"
+                onClick={handleEditVerificationEmail}
+                disabled={loading}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
+                aria-label={`Edit IIT email address ${email}`}
+              >
+                <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                Edit email
+              </button>
             </div>
             <div className="flex items-center gap-3 mt-6 mb-2">
               <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">

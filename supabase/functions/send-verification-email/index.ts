@@ -133,11 +133,26 @@ Deno.serve(async (req) => {
 
     try {
       const emailContent = iitVerificationEmail(code, iitName);
-      await sendTransactionalEmail({
-        to: normalizedEmail,
-        ...emailContent,
-        idempotencyKey: `iit-verification:${codeRow.id}`,
-      });
+      const delivery = await sendTransactionalEmail(
+        {
+          to: normalizedEmail,
+          ...emailContent,
+          idempotencyKey: `iit-verification:${codeRow.id}`,
+        },
+        {
+          // Institute mail systems can filter providers differently from consumer
+          // inboxes. Keep their routing independently configurable without
+          // changing the provider used by login and password-reset emails.
+          primary: Deno.env.get("EMAIL_PROVIDER_INSTITUTE_PRIMARY") || undefined,
+          fallback: Deno.env.get("EMAIL_PROVIDER_INSTITUTE_FALLBACK") || undefined,
+        },
+      );
+      console.info(JSON.stringify({
+        event: "iit_verification_email_accepted",
+        provider: delivery.provider,
+        recipient_domain: normalizedEmail.split("@")[1],
+        code_id: codeRow.id,
+      }));
     } catch (error) {
       await admin.from("verification_codes").delete().eq("id", codeRow.id);
       return json({ error: error instanceof Error ? error.message : "Could not deliver the verification email. Try again shortly." }, 502);
