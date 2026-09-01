@@ -1,10 +1,10 @@
-# Auth, Google, Zavu, and AWS SES Setup
+# Auth, Google, ZeptoMail, Zavu, and AWS SES Setup
 
 This app now has three account login paths on `/auth`:
 
 1. Google login through Supabase OAuth.
-2. Email OTP login through Supabase Auth OTP, delivered by Zavu with AWS SES
-   available as a fallback.
+2. Email OTP login through Supabase Auth OTP, delivered by Zoho ZeptoMail with
+   Zavu and AWS SES available as fallbacks.
 3. Email and password login, including a secure password-recovery link that
    returns to `/reset-password`.
 
@@ -36,7 +36,7 @@ https://cirkle.pages.dev/reset-password
 
 Add the equivalent `https://cirkle.world/**` entry when the custom domain is
 active. Password-recovery emails are sent by the `request-password-reset` Edge
-Function through the same Zavu-primary, Amazon-SES-fallback delivery chain.
+Function through the same ZeptoMail-primary delivery chain.
 Supabase Auth SMTP settings are only used by any remaining built-in Supabase
 email flows.
 
@@ -49,19 +49,29 @@ http://localhost:8091/**
 
 ## Transactional email providers
 
-Zavu is the primary transactional provider. AWS SES remains configured as the
-automatic fallback, so email delivery continues if Zavu is temporarily unavailable.
+Zoho ZeptoMail is the primary transactional provider. Zavu and AWS SES can stay
+configured as automatic fallbacks, so email delivery continues if ZeptoMail is
+temporarily unavailable.
 Set these Supabase Edge Function secrets:
 
 ```bash
-supabase secrets set ZAVU_API_KEY=... ZAVU_SENDER_ID=... \
-  EMAIL_PROVIDER_PRIMARY=zavu EMAIL_PROVIDER_FALLBACK=ses \
+supabase secrets set ZEPTOMAIL_API_KEY=... \
+  EMAIL_PROVIDER_PRIMARY=zeptomail EMAIL_PROVIDER_FALLBACK=zavu,ses \
   --project-ref bugwubrwvlqayxwcazfd
 ```
 
-The Zavu key is server-only and must never use a `VITE_` prefix. The Zavu
+The ZeptoMail token is server-only and must never use a `VITE_` prefix. The
 sender must use the verified `cirkle.world` email domain and
-`verify@cirkle.world` identity.
+`verify@cirkle.world` identity. If your ZeptoMail account uses a regional or
+account-specific endpoint, also set `ZEPTOMAIL_API_URL`; otherwise the default
+`https://api.zeptomail.com/v1.1/email` is used.
+
+If you want to keep Zavu as the first fallback, also keep:
+
+```bash
+supabase secrets set ZAVU_API_KEY=... ZAVU_SENDER_ID=... \
+  --project-ref bugwubrwvlqayxwcazfd
+```
 
 For the SES fallback provider, set:
 
@@ -85,9 +95,9 @@ The AWS IAM user should have permission for:
 ses:SendEmail
 ```
 
-The `cirkle.world` domain must remain verified in both providers. If the SES
-account is still in sandbox mode, recipient addresses must also be verified;
-that limitation applies only when the fallback is used.
+The `cirkle.world` domain must remain verified in every active provider. If the
+SES account is still in sandbox mode, recipient addresses must also be verified;
+that limitation applies only when the SES fallback is used.
 
 ## Deploy
 

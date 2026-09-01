@@ -21,13 +21,13 @@ supabase db push
 
 ## Verification and test-data functions
 
-The IIT verification flow uses Zavu as the primary transactional provider and
-AWS SES as its automatic fallback. Generate a unique pepper; never reuse a frontend or
-database key.
+The IIT verification flow uses Zoho ZeptoMail as the primary transactional
+provider, with Zavu and AWS SES as automatic fallbacks. Generate a unique pepper;
+never reuse a frontend or database key.
 
 ```bash
-supabase secrets set ZAVU_API_KEY=... ZAVU_SENDER_ID=... \
-  EMAIL_PROVIDER_PRIMARY=zavu EMAIL_PROVIDER_FALLBACK=ses \
+supabase secrets set ZEPTOMAIL_API_KEY=... \
+  EMAIL_PROVIDER_PRIMARY=zeptomail EMAIL_PROVIDER_FALLBACK=zavu,ses \
   VERIFICATION_CODE_PEPPER=... \
   'VERIFICATION_EMAIL_FROM=Cirkle <verify@cirkle.world>' SEED_DATA_ENABLED=true
 supabase functions deploy send-verification-email

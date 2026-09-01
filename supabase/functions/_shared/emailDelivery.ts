@@ -1,4 +1,4 @@
-import { prepareEmailBranding } from "./emailLogo.ts";
+import { EMAIL_LOGO_URL, prepareEmailBranding } from "./emailLogo.ts";
 
 const DEFAULT_FROM = "Cirkle <verify@cirkle.world>";
 const DELIVERY_TIMEOUT_MS = 10_000;
@@ -11,7 +11,7 @@ export type TransactionalEmail = {
   idempotencyKey?: string;
 };
 
-type EmailProvider = "zavu" | "ses";
+type EmailProvider = "zeptomail" | "zavu" | "ses";
 
 const bytesToHex = (buffer: ArrayBuffer) =>
   Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -123,22 +123,90 @@ const sendWithZavu = async (email: TransactionalEmail) => {
   }
 };
 
-const parseProvider = (value: string | undefined, fallback: EmailProvider): EmailProvider =>
-  value?.trim().toLowerCase() === "ses" ? "ses" : value?.trim().toLowerCase() === "zavu" ? "zavu" : fallback;
+const parseFrom = (from: string) => {
+  const match = from.match(/^\s*"?([^"<]*)"?\s*<([^>]+)>\s*$/);
+  if (!match) return { address: from.trim(), name: "Cirkle" };
+  return { name: match[1].trim() || "Cirkle", address: match[2].trim() };
+};
+
+const sendWithZeptoMail = async (email: TransactionalEmail) => {
+  const token = Deno.env.get("ZEPTOMAIL_API_KEY") ||
+    Deno.env.get("ZOHO_ZEPTOMAIL_TOKEN") ||
+    Deno.env.get("ZEPTOMAIL_SEND_MAIL_TOKEN");
+  if (!token) throw new Error("ZeptoMail is not configured");
+
+  const from = parseFrom(Deno.env.get("VERIFICATION_EMAIL_FROM") || DEFAULT_FROM);
+  const endpoint = Deno.env.get("ZEPTOMAIL_API_URL") || "https://api.zeptomail.com/v1.1/email";
+  const branded = await prepareEmailBranding(email.html);
+  const inlineImages = branded.attachments.map((attachment) => ({
+    cid: attachment.ContentId,
+    content: attachment.RawContent,
+    mime_type: attachment.ContentType,
+  }));
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Zoho-enczapikey ${token}`,
+      "Content-Type": "application/json",
+      ...(email.idempotencyKey ? { "Idempotency-Key": email.idempotencyKey } : {}),
+    },
+    body: JSON.stringify({
+      from: { address: from.address, name: from.name },
+      to: [{ email_address: { address: email.to } }],
+      subject: email.subject,
+      textbody: email.text,
+      htmlbody: inlineImages.length > 0 ? branded.html : branded.html.replace(/cid:cirkle-logo/g, EMAIL_LOGO_URL),
+      ...(inlineImages.length > 0 ? { inline_images: inlineImages } : {}),
+    }),
+    signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    console.error("ZeptoMail email delivery failed", response.status, detail.slice(0, 300));
+    throw new Error(`ZeptoMail rejected the email (${response.status})`);
+  }
+};
+
+const allProviders: EmailProvider[] = ["zeptomail", "zavu", "ses"];
+
+const isProvider = (value: string): value is EmailProvider =>
+  value === "zeptomail" || value === "zavu" || value === "ses";
+
+const normalizeProvider = (value: string): EmailProvider | undefined => {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "zoho") return "zeptomail";
+  return isProvider(normalized) ? normalized : undefined;
+};
+
+const hasProviderConfig = (provider: EmailProvider) => {
+  if (provider === "zeptomail") {
+    return Boolean(Deno.env.get("ZEPTOMAIL_API_KEY") || Deno.env.get("ZOHO_ZEPTOMAIL_TOKEN") || Deno.env.get("ZEPTOMAIL_SEND_MAIL_TOKEN"));
+  }
+  if (provider === "zavu") return Boolean(Deno.env.get("ZAVU_API_KEY") || Deno.env.get("ZAVUDEV_API_KEY"));
+  return Boolean(Deno.env.get("AWS_ACCESS_KEY_ID") && Deno.env.get("AWS_SECRET_ACCESS_KEY"));
+};
+
+export const resolveEmailProviderOrder = (primaryValue?: string, fallbackValue?: string): EmailProvider[] => {
+  const configuredPrimary = primaryValue ? normalizeProvider(primaryValue) : undefined;
+  const primary = configuredPrimary ||
+    (hasProviderConfig("zeptomail") ? "zeptomail" : hasProviderConfig("zavu") ? "zavu" : "ses");
+  const configuredFallbacks = (fallbackValue || "")
+    .split(",")
+    .map(normalizeProvider)
+    .filter((provider): provider is EmailProvider => Boolean(provider));
+  const defaults = allProviders.filter((provider) => provider !== primary);
+  return Array.from(new Set([primary, ...configuredFallbacks, ...defaults]));
+};
 
 const deliver = (provider: EmailProvider, email: TransactionalEmail) =>
-  provider === "zavu" ? sendWithZavu(email) : sendWithSes(email);
+  provider === "zeptomail" ? sendWithZeptoMail(email) : provider === "zavu" ? sendWithZavu(email) : sendWithSes(email);
 
 export const sendTransactionalEmail = async (email: TransactionalEmail) => {
-  const primary = parseProvider(
+  const providers = resolveEmailProviderOrder(
     Deno.env.get("EMAIL_PROVIDER_PRIMARY"),
-    Deno.env.get("ZAVU_API_KEY") || Deno.env.get("ZAVUDEV_API_KEY") ? "zavu" : "ses",
-  );
-  const fallback = parseProvider(
     Deno.env.get("EMAIL_PROVIDER_FALLBACK"),
-    primary === "zavu" ? "ses" : "zavu",
   );
-  const providers = primary === fallback ? [primary] : [primary, fallback];
+  const primary = providers[0];
   const failures: string[] = [];
 
   for (const provider of providers) {

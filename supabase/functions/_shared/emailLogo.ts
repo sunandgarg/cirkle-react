@@ -1,4 +1,4 @@
-const LOGO_URL = "https://cirkle.world/cirkle-oauth-logo.png";
+export const EMAIL_LOGO_URL = "https://cirkle.world/cirkle-oauth-logo.png";
 
 type SesInlineAttachment = {
   RawContent: string;
@@ -21,7 +21,7 @@ const toBase64 = (bytes: Uint8Array) => {
 
 const fetchLogo = async (): Promise<SesInlineAttachment | null> => {
   try {
-    const response = await fetch(LOGO_URL, { signal: AbortSignal.timeout(5_000) });
+    const response = await fetch(EMAIL_LOGO_URL, { signal: AbortSignal.timeout(5_000) });
     if (!response.ok) throw new Error(`logo returned ${response.status}`);
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.toLowerCase().startsWith("image/png")) throw new Error("logo is not a PNG");
@@ -46,5 +46,5 @@ export const prepareEmailBranding = async (html: string) => {
   const attachment = await cachedLogo;
   return attachment
     ? { html, attachments: [attachment] }
-    : { html: html.replace(/cid:cirkle-logo/g, LOGO_URL), attachments: [] as SesInlineAttachment[] };
+    : { html: html.replace(/cid:cirkle-logo/g, EMAIL_LOGO_URL), attachments: [] as SesInlineAttachment[] };
 };
