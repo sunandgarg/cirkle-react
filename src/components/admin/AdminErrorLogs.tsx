@@ -36,12 +36,25 @@ const AdminErrorLogs = () => {
 
   const visibleLogs = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return logs.filter((log: any) => {
+    const filtered = logs.filter((log: any) => {
       if (severity !== "all" && log.severity !== severity) return false;
       if (!query) return true;
       return [log.flow, log.action, log.message, log.error_code, log.route, log.user_name, log.event_id]
         .some((value) => String(value || "").toLowerCase().includes(query));
     });
+    const grouped = new Map<string, any>();
+    for (const log of filtered) {
+      const key = [log.flow, log.action, log.severity, log.error_code, log.message, log.route].join("|");
+      const current = grouped.get(key);
+      if (current) {
+        current.occurrences += 1;
+        current.event_ids.push(log.event_id);
+        if (!current.users.has(log.user_id || "anonymous")) current.users.add(log.user_id || "anonymous");
+      } else {
+        grouped.set(key, { ...log, occurrences: 1, event_ids: [log.event_id], users: new Set([log.user_id || "anonymous"]) });
+      }
+    }
+    return [...grouped.values()];
   }, [logs, search, severity]);
 
   return (
@@ -49,7 +62,7 @@ const AdminErrorLogs = () => {
       <div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="flex items-center gap-2 text-sm font-bold"><AlertTriangle className="h-4 w-4 text-primary" /> Application error trail</h2>
-          <p className="mt-1 text-xs text-muted-foreground">Latest 250 redacted errors with the flow, action, route, member and event ID needed for backtracking.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Latest 250 redacted events grouped into {visibleLogs.length} root causes, with occurrence and affected-member counts.</p>
         </div>
         <Button variant="outline" size="sm" className="shrink-0" disabled={isFetching} onClick={() => void refetch()}>
           <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`} /> Refresh
@@ -69,13 +82,14 @@ const AdminErrorLogs = () => {
             <summary className="flex cursor-pointer list-none items-start gap-3">
               <span className={`mt-0.5 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${severityClass[log.severity] || severityClass.error}`}>{log.severity}</span>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-bold text-foreground">{log.flow} → {log.action}</p>
+                <p className="truncate text-xs font-bold text-foreground">{log.flow} → {log.action} {log.occurrences > 1 && <span className="ml-1 rounded-full bg-secondary px-1.5 py-0.5 text-[9px] text-muted-foreground">{log.occurrences} occurrences</span>}</p>
                 <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{log.message}</p>
-                <p className="mt-1 text-[10px] text-muted-foreground">{new Date(log.created_at).toLocaleString()} · {log.user_name || log.user_id?.slice(0, 8) || "orphaned session"} · {log.route || "unknown route"}</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">Latest {new Date(log.created_at).toLocaleString()} · {log.users.size} affected member{log.users.size === 1 ? "" : "s"} · {log.route || "unknown route"}</p>
               </div>
             </summary>
             <div className="mt-3 space-y-2 border-t border-border pt-3 text-[11px]">
               <p><span className="font-semibold">Event:</span> <code className="select-all">{log.event_id}</code></p>
+              {log.occurrences > 1 && <p><span className="font-semibold">Grouped events:</span> {log.event_ids.slice(0, 8).join(", ")}{log.event_ids.length > 8 ? ` +${log.event_ids.length - 8} more` : ""}</p>}
               {log.error_code && <p><span className="font-semibold">Code:</span> {log.error_code}</p>}
               {log.stack && <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-secondary p-2 text-[10px]">{log.stack}</pre>}
               {log.metadata && Object.keys(log.metadata).length > 0 && <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-secondary p-2 text-[10px]">{JSON.stringify(log.metadata, null, 2)}</pre>}

@@ -27,6 +27,24 @@ const companyLogoIndex = new Map<string, string>();
 const featuredCompanyLogos = new Map<string, string>([
   [normalizeCompany("Neuron7"), "/company-logos/custom-neuron7.webp"],
   [normalizeCompany("Kobie"), "/company-logos/custom-kobie.webp"],
+  [normalizeCompany("Hevo Data"), "/company-logos/active-hevo-data.webp"],
+  [normalizeCompany("Weekday"), "/company-logos/active-weekday.webp"],
+  [normalizeCompany("Weekdayworks"), "/company-logos/active-weekday.webp"],
+  [normalizeCompany("Acceldata"), "/company-logos/active-acceldata.webp"],
+  [normalizeCompany("Brafton"), "/company-logos/active-brafton.webp"],
+  [normalizeCompany("Dozee"), "/company-logos/active-dozee.webp"],
+  [normalizeCompany("Teikametrics"), "/company-logos/active-teikametrics.webp"],
+  [normalizeCompany("Doola"), "/company-logos/active-doola.webp"],
+  [normalizeCompany("Paytmpayments"), "/company-logos/active-paytm-payments.webp"],
+  [normalizeCompany("Margo Group"), "/company-logos/active-margo-group.webp"],
+  [normalizeCompany("Embed"), "/company-logos/active-embed.webp"],
+  [normalizeCompany("Zimperium"), "/company-logos/active-zimperium.webp"],
+  [normalizeCompany("Everbridge"), "/company-logos/active-everbridge.webp"],
+  [normalizeCompany("3pillarglobal"), "/company-logos/active-three-pillar-global.webp"],
+  [normalizeCompany("Brillio 2"), "/company-logos/active-brillio.webp"],
+  [normalizeCompany("Loop AI"), "/company-logos/active-loop-ai.webp"],
+  [normalizeCompany("H1"), "/company-logos/active-h1.webp"],
+  [normalizeCompany("JumpCloud"), "/company-logos/active-jumpcloud.webp"],
 ]);
 let companyLogoIndexReady = false;
 const indexCompanyLogo = (name: string, logo: string) => {

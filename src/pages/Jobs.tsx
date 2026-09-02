@@ -13,6 +13,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { recordJobEngagement } from "@/lib/jobAnalytics";
 
 const FILTERS = ["All", "Easy Apply", "Internship", "Full-time", "Part-time", "Remote", "Saved"] as const;
 
@@ -52,6 +53,10 @@ const Jobs = () => {
       setSavedIds(new Set(Array.isArray(stored) ? stored.filter((id) => typeof id === "string") : []));
     } catch { setSavedIds(new Set()); }
   }, [storageKey]);
+
+  useEffect(() => {
+    if (user?.id) void recordJobEngagement("jobs_page_view", null, { path: "/jobs" });
+  }, [user?.id]);
 
   const { data: jobs = [], isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ["jobs"],
@@ -111,9 +116,11 @@ const Jobs = () => {
 
   const toggleSaved = (id: string) => {
     const next = new Set(savedIds);
-    if (next.has(id)) next.delete(id); else next.add(id);
+    const wasSaved = next.has(id);
+    if (wasSaved) next.delete(id); else next.add(id);
     setSavedIds(next);
     try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch { /* Private mode may block storage. */ }
+    if (user?.id) void recordJobEngagement(wasSaved ? "job_unsave" : "job_save", id);
   };
 
   const filteredJobs = useMemo(() => {
@@ -135,9 +142,11 @@ const Jobs = () => {
     if (!user) { navigate("/auth"); return; }
     if (!isVerified) { navigate("/iit-verify"); return; }
     if (!job.easy_apply && job.apply_url) {
+      void recordJobEngagement("job_view_click", job.id, { company: job.company, source: safeHostname(job.apply_url) });
       window.open(job.apply_url, "_blank", "noopener,noreferrer");
       return;
     }
+    void recordJobEngagement("job_easy_apply_click", job.id, { company: job.company });
     apply.mutate(job);
   };
 
@@ -150,7 +159,7 @@ const Jobs = () => {
             <div className="flex items-center gap-2"><span className="rounded-full bg-secondary px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">{filteredJobs.length} open</span><button aria-label="Refresh jobs" onClick={() => refetch()} disabled={isFetching} className="rounded-full border border-border p-2 text-muted-foreground hover:text-primary"><RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} /></button></div>
           </div>
           <div className="relative mt-4"><Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search role, company, skill, or location" className="h-11 rounded-xl border-border bg-card pl-10" /></div>
-          <div className="-mx-4 mt-3 overflow-x-auto px-4 scrollbar-hide sm:-mx-6 sm:px-6"><div className="flex w-max gap-2">{FILTERS.map((filter) => <button key={filter} onClick={() => setActiveFilter(filter)} className={`min-h-9 whitespace-nowrap rounded-full px-3.5 text-xs font-semibold transition-colors ${activeFilter === filter ? "bg-primary text-primary-foreground shadow-sm" : "border border-border bg-card text-muted-foreground hover:text-foreground"}`}>{filter === "Saved" && <Bookmark className="mr-1 inline h-3 w-3" />}{filter}</button>)}</div></div>
+          <div className="-mx-4 mt-3 overflow-x-auto px-4 scrollbar-hide sm:-mx-6 sm:px-6"><div className="flex w-max gap-2">{FILTERS.map((filter) => <button key={filter} onClick={() => { setActiveFilter(filter); if (user?.id && filter !== activeFilter) void recordJobEngagement("job_filter", null, { filter }); }} className={`min-h-9 whitespace-nowrap rounded-full px-3.5 text-xs font-semibold transition-colors ${activeFilter === filter ? "bg-primary text-primary-foreground shadow-sm" : "border border-border bg-card text-muted-foreground hover:text-foreground"}`}>{filter === "Saved" && <Bookmark className="mr-1 inline h-3 w-3" />}{filter}</button>)}</div></div>
         </div>
       </header>
 

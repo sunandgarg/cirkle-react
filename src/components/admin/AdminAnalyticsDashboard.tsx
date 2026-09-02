@@ -2,8 +2,9 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity, ArrowDownRight, ArrowUpRight, BadgeCheck, BriefcaseBusiness, CalendarDays,
-  CheckCircle2, CircleDollarSign, Clock3, Eye, FileCheck2, GraduationCap, MessageCircle,
-  RefreshCw, Send, ShieldAlert, Sparkles, UserCheck, UserPlus, Users, Workflow,
+  BookmarkCheck, CheckCircle2, CircleDollarSign, Clock3, Eye, FileCheck2, GraduationCap,
+  MessageCircle, MousePointerClick, RefreshCw, Send, ShieldAlert, Sparkles, UserCheck,
+  UserPlus, Users, Workflow,
 } from "lucide-react";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -31,6 +32,14 @@ type Analytics = {
   retention: RetentionPoint[];
   top_iits: DistributionPoint[];
   member_status: DistributionPoint[];
+};
+type JobAnalytics = {
+  generated_at: string;
+  days: number;
+  summary: Record<string, number>;
+  daily: Array<{ day: string; page_views: number; unique_visitors: number; view_job_clicks: number; easy_apply_clicks: number; saves: number }>;
+  top_jobs: Array<{ id: string; title: string; company: string; view_job_clicks: number; easy_apply_clicks: number; saves: number }>;
+  top_companies: DistributionPoint[];
 };
 
 const compact = new Intl.NumberFormat("en-IN", { notation: "compact", maximumFractionDigits: 1 });
@@ -87,6 +96,17 @@ const AdminAnalyticsDashboard = ({ owner }: { owner: boolean }) => {
     staleTime: 60_000,
     refetchInterval: 5 * 60_000,
   });
+  const jobAnalytics = useQuery({
+    queryKey: ["owner-job-analytics", range],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).rpc("get_admin_job_analytics", { p_days: range });
+      if (error) throw error;
+      return data as JobAnalytics;
+    },
+    enabled: owner,
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+  });
 
   const derived = useMemo(() => {
     const daily = analytics.data?.daily ?? [];
@@ -116,6 +136,8 @@ const AdminAnalyticsDashboard = ({ owner }: { owner: boolean }) => {
   const maxIit = Math.max(1, ...topIits.map((item) => safe(item.value)));
   const totalStatus = memberStatus.reduce((total, item) => total + safe(item.value), 0);
   const queueTotal = safe(s.open_reports) + safe(s.pending_documents) + safe(s.pending_courses) + safe(s.pending_consultations);
+  const jobSummary = jobAnalytics.data?.summary ?? {};
+  const jobClickThroughRate = pct(safe(jobSummary.view_job_clicks) + safe(jobSummary.easy_apply_clicks), safe(jobSummary.page_views));
 
   const primaryCards = [
     { label: "Total members", value: safe(s.total_users), note: `${compact.format(safe(s.registrations_30d))} joined in the last 30 days`, icon: Users, current: derived.registrations7, previous: derived.previousRegistrations7, tone: "blue" as const },
@@ -135,6 +157,36 @@ const AdminAnalyticsDashboard = ({ owner }: { owner: boolean }) => {
     </section>
 
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">{primaryCards.map((card) => <KpiCard key={card.label} {...card} />)}</div>
+
+    <section className="rounded-3xl border border-border/70 bg-card p-4 shadow-sm sm:p-5">
+      <SectionHeader title="Job discovery funnel" description={`First-party engagement over the selected ${range}-day window`} action={jobAnalytics.isFetching ? <RefreshCw className="h-4 w-4 animate-spin text-primary" /> : undefined} />
+      {jobAnalytics.error ? (
+        <p className="mt-4 rounded-xl bg-amber-500/10 p-3 text-[11px] text-amber-800 dark:text-amber-200">Job engagement analytics will appear after the latest database migration is active.</p>
+      ) : (
+        <>
+          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <KpiCard label="Job page views" value={safe(jobSummary.page_views)} note={`${compact.format(safe(jobSummary.unique_visitors))} unique members - ${compact.format(safe(jobSummary.unique_sessions))} sessions`} icon={BriefcaseBusiness} tone="blue" />
+            <KpiCard label="View job clicks" value={safe(jobSummary.view_job_clicks)} note="Outbound visits to employer application pages" icon={MousePointerClick} tone="violet" />
+            <KpiCard label="Job click-through rate" value={`${jobClickThroughRate}%`} note={`${compact.format(safe(jobSummary.easy_apply_clicks))} Easy Apply clicks`} icon={Activity} tone="green" />
+            <KpiCard label="Jobs saved" value={safe(jobSummary.saves)} note={`${compact.format(safe(jobSummary.filter_uses))} filter interactions - ${compact.format(safe(jobSummary.unsaves))} unsaved`} icon={BookmarkCheck} tone="amber" />
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-border/60 p-3">
+              <p className="text-xs font-black">Most engaged jobs</p>
+              <div className="mt-2 space-y-1.5">{jobAnalytics.data?.top_jobs?.length ? jobAnalytics.data.top_jobs.slice(0, 5).map((job, index) => (
+                <div key={job.id} className="flex items-center gap-2 rounded-xl bg-secondary/40 px-3 py-2"><span className="text-[10px] font-black text-muted-foreground">{index + 1}</span><span className="min-w-0 flex-1"><span className="block truncate text-[11px] font-bold">{job.title}</span><span className="block truncate text-[9px] text-muted-foreground">{job.company}</span></span><span className="text-[10px] font-bold text-primary">{safe(job.view_job_clicks) + safe(job.easy_apply_clicks)} clicks</span></div>
+              )) : <p className="py-5 text-center text-[11px] text-muted-foreground">Engagement rankings start with the next member visit.</p>}</div>
+            </div>
+            <div className="rounded-2xl border border-border/60 p-3">
+              <p className="text-xs font-black">Most engaged companies</p>
+              <div className="mt-2 space-y-2">{jobAnalytics.data?.top_companies?.length ? jobAnalytics.data.top_companies.slice(0, 5).map((company, index) => (
+                <div key={company.label} className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-[11px] font-semibold">{company.label}</span><div className="h-1.5 w-24 overflow-hidden rounded-full bg-secondary"><div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(8, (safe(company.value) / Math.max(1, safe(jobAnalytics.data?.top_companies?.[0]?.value))) * 100)}%` }} /></div><span className="w-7 text-right text-[10px] font-black">{safe(company.value)}</span></div>
+              )) : <p className="py-5 text-center text-[11px] text-muted-foreground">Company demand appears as members open jobs.</p>}</div>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
 
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,0.8fr)]">
       <section className="rounded-3xl border border-border/70 bg-card p-4 shadow-sm sm:p-5">

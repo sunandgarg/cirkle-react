@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Loader2, MessageCircle, Search, X } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -30,6 +30,7 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const realtimeActive = useRealtimeActivity();
+  const subscriptionId = useId().replace(/:/g, "");
   const [connectionSearch, setConnectionSearch] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
   const [openingPeerId, setOpeningPeerId] = useState<string | null>(null);
@@ -39,7 +40,10 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
     queryKey: ["direct-message-sidebar", user?.id],
     queryFn: async () => {
       const { data, error } = await (supabase as any).rpc("get_direct_message_sidebar");
-      if (error) throw error;
+      if (error) {
+        reportError(error, { flow: "forum_navigation", action: "load_direct_message_sidebar", severity: "warning" });
+        return [];
+      }
       return ((data || []) as DirectMessageSidebarRow[]).map(normalizeDirectMessageSidebarRow);
     },
     enabled: Boolean(user?.id),
@@ -55,7 +59,10 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
         p_query: deferredSearch,
         p_limit: 8,
       });
-      if (error) throw error;
+      if (error) {
+        reportError(error, { flow: "forum_navigation", action: "search_direct_message_connections", severity: "warning" });
+        return [];
+      }
       return (data || []) as DirectMessageConnectionResult[];
     },
     enabled: Boolean(user?.id && searchFocused),
@@ -70,32 +77,44 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
       void queryClient.invalidateQueries({ queryKey: ["chat-rooms", user.id] });
     };
 
-    const connectionChannel = supabase.channel(`direct-message-connections-${user.id}`)
+    const connectionChannel = supabase.channel(`direct-message-connections-${user.id}-${subscriptionId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "connections" }, refresh)
       .subscribe();
+
+    let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
+    let appSyncErrorReported = false;
+    const startFallback = () => {
+      if (fallbackChannel) return;
+      fallbackChannel = supabase.channel(`direct-message-sidebar-${user.id}-${subscriptionId}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, refresh)
+        .subscribe();
+    };
 
     if (appSyncRealtimeEnabled) {
       const unsubscribeInbox = subscribeAppSync(`/inbox/${user.id}`, refresh, (status) => {
         if (status === "CHANNEL_ERROR") {
-          reportError(new Error("Direct-message inbox realtime subscription failed"), {
-            flow: "direct_messages", action: "subscribe_inbox",
-          });
+          if (!appSyncErrorReported) {
+            appSyncErrorReported = true;
+            reportError(new Error("Direct-message inbox realtime subscription failed; durable fallback activated"), {
+              flow: "direct_messages", action: "subscribe_inbox", severity: "warning",
+            });
+          }
+          startFallback();
         }
       });
       return () => {
         unsubscribeInbox();
         void supabase.removeChannel(connectionChannel);
+        if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
       };
     }
 
-    const fallbackChannel = supabase.channel(`direct-message-sidebar-${user.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, refresh)
-      .subscribe();
+    startFallback();
     return () => {
       void supabase.removeChannel(connectionChannel);
-      void supabase.removeChannel(fallbackChannel);
+      if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
     };
-  }, [queryClient, realtimeActive, user?.id]);
+  }, [queryClient, realtimeActive, subscriptionId, user?.id]);
 
   const go = (path: string) => {
     onNavigate?.();

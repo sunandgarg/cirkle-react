@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Textarea } from "@/components/ui/textarea";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -29,7 +29,6 @@ import FileAttachment from "@/components/forum/FileAttachment";
 import ThreadPanel from "@/components/forum/ThreadPanel";
 import ScopeNavigationItem from "@/components/forum/ScopeNavigationItem";
 import DirectMessageSidebar from "@/components/forum/DirectMessageSidebar";
-import NotificationBell from "@/components/NotificationBell";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import {
   getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead,
@@ -343,7 +342,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = MAX_ROOM_HISTORY;
-const FORUM_BUILD = "2026.09.02.2";
+const FORUM_BUILD = "2026.09.03.1";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -357,6 +356,8 @@ const Forum = () => {
   // Core state
   const [activeScope, setActiveScope] = useState<{ type: string; key: string }>({ type: "GLOBAL", key: "IIT_ALL" });
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [desktopSidebarActive, setDesktopSidebarActive] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches);
   const [memberPanelOpen, setMemberPanelOpen] = useState(false);
   const [content, setContent] = useState("");
   const [isAnonymous, setIsAnonymous] = useState(false);
@@ -389,6 +390,14 @@ const Forum = () => {
   const [unreadDots, setUnreadDots] = useState<Record<string, boolean>>(() => getUnreadChannels());
   const [testRoomPosts, setTestRoomPosts] = useState<any[]>([]);
   const [outboxPosts, setOutboxPosts] = useState<any[]>([]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1024px)");
+    const sync = () => setDesktopSidebarActive(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
 
   // Pagination state
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -1893,7 +1902,7 @@ const Forum = () => {
               onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key, true); }}
             />
           </div>
-          <DirectMessageSidebar />
+          {desktopSidebarActive && <DirectMessageSidebar />}
         </div>
         <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
           <p className="text-[10px] font-semibold text-muted-foreground/70">Cirkle Forum · build {FORUM_BUILD}</p>
@@ -1902,11 +1911,12 @@ const Forum = () => {
 
       {/* Mobile sidebar sheet */}
       <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-        <SheetContent side="left" className="w-[300px] p-0 bg-card flex flex-col">
+        <SheetContent side="left" className="w-[300px] p-0 bg-card flex flex-col [&>button]:hidden">
           <SheetTitle className="h-12 flex items-center justify-between px-4 border-b border-border text-xs font-bold text-muted-foreground uppercase tracking-widest">
             Channels
             <button onClick={() => setSidebarOpen(false)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
           </SheetTitle>
+          <SheetDescription className="sr-only">Choose a forum channel or open a direct-message conversation.</SheetDescription>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="flex-shrink-0">
               <ScopeList
@@ -1916,7 +1926,7 @@ const Forum = () => {
                 onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key, true); }}
               />
             </div>
-            <DirectMessageSidebar onNavigate={() => setSidebarOpen(false)} />
+            {sidebarOpen && <DirectMessageSidebar onNavigate={() => setSidebarOpen(false)} />}
           </div>
           <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
             <p className="text-[10px] font-semibold text-muted-foreground/70">Cirkle Forum · build {FORUM_BUILD}</p>
@@ -1950,7 +1960,6 @@ const Forum = () => {
           )}
 
           <div className="flex items-center gap-0 flex-shrink-0">
-            <NotificationBell />
             {isAdmin && (
               <button
                 className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${slowModeEnabled ? "text-warning bg-warning/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}

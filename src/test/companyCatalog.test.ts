@@ -39,5 +39,8 @@ describe("company catalog logo rules", () => {
     expect(getCompanyLogo("Cirkle")).toMatch(/11003-cirkle\.webp$/);
     expect(getCompanyLogo("Neuron7")).toBe("/company-logos/custom-neuron7.webp");
     expect(getCompanyLogo("Kobie")).toBe("/company-logos/custom-kobie.webp");
+    expect(getCompanyLogo("Hevo Data")).toMatch(/active-hevo-data\.webp$/);
+    expect(getCompanyLogo("Weekdayworks")).toBe(getCompanyLogo("Weekday"));
+    expect(getCompanyLogo("Brillio 2")).toMatch(/active-brillio\.webp$/);
   });
 });

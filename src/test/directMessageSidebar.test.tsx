@@ -69,4 +69,16 @@ describe("forum direct-message sidebar", () => {
     expect(screen.getByText("Product manager")).toBeInTheDocument();
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith("search_my_connections", { p_query: "Pri", p_limit: 8 }));
   });
+
+  it("keeps the channel panel usable when direct-message RPCs are temporarily unavailable", async () => {
+    mocks.rpc.mockResolvedValue({ data: null, error: new Error("Failed to fetch") });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter><DirectMessageSidebar /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("No private chats yet")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /search your connections/i })).toBeEnabled();
+  });
 });

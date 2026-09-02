@@ -96,6 +96,7 @@ export const installGlobalErrorTelemetry = () => {
   if (globalTelemetryInstalled || typeof window === "undefined") return;
   globalTelemetryInstalled = true;
   window.addEventListener("error", (event) => {
+    if (/ResizeObserver loop/i.test(String(event.message || ""))) return;
     reportError(event.error || event.message, {
       flow: "browser_runtime",
       action: "window_error",
@@ -104,6 +105,13 @@ export const installGlobalErrorTelemetry = () => {
     });
   });
   window.addEventListener("unhandledrejection", (event) => {
-    reportError(event.reason, { flow: "browser_runtime", action: "unhandled_promise", severity: "fatal" });
+    const reason = event.reason instanceof Error ? event.reason.message : String(event.reason || "");
+    const isTransientNetworkFailure = /failed to fetch|networkerror|realtime connection (failed|closed)/i.test(reason);
+    reportError(event.reason, {
+      flow: "browser_runtime",
+      action: "unhandled_promise",
+      severity: isTransientNetworkFailure ? "warning" : "fatal",
+      metadata: isTransientNetworkFailure ? { category: "transient_network" } : undefined,
+    });
   });
 };
