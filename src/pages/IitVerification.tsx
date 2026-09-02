@@ -364,6 +364,12 @@ const IitVerification = () => {
     }
   };
 
+  const handleResendCode = async () => {
+    toast.info("Before resending, check your Spam or Junk folder once.");
+    setOtp("");
+    await handleSendCode();
+  };
+
   const handleVerifyOtp = async () => {
     if (otp.length !== 6) { toast.error("Please enter the 6-digit code"); return; }
     if (!selectedIit || (studentStatus !== "current_student" && studentStatus !== "alumni")) {
@@ -858,7 +864,8 @@ const IitVerification = () => {
             <Button size="lg" className="w-full h-12 text-base font-semibold rounded-xl" onClick={handleVerifyOtp} disabled={loading}>
               {loading ? "Verifying..." : "Verify & Continue"}
             </Button>
-            <button onClick={() => { setOtp(""); handleSendCode(); }} className="text-xs text-primary mt-4 block mx-auto hover:underline">Resend Code</button>
+            <button onClick={() => void handleResendCode()} disabled={loading} className="text-xs text-primary mt-4 block mx-auto hover:underline disabled:opacity-50">Resend Code</button>
+            <p className="mt-2 text-center text-[11px] leading-4 text-muted-foreground">Institute filters can delay messages. Check Spam or Junk before requesting another code.</p>
           </div>
         )}
       </div>

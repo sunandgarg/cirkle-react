@@ -78,6 +78,7 @@ const Auth = () => {
       toast.error("Please enter a valid email address");
       return;
     }
+    const isResend = authStep === "otp" || emailSent;
     setLoading(true);
     try {
       const { data, error } = await Promise.race([
@@ -101,7 +102,9 @@ const Auth = () => {
       if (data?.error) throw new Error(data.error);
       setEmailSent(true);
       setAuthStep("otp");
-      toast.success("Verification code sent to your email");
+      toast.success(isResend
+        ? "A new code was sent. If it is not in your inbox, check Spam or Junk."
+        : "Verification code sent to your email");
     } catch (error: any) {
       reportError(error, { flow: "authentication", action: "request_email_otp", metadata: { method: "email_otp" } });
       toast.error(error.message || "Could not send email code. Please try again.");
@@ -332,7 +335,7 @@ const Auth = () => {
 
               <p className="mb-2 mt-4 text-xs leading-4 text-[#637083] dark:text-white/45" aria-live="polite">
                 {authMethod === "otp"
-                  ? "We'll email a 6-digit secure code to verify this account."
+                  ? "Use your personal email here—an institute email is not required. We'll send a 6-digit secure code."
                   : "Sign in with your existing account password."}
               </p>
 
@@ -393,6 +396,9 @@ const Auth = () => {
               <button type="button" onClick={handleEmailContinue} disabled={loading} className="mt-3 w-full text-center text-xs font-semibold text-[#1666b6] disabled:opacity-50 dark:text-[#75b7ff]">
                 {emailSent ? "Send a new code" : "Resend code"}
               </button>
+              <p className="mt-2 text-center text-[11px] leading-4 text-[#637083] dark:text-white/45">
+                Still waiting? Check your Spam or Junk folder before requesting another code.
+              </p>
             </>
           )}
 

@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.3";
 import { loginCodeEmail } from "../_shared/emailTemplate.ts";
-import { sendTransactionalEmail } from "../_shared/emailDelivery.ts";
+import { isInstituteEmailAddress, sendTransactionalEmail } from "../_shared/emailDelivery.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -61,11 +61,26 @@ Deno.serve(async (req) => {
 
     const code = data.properties?.email_otp;
     if (!code) throw new Error("Supabase did not return an email OTP");
-    await sendTransactionalEmail({
-      to: email,
-      ...loginCodeEmail(code),
-      idempotencyKey: `login-otp:${email}:${await sha256Hex(code)}`,
-    });
+    const instituteEmail = isInstituteEmailAddress(email);
+    const delivery = await sendTransactionalEmail(
+      {
+        to: email,
+        ...loginCodeEmail(code),
+        idempotencyKey: `login-otp:${email}:${await sha256Hex(code)}`,
+      },
+      instituteEmail
+        ? {
+          primary: Deno.env.get("EMAIL_PROVIDER_INSTITUTE_PRIMARY") || undefined,
+          fallback: Deno.env.get("EMAIL_PROVIDER_INSTITUTE_FALLBACK") || undefined,
+        }
+        : undefined,
+    );
+    console.info(JSON.stringify({
+      event: "login_otp_email_accepted",
+      provider: delivery.provider,
+      recipient_kind: instituteEmail ? "institute" : "personal",
+      recipient_domain: email.split("@")[1],
+    }));
 
     return json({ success: true });
   } catch (error) {

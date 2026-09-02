@@ -91,7 +91,7 @@ const OtpVerification = () => {
       if (error) throw error;
       setOtp("");
       setResendIn(30);
-      toast.success("A new code has been sent");
+      toast.success("A new code has been sent. If it does not arrive, check Spam or Junk.");
     } catch (error: any) {
       toast.error(error.message || "Could not resend the code. Please try again.");
     } finally {

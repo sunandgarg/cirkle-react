@@ -1,5 +1,7 @@
 import { EMAIL_LOGO_URL, prepareEmailBranding } from "./emailLogo.ts";
 
+declare const Deno: { env: { get: (name: string) => string | undefined } };
+
 const DEFAULT_FROM = "Cirkle <verify@cirkle.world>";
 const DELIVERY_TIMEOUT_MS = 10_000;
 
@@ -11,7 +13,7 @@ export type TransactionalEmail = {
   idempotencyKey?: string;
 };
 
-type EmailProvider = "brevo" | "zeptomail" | "zavu" | "ses";
+export type EmailProvider = "brevo" | "zeptomail" | "zavu" | "ses";
 
 type EmailDeliveryOptions = {
   primary?: string;
@@ -35,7 +37,7 @@ const deterministicUuid = async (value: string) => {
 const hmac = async (key: ArrayBuffer | Uint8Array, value: string) =>
   crypto.subtle.sign(
     "HMAC",
-    await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]),
+    await crypto.subtle.importKey("raw", key as BufferSource, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]),
     new TextEncoder().encode(value),
   );
 
@@ -244,6 +246,64 @@ const hasProviderConfig = (provider: EmailProvider) => {
   return Boolean(Deno.env.get("AWS_ACCESS_KEY_ID") && Deno.env.get("AWS_SECRET_ACCESS_KEY"));
 };
 
+const INSTITUTE_EMAIL_DOMAINS = new Set([
+  "iitb.ac.in", "alumni.iitb.ac.in", "iitd.ac.in", "alumni.iitd.ac.in",
+  "iitm.ac.in", "alumni.iitm.ac.in", "iitk.ac.in", "alumni.iitk.ac.in",
+  "iitkgp.ac.in", "alumni.iitkgp.ac.in", "iitr.ac.in", "alumni.iitr.ac.in",
+  "iitg.ac.in", "alumni.iitg.ac.in", "iith.ac.in", "alumni.iith.ac.in",
+  "iitbhu.ac.in", "alumni.iitbhu.ac.in", "iiti.ac.in", "alumni.iiti.ac.in",
+  "iitrpr.ac.in", "alumni.iitrpr.ac.in", "iitp.ac.in", "alumni.iitp.ac.in",
+  "iitbbs.ac.in", "alumni.iitbbs.ac.in", "iitgn.ac.in", "alumni.iitgn.ac.in",
+  "iitj.ac.in", "alumni.iitj.ac.in", "iitmandi.ac.in", "alumni.iitmandi.ac.in",
+  "iittp.ac.in", "alumni.iittp.ac.in", "iitpkd.ac.in", "alumni.iitpkd.ac.in",
+  "iitdh.ac.in", "alumni.iitdh.ac.in", "iitbhilai.ac.in", "alumni.iitbhilai.ac.in",
+  "iitgoa.ac.in", "alumni.iitgoa.ac.in", "iitjammu.ac.in", "alumni.iitjammu.ac.in",
+  "iitism.ac.in", "alumni.iitism.ac.in",
+]);
+
+export const isInstituteEmailAddress = (email: string) => {
+  const domain = email.trim().toLowerCase().match(/^[^@\s]+@([^@\s]+)$/)?.[1];
+  return Boolean(domain && INSTITUTE_EMAIL_DOMAINS.has(domain));
+};
+
+const brevoDailyLimit = () => {
+  const configured = Number.parseInt(Deno.env.get("BREVO_DAILY_LIMIT") || "299", 10);
+  return Number.isFinite(configured) ? Math.min(300, Math.max(1, configured)) : 299;
+};
+
+const quotaRpc = async (functionName: string, body: Record<string, unknown>) => {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceKey) throw new Error("Email provider quota service is not configured");
+  const response = await fetch(`${supabaseUrl}/rest/v1/rpc/${functionName}`, {
+    method: "POST",
+    headers: {
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    console.error("Email provider quota RPC failed", functionName, response.status);
+    throw new Error("Email provider quota service is unavailable");
+  }
+  return response;
+};
+
+const reserveBrevoQuota = async () => {
+  const response = await quotaRpc("reserve_email_provider_daily_quota", {
+    p_provider: "brevo",
+    p_daily_limit: brevoDailyLimit(),
+  });
+  return (await response.json()) === true;
+};
+
+const releaseBrevoQuota = async () => {
+  await quotaRpc("release_email_provider_daily_quota", { p_provider: "brevo" });
+};
+
 export const resolveEmailProviderOrder = (primaryValue?: string, fallbackValue?: string): EmailProvider[] => {
   const configuredPrimary = primaryValue ? normalizeProvider(primaryValue) : undefined;
   const primary = configuredPrimary ||
@@ -283,11 +343,27 @@ export const sendTransactionalEmail = async (
   const failures: string[] = [];
 
   for (const provider of providers) {
+    let quotaReserved = false;
     try {
+      if (provider === "brevo") {
+        quotaReserved = await reserveBrevoQuota();
+        if (!quotaReserved) {
+          failures.push(`brevo: daily limit of ${brevoDailyLimit()} reached`);
+          console.warn("Brevo daily limit reached; continuing with the next provider");
+          continue;
+        }
+      }
       await deliver(provider, email);
       if (provider !== primary) console.warn(`Transactional email delivered through ${provider} fallback`);
       return { provider };
     } catch (error) {
+      if (provider === "brevo" && quotaReserved) {
+        try {
+          await releaseBrevoQuota();
+        } catch (releaseError) {
+          console.error("Could not release failed Brevo quota reservation", releaseError instanceof Error ? releaseError.message : releaseError);
+        }
+      }
       const message = error instanceof Error ? error.message : "unknown delivery error";
       failures.push(`${provider}: ${message}`);
       console.error(`Transactional email provider ${provider} failed`, message);

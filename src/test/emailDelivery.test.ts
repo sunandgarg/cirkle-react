@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveEmailProviderOrder } from "../../supabase/functions/_shared/emailDelivery";
+import { isInstituteEmailAddress, resolveEmailProviderOrder } from "../../supabase/functions/_shared/emailDelivery";
 
 describe("transactional email provider routing", () => {
   it("supports Brevo as a primary provider with deterministic fallbacks", () => {
@@ -18,5 +18,12 @@ describe("transactional email provider routing", () => {
       "zavu",
       "ses",
     ]);
+  });
+
+  it("routes only exact supported IIT domains as institute addresses", () => {
+    expect(isInstituteEmailAddress("sme246733@iitd.ac.in")).toBe(true);
+    expect(isInstituteEmailAddress("member@alumni.iitb.ac.in")).toBe(true);
+    expect(isInstituteEmailAddress("member@gmail.com")).toBe(false);
+    expect(isInstituteEmailAddress("member@fake-iitd.ac.in.example.com")).toBe(false);
   });
 });
