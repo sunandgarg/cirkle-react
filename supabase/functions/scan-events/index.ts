@@ -1,5 +1,11 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.3";
+import {
+  IIT_EVENT_SOURCES,
+  getIitEventSource,
+  hostnameMatchesDomain,
+  useSmallDashes,
+} from "../_shared/discoveryCatalog.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -136,7 +142,7 @@ const parseJsonText = (text: string) => {
   return Array.isArray(parsed) ? parsed : parsed.events;
 };
 
-const callProvider = async (provider: Provider, model: string, prompt: string): Promise<ExtractedEvent[]> => {
+const callProvider = async (provider: Provider, model: string, prompt: string, allowedDomain?: string): Promise<ExtractedEvent[]> => {
   let response: Response;
   if (provider === "openai") {
     const key = Deno.env.get("OPENAI_API_KEY");
@@ -147,6 +153,10 @@ const callProvider = async (provider: Provider, model: string, prompt: string): 
       body: JSON.stringify({
         model,
         input: prompt,
+        ...(allowedDomain ? {
+          tools: [{ type: "web_search", filters: { allowed_domains: [allowedDomain] } }],
+          include: ["web_search_call.action.sources"],
+        } : {}),
         text: { format: { type: "json_schema", name: "event_scan", strict: true, schema: eventSchema } },
       }),
     });
@@ -206,10 +216,19 @@ serve(async (request) => {
   const authorization = request.headers.get("Authorization") || "";
   const authClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authorization } } });
   const adminClient = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
-  const { data: { user }, error: userError } = await authClient.auth.getUser();
-  if (userError || !user) return json({ error: "Authentication required." }, 401);
-  const { data: role } = await adminClient.from("user_roles").select("role").eq("user_id", user.id).eq("role", "admin").maybeSingle();
-  if (!role) return json({ error: "Admin access required." }, 403);
+  let actorId: string | null = null;
+  const isServiceCall = authorization === `Bearer ${serviceKey}` || request.headers.get("apikey") === serviceKey;
+  if (isServiceCall) {
+    const { data: role } = await adminClient.from("user_roles").select("user_id").eq("role", "admin").limit(1).maybeSingle();
+    actorId = role?.user_id || null;
+  } else {
+    const { data: { user }, error: userError } = await authClient.auth.getUser();
+    if (userError || !user) return json({ error: "Authentication required." }, 401);
+    const { data: role } = await adminClient.from("user_roles").select("role").eq("user_id", user.id).eq("role", "admin").maybeSingle();
+    if (!role) return json({ error: "Admin access required." }, 403);
+    actorId = user.id;
+  }
+  if (!actorId) return json({ error: "No administrator is configured for automated scans." }, 403);
 
   let scanRunId: string | null = null;
   try {
@@ -220,17 +239,27 @@ serve(async (request) => {
         Deno.env.get("OPENAI_API_KEY") ? "openai" : null,
         Deno.env.get("ANTHROPIC_API_KEY") ? "anthropic" : null,
       ].filter(Boolean);
-      return json({ configured_providers: configuredProviders });
+      return json({
+        configured_providers: configuredProviders,
+        openai_web_discovery: configuredProviders.includes("openai"),
+        institute_sources: IIT_EVENT_SOURCES,
+      });
     }
-    const provider = body.provider as Provider;
+    const isDiscovery = body.action === "discover";
+    const provider = (isDiscovery ? "openai" : body.provider) as Provider;
     if (!["openai", "anthropic", "gemini"].includes(provider)) throw new Error("Choose OpenAI, Anthropic, or Gemini.");
-    const model = typeof body.model === "string" ? body.model.trim().slice(0, 100) : "";
+    const requestedModel = typeof body.model === "string" ? body.model.trim().slice(0, 100) : "";
+    const model = requestedModel || (isDiscovery ? "gpt-5.4-mini" : "");
     if (!model) throw new Error("A model name is required.");
-    const sourceUrls = normalizeList(body.source_urls, 10);
+    const requestedIit = typeof body.source_iit === "string" ? body.source_iit.trim().slice(0, 120) : "";
+    const discoverySource = isDiscovery ? getIitEventSource(requestedIit) : null;
+    if (isDiscovery && !discoverySource) throw new Error("Choose one supported IIT for official-source discovery.");
+    const sourceUrls = isDiscovery ? [`https://${discoverySource!.domain}`] : normalizeList(body.source_urls, 10);
     if (!sourceUrls.length) throw new Error("Add at least one HTTPS event source URL.");
     sourceUrls.forEach(assertPublicHttpsUrl);
     const instructions = typeof body.instructions === "string" ? body.instructions.trim().slice(0, 2000) : "";
-    const sourceIit = typeof body.source_iit === "string" ? body.source_iit.trim().slice(0, 120) : "";
+    const sourceIit = requestedIit;
+    const publishMode = body.publish_mode === "published" ? "published" : "draft";
     const rawAudience = (body.audience || {}) as Partial<Audience>;
     const audience: Audience = {
       mode: rawAudience.mode === "targeted" ? "targeted" : "everyone",
@@ -243,7 +272,7 @@ serve(async (request) => {
     }
 
     const { data: run, error: runError } = await adminClient.from("event_scan_runs").insert({
-      requested_by: user.id, provider, model, source_urls: sourceUrls, instructions: instructions || null,
+      requested_by: actorId, provider, model, source_urls: sourceUrls, instructions: instructions || null,
       source_iit: sourceIit || null,
       audience_mode: audience.mode, target_iits: audience.iits, target_courses: audience.courses,
       target_specialisations: audience.specialisations,
@@ -251,24 +280,27 @@ serve(async (request) => {
     if (runError) throw runError;
     scanRunId = run.id;
 
-    const settledSources = await Promise.allSettled(sourceUrls.map(fetchSource));
-    const sourceText = settledSources
-      .filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled")
-      .map((result) => result.value).filter(Boolean).join("\n\n");
+    const settledSources = isDiscovery ? [] : await Promise.allSettled(sourceUrls.map(fetchSource));
+    const sourceText = isDiscovery
+      ? `Use web search only on the official ${discoverySource!.domain} domain.`
+      : settledSources
+        .filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled")
+        .map((result) => result.value).filter(Boolean).join("\n\n");
     if (!sourceText) throw new Error("None of the supplied event sources could be read.");
 
     const prompt = `You are Cirkle's careful IIT event editor. Extract real, meaningful upcoming events from supplied source text. Today is ${new Date().toISOString()}.
 Return only JSON matching this shape: {"events":[{"title":"...","description":null,"start_time":"ISO-8601 with timezone","end_time":null,"location":null,"organizer":null,"registration_url":null,"source_url":"https://..."}]}.
 Prioritize significant campus experiences: institute fests, distinguished or chief-guest visits, public talks, conferences, competitions, research showcases, convocations, cultural or sports festivals, entrepreneurship programs, and substantial alumni events.
-Rules: include only events explicitly supported by the sources; exclude routine class notices, past events, news without a future event, jobs, and undated announcements; never invent dates, URLs, venues, or organizers; use null when optional data is absent; make descriptions concise and factual; deduplicate; maximum 40 events. ${sourceIit ? `These sources belong to ${sourceIit}.` : "These sources may cover multiple IITs."} ${instructions ? `Admin instructions: ${instructions}` : ""}
+Rules: include only events explicitly supported by the sources; exclude routine class notices, past events, news without a future event, jobs, admissions deadlines, tenders, routine academic notices, and undated announcements; never invent dates, URLs, venues, or organizers; every event must include a real source_url; use null when optional data is absent; make descriptions concise and factual; deduplicate; maximum ${isDiscovery ? 8 : 40} events. ${isDiscovery ? `Search only ${discoverySource!.domain}. Return at most eight of the most important events whose date and significance are confirmed on that official domain. Prefer institute-wide events, major conferences, distinguished speakers, flagship fests, convocations, and high-value opportunities over narrow routine workshops.` : ""} ${sourceIit ? `These sources belong to ${sourceIit}.` : "These sources may cover multiple IITs."} ${instructions ? `Admin instructions: ${instructions}` : ""}
 
 ${sourceText}`;
-    const extracted = await callProvider(provider, model, prompt);
+    const extracted = await callProvider(provider, model, prompt, discoverySource?.domain);
     const valid = (Array.isArray(extracted) ? extracted : []).filter((event) => {
       if (!event || typeof event.title !== "string" || typeof event.start_time !== "string") return false;
       const time = Date.parse(event.start_time);
-      return Number.isFinite(time) && time >= Date.now() - 86_400_000;
-    }).slice(0, 40);
+      const sourceIsTrusted = typeof event.source_url === "string" && (!discoverySource || hostnameMatchesDomain(event.source_url, discoverySource.domain));
+      return Number.isFinite(time) && time >= Date.now() - 86_400_000 && sourceIsTrusted;
+    }).slice(0, isDiscovery ? 8 : 40);
 
     let imported = 0;
     let skipped = extracted.length - valid.length;
@@ -277,24 +309,25 @@ ${sourceText}`;
       const { data: existing } = await adminClient.from("events").select("id").eq("source_fingerprint", fingerprint).maybeSingle();
       if (existing) { skipped += 1; continue; }
       const { error } = await adminClient.from("events").insert({
-        title: event.title.trim().slice(0, 180),
-        description: event.description?.trim().slice(0, 4000) || null,
+        title: useSmallDashes(event.title.trim()).slice(0, 180),
+        description: event.description ? useSmallDashes(event.description.trim()).slice(0, 4000) : null,
         start_time: new Date(event.start_time).toISOString(),
         end_time: event.end_time && Number.isFinite(Date.parse(event.end_time)) ? new Date(event.end_time).toISOString() : null,
-        location: event.location?.trim().slice(0, 300) || null,
-        organizer: event.organizer?.trim().slice(0, 180) || null,
+        location: event.location ? useSmallDashes(event.location.trim()).slice(0, 300) : null,
+        organizer: event.organizer ? useSmallDashes(event.organizer.trim()).slice(0, 180) : null,
         registration_url: event.registration_url?.startsWith("https://") ? event.registration_url : null,
         source_url: event.source_url?.startsWith("https://") ? event.source_url : sourceUrls[0],
         source_fingerprint: fingerprint,
         source_iit: sourceIit || null,
         source_type: "scan",
         scan_run_id: scanRunId,
-        status: "draft",
+        status: publishMode,
+        published_at: publishMode === "published" ? new Date().toISOString() : null,
         audience_mode: audience.mode,
         target_iits: audience.iits,
         target_courses: audience.courses,
         target_specialisations: audience.specialisations,
-        created_by: user.id,
+        created_by: actorId,
         community_id: "default",
       });
       if (error) skipped += 1; else imported += 1;
@@ -304,7 +337,7 @@ ${sourceText}`;
       status: "completed", discovered_count: extracted.length, imported_count: imported,
       skipped_count: skipped, completed_at: new Date().toISOString(),
     }).eq("id", scanRunId);
-    return json({ scan_run_id: scanRunId, discovered: extracted.length, imported, skipped });
+    return json({ scan_run_id: scanRunId, discovered: extracted.length, imported, skipped, publish_mode: publishMode, source_iit: sourceIit || null });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Event scan failed.";
     if (scanRunId) await adminClient.from("event_scan_runs").update({ status: "failed", error_message: message.slice(0, 1000), completed_at: new Date().toISOString() }).eq("id", scanRunId);

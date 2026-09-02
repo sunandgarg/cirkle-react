@@ -27,6 +27,8 @@ supabase secrets set CUSTOM_AI_API_KEY=... CUSTOM_AI_BASE_URL=https://provider.e
 
 The custom provider must expose an OpenAI-compatible `POST /chat/completions` endpoint.
 
+OpenAI additionally powers the trusted-source discovery action. It uses the Responses API web search tool with an allowlist of official career/ATS domains and strict JSON Schema output. The key remains in Supabase secrets.
+
 ## Admin workflow
 
 1. Open **Admin → Jobs**.
@@ -36,6 +38,10 @@ The custom provider must expose an OpenAI-compatible `POST /chat/completions` en
 5. Save trusted sources to run them again later. Enable auto-publish only after repeated clean scans.
 
 The scanner rejects private-network URLs, limits redirects, response sizes and run input, requires HTTPS application links, removes common tracking parameters, rejects expired listings, and deduplicates by canonical application URL. Every run records discovered, imported and skipped counts plus failures.
+
+The **Discover trusted jobs** action searches the allowlisted career network and normalizes every result to one of: Internship, 0-1, 1-2, 2-3, 3-5, 5-7, or 7+ years. Results remain drafts until an admin reviews them.
+
+Event Studio has a separate **Scan all 23 IITs** action. It scans one official IIT domain at a time, accepts only dated future events with an official source URL, and stores reviewable drafts. Sequential scanning limits load, isolates failures, and preserves an audit run per institute.
 
 JavaScript-only career sites may return an empty HTML shell. Prefer the company's public ATS job-feed or JSON endpoint when available.
 

@@ -1,5 +1,13 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  JOB_EXPERIENCE_BUCKETS,
+  TRUSTED_JOB_DOMAINS,
+  companyFromJobUrl,
+  hostnameMatchesAnyDomain,
+  normalizeExperienceBucket,
+  useSmallDashes,
+} from "../_shared/discoveryCatalog.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -190,7 +198,7 @@ const parseJsonText = (text: string): ExtractedJob[] => {
   return Array.isArray(parsed) ? parsed : parsed.jobs;
 };
 
-const callProvider = async (provider: Provider, model: string, prompt: string): Promise<ExtractedJob[]> => {
+const callProvider = async (provider: Provider, model: string, prompt: string, allowedDomains?: readonly string[]): Promise<ExtractedJob[]> => {
   let response: Response;
   if (provider === "openai") {
     const key = Deno.env.get("OPENAI_API_KEY");
@@ -198,7 +206,15 @@ const callProvider = async (provider: Provider, model: string, prompt: string): 
     response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, input: prompt, text: { format: { type: "json_schema", name: "job_scan", strict: true, schema: jobSchema } } }),
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        ...(allowedDomains?.length ? {
+          tools: [{ type: "web_search", filters: { allowed_domains: allowedDomains } }],
+          include: ["web_search_call.action.sources"],
+        } : {}),
+        text: { format: { type: "json_schema", name: "job_scan", strict: true, schema: jobSchema } },
+      }),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload?.error?.message || `OpenAI returned ${response.status}`);
@@ -307,7 +323,18 @@ serve(async (request) => {
         Deno.env.get("ANTHROPIC_API_KEY") ? "anthropic" : null,
         Deno.env.get("CUSTOM_AI_API_KEY") && Deno.env.get("CUSTOM_AI_BASE_URL") ? "custom" : null,
       ].filter(Boolean);
-      return json({ configured_providers: configuredProviders });
+      return json({
+        configured_providers: configuredProviders,
+        openai_web_discovery: configuredProviders.includes("openai"),
+        experience_buckets: JOB_EXPERIENCE_BUCKETS,
+      });
+    }
+    const isDiscovery = body.action === "discover";
+    const discoveryBucket = isDiscovery && typeof body.experience_bucket === "string"
+      ? body.experience_bucket.trim()
+      : "";
+    if (isDiscovery && !JOB_EXPERIENCE_BUCKETS.includes(discoveryBucket as typeof JOB_EXPERIENCE_BUCKETS[number])) {
+      throw new Error("Choose a supported experience bucket for trusted job discovery.");
     }
     sourceId = typeof body.source_id === "string" ? body.source_id : null;
     let savedSource: any = null;
@@ -316,12 +343,14 @@ serve(async (request) => {
       if (error) throw error;
       savedSource = data;
     }
-    const provider = (savedSource?.provider || body.provider) as Provider;
+    const provider = (isDiscovery ? "openai" : savedSource?.provider || body.provider) as Provider;
     if (!["openai", "anthropic", "gemini", "custom"].includes(provider)) throw new Error("Choose OpenAI, Anthropic, Gemini, or Custom compatible API.");
-    const model = String(savedSource?.model || body.model || "").trim().slice(0, 120);
+    const model = String(isDiscovery ? (body.model || "gpt-5.4-mini") : savedSource?.model || body.model || "").trim().slice(0, 120);
     if (!model) throw new Error("A model name is required.");
     const company = String(savedSource?.company || body.company || "").trim().slice(0, 180);
-    const sourceUrls = savedSource ? [savedSource.source_url] : normalizeList(body.source_urls, 5);
+    const sourceUrls = isDiscovery
+      ? TRUSTED_JOB_DOMAINS.map((domain) => `https://${domain}`)
+      : savedSource ? [savedSource.source_url] : normalizeList(body.source_urls, 5);
     if (!sourceUrls.length) throw new Error("Add at least one HTTPS career source URL.");
     sourceUrls.forEach(assertPublicHttpsUrl);
     const instructions = String(savedSource?.instructions || body.instructions || "").trim().slice(0, 2500);
@@ -335,21 +364,26 @@ serve(async (request) => {
     if (runError) throw runError;
     scanRunId = run.id;
 
-    const settledSources = await Promise.allSettled(sourceUrls.map(fetchSource));
-    const sourceText = settledSources
-      .filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled")
-      .map((result) => result.value).filter(Boolean).join("\n\n");
+    const settledSources = isDiscovery ? [] : await Promise.allSettled(sourceUrls.map(fetchSource));
+    const sourceText = isDiscovery
+      ? "Use web search across the configured trusted career and ATS domains."
+      : settledSources
+        .filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled")
+        .map((result) => result.value).filter(Boolean).join("\n\n");
     if (!sourceText) throw new Error("None of the supplied career sources could be read. Use a public careers page or ATS JSON feed.");
 
     const prompt = `You extract real, currently open jobs from supplied company career-page text. Today is ${new Date().toISOString()}.
 Return only JSON shaped as {"jobs":[{"title":"...","company":null,"location":null,"description":null,"job_type":null,"experience_level":null,"category":null,"salary_text":null,"skills":null,"apply_url":null,"posted_at":null,"expires_at":null,"source_url":null}]}.
-Rules: include only explicit job vacancies supported by the sources; exclude events, blogs, talent-network signup pages and closed jobs; every result must have a direct HTTPS application or job-detail URL; never invent titles, companies, locations, dates, salary, skills or URLs; use null when absent; deduplicate; maximum 100 jobs. ${company ? `The expected company is ${company}.` : ""} ${instructions ? `Admin instructions: ${instructions}` : ""}
+Rules: include only explicit job vacancies supported by the sources; exclude events, blogs, talent-network signup pages and closed jobs; every result must have a direct HTTPS application or job-detail URL; never invent titles, companies, locations, dates, salary, skills or URLs; use null when absent; deduplicate; maximum ${isDiscovery ? 6 : 100} jobs. Normalize experience_level to exactly one of ${JOB_EXPERIENCE_BUCKETS.join(", ")}. ${isDiscovery ? `Find up to six current ${discoveryBucket} roles, and only return roles whose official requirements support that bucket. Search only these domains: ${TRUSTED_JOB_DOMAINS.join(", ")}.` : ""} ${company ? `The expected company is ${company}.` : ""} ${instructions ? `Admin instructions: ${instructions}` : ""}
 
 ${sourceText}`;
-    const extracted = await callProvider(provider, model, prompt);
+    const extracted = await callProvider(provider, model, prompt, isDiscovery ? TRUSTED_JOB_DOMAINS : undefined);
     const valid = (Array.isArray(extracted) ? extracted : []).filter((job) => {
       if (!job || typeof job.title !== "string" || !job.title.trim() || typeof job.apply_url !== "string") return false;
-      try { assertPublicHttpsUrl(job.apply_url); return true; } catch { return false; }
+      try {
+        assertPublicHttpsUrl(job.apply_url);
+        return !isDiscovery || hostnameMatchesAnyDomain(job.apply_url, TRUSTED_JOB_DOMAINS);
+      } catch { return false; }
     }).slice(0, 100);
 
     let imported = 0;
@@ -363,13 +397,16 @@ ${sourceText}`;
       const postedAt = (parsedPostedAt && parsedPostedAt <= new Date()) ? parsedPostedAt.toISOString() : new Date().toISOString();
       const expiresAt = job.expires_at && Number.isFinite(Date.parse(job.expires_at)) ? new Date(job.expires_at).toISOString() : null;
       if (expiresAt && new Date(expiresAt) <= new Date()) { skipped += 1; continue; }
-      const sourceUrl = safeCanonicalUrl(job.source_url, sourceUrls[0]);
+      const candidateSourceUrl = safeCanonicalUrl(job.source_url, applyUrl);
+      const sourceUrl = isDiscovery && !hostnameMatchesAnyDomain(candidateSourceUrl, TRUSTED_JOB_DOMAINS)
+        ? applyUrl
+        : candidateSourceUrl;
       const { error } = await adminClient.from("jobs").insert({
-        title: job.title.trim().slice(0, 180), company: (job.company?.trim() || company || "Company").slice(0, 180),
-        location: job.location?.trim().slice(0, 240) || "Not specified",
-        description: job.description?.trim().slice(0, 8000) || null,
-        job_type: normalizedJobType(job.job_type), experience_level: job.experience_level?.trim().slice(0, 100) || null,
-        category: job.category?.trim().slice(0, 100) || null, salary_text: job.salary_text?.trim().slice(0, 180) || null,
+        title: useSmallDashes(job.title.trim()).slice(0, 180), company: useSmallDashes(job.company?.trim() || company || companyFromJobUrl(applyUrl)).slice(0, 180),
+        location: job.location ? useSmallDashes(job.location.trim()).slice(0, 240) : "Not specified",
+        description: job.description ? useSmallDashes(job.description.trim()).slice(0, 8000) : null,
+        job_type: normalizedJobType(job.job_type), experience_level: normalizeExperienceBucket(job.job_type?.toLowerCase().includes("intern") ? "Internship" : job.experience_level),
+        category: job.category ? useSmallDashes(job.category.trim()).slice(0, 100) : null, salary_text: job.salary_text ? useSmallDashes(job.salary_text.trim()).slice(0, 180) : null,
         skills: normalizeList(job.skills, 30), easy_apply: false, apply_url: applyUrl,
         source_url: sourceUrl, source_fingerprint: fingerprint, source_type: "scan", scan_run_id: scanRunId,
         status: publishMode, published_at: publishMode === "published" ? new Date().toISOString() : null,
@@ -386,7 +423,7 @@ ${sourceText}`;
     if (sourceId) await adminClient.from("job_scan_sources").update({
       last_scanned_at: new Date().toISOString(), last_scan_status: "completed", last_error: null, updated_at: new Date().toISOString(),
     }).eq("id", sourceId);
-    return json({ scan_run_id: scanRunId, discovered: extracted.length, imported, skipped, publish_mode: publishMode });
+    return json({ scan_run_id: scanRunId, discovered: extracted.length, imported, skipped, publish_mode: publishMode, experience_bucket: discoveryBucket || null });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Job scan failed.";
     if (scanRunId) await adminClient.from("job_scan_runs").update({ status: "failed", error_message: message.slice(0, 1000), completed_at: new Date().toISOString() }).eq("id", scanRunId);

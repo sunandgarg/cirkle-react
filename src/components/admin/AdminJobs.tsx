@@ -42,7 +42,7 @@ const emptyJob = (): JobForm => ({
 
 const MODEL_DEFAULTS: Record<Provider, string> = {
   gemini: "gemini-2.5-flash",
-  openai: "gpt-5-mini",
+  openai: "gpt-5.4-mini",
   anthropic: "claude-sonnet-4-20250514",
   custom: "your-model",
 };
@@ -83,8 +83,8 @@ const AdminJobs = () => {
   const [showEditor, setShowEditor] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [form, setForm] = useState<JobForm>(emptyJob());
-  const [provider, setProvider] = useState<Provider>("gemini");
-  const [model, setModel] = useState(MODEL_DEFAULTS.gemini);
+  const [provider, setProvider] = useState<Provider>("openai");
+  const [model, setModel] = useState(MODEL_DEFAULTS.openai);
   const [company, setCompany] = useState("");
   const [sourceUrls, setSourceUrls] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -130,7 +130,7 @@ const AdminJobs = () => {
       const { data, error } = await supabase.functions.invoke("scan-jobs", { body: { action: "status" } });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
-      return data as { configured_providers?: Provider[] };
+      return data as { configured_providers?: Provider[]; openai_web_discovery?: boolean; experience_buckets?: string[] };
     },
     enabled: !!user,
     staleTime: 5 * 60 * 1000,
@@ -251,7 +251,34 @@ const AdminJobs = () => {
     },
     onError: (error: Error) => toast.error(error.message || "Career scan failed"),
   });
-  const agentStatus = runScan.isPending ? "Running" : isScannerStatusLoading ? "Checking" : scannerReady ? "Ready" : "Setup needed";
+  const discoverJobs = useMutation({
+    mutationFn: async () => {
+      const buckets = scannerStatus?.experience_buckets || [];
+      let imported = 0;
+      const failures: string[] = [];
+      for (const experienceBucket of buckets) {
+        const { data, error } = await supabase.functions.invoke("scan-jobs", {
+          body: {
+            action: "discover",
+            model: MODEL_DEFAULTS.openai,
+            experience_bucket: experienceBucket,
+            publish_mode: "draft",
+            instructions: "Prioritize roles open to applicants in India and retain only active, directly applicable listings.",
+          },
+        });
+        if (error || data?.error) failures.push(experienceBucket);
+        else imported += Number(data.imported || 0);
+      }
+      return { imported, failures };
+    },
+    onSuccess: async (result) => {
+      await Promise.all([refreshJobs(), queryClient.invalidateQueries({ queryKey: ["admin-job-scans"] })]);
+      if (result.failures.length) toast.warning(`${result.imported} drafts imported; ${result.failures.length} experience buckets need retry`);
+      else toast.success(`${result.imported} trusted-source job draft${result.imported === 1 ? "" : "s"} imported`);
+    },
+    onError: (error: Error) => toast.error(error.message || "OpenAI job discovery failed"),
+  });
+  const agentStatus = runScan.isPending || discoverJobs.isPending ? "Running" : isScannerStatusLoading ? "Checking" : scannerReady ? "Ready" : "Setup needed";
 
   const updateSource = async (id: string, patch: Record<string, unknown>) => {
     const { error } = await (supabase as any).from("job_scan_sources").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
@@ -286,6 +313,9 @@ const AdminJobs = () => {
         </Button>
         <Button variant="outline" className="h-11 shrink-0 rounded-full px-5 font-bold" onClick={() => { setForm(emptyJob()); setShowEditor(true); }}>
           <Plus className="h-4 w-4" /> Add manually
+        </Button>
+        <Button variant="outline" className="h-11 shrink-0 rounded-full px-5 font-bold" disabled={discoverJobs.isPending || !scannerStatus?.openai_web_discovery} onClick={() => discoverJobs.mutate()}>
+          {discoverJobs.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />} Discover trusted jobs
         </Button>
       </div>
 

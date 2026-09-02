@@ -41,7 +41,7 @@ const emptyEvent = (): EventForm => ({
   organizer: "", registration_url: "", status: "draft",
 });
 const MODEL_DEFAULTS = {
-  openai: "gpt-5-mini",
+  openai: "gpt-5.4-mini",
   anthropic: "claude-sonnet-4-20250514",
   gemini: "gemini-2.5-flash",
 } as const;
@@ -133,8 +133,8 @@ const AdminEvents = () => {
   const [showScanner, setShowScanner] = useState(false);
   const [form, setForm] = useState<EventForm>(emptyEvent());
   const [statusFilter, setStatusFilter] = useState("all");
-  const [provider, setProvider] = useState<keyof typeof MODEL_DEFAULTS>("gemini");
-  const [model, setModel] = useState<string>(MODEL_DEFAULTS.gemini);
+  const [provider, setProvider] = useState<keyof typeof MODEL_DEFAULTS>("openai");
+  const [model, setModel] = useState<string>(MODEL_DEFAULTS.openai);
   const [sourceUrls, setSourceUrls] = useState("");
   const [instructions, setInstructions] = useState("");
   const [sourceIit, setSourceIit] = useState("");
@@ -166,7 +166,7 @@ const AdminEvents = () => {
       const { data, error } = await supabase.functions.invoke("scan-events", { body: { action: "status" } });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
-      return data as { configured_providers?: Array<keyof typeof MODEL_DEFAULTS> };
+      return data as { configured_providers?: Array<keyof typeof MODEL_DEFAULTS>; openai_web_discovery?: boolean };
     },
     enabled: !!user,
     staleTime: 5 * 60 * 1000,
@@ -242,6 +242,35 @@ const AdminEvents = () => {
     onError: (error: Error) => toast.error(error.message || "Event scan failed"),
   });
 
+  const discoverAllIits = useMutation({
+    mutationFn: async () => {
+      let imported = 0;
+      const failures: string[] = [];
+      for (const iit of IIT_LIST) {
+        const { data, error } = await supabase.functions.invoke("scan-events", {
+          body: {
+            action: "discover",
+            model: MODEL_DEFAULTS.openai,
+            source_iit: iit.name,
+            publish_mode: "draft",
+            audience: emptyAudience(),
+            instructions: "Keep only important future institute events with a confirmed date and official source page.",
+          },
+        });
+        if (error || data?.error) failures.push(iit.name);
+        else imported += Number(data.imported || 0);
+      }
+      return { imported, failures };
+    },
+    onSuccess: ({ imported, failures }) => {
+      void queryClient.invalidateQueries({ queryKey: ["admin-events"] });
+      void queryClient.invalidateQueries({ queryKey: ["admin-event-scans"] });
+      if (failures.length) toast.warning(`${imported} drafts imported; ${failures.length} IIT scans need retry`);
+      else toast.success(`${imported} important event drafts imported from all 23 IITs`);
+    },
+    onError: (error: Error) => toast.error(error.message || "IIT event discovery failed"),
+  });
+
   const updateStatus = async (event: EventRow, status: "published" | "draft" | "archived") => {
     const { error } = await supabase.from("events").update({ status, published_at: status === "published" ? new Date().toISOString() : event.published_at, updated_at: new Date().toISOString() }).eq("id", event.id);
     if (error) { toast.error(error.message); return; }
@@ -287,10 +316,11 @@ const AdminEvents = () => {
           </div>
           <div className="flex gap-2">
             <Button variant="outline" className="flex-1 sm:flex-none rounded-xl" onClick={() => setShowScanner(true)}><Bot className="w-4 h-4" /> AI Generate</Button>
+            <Button variant="outline" className="flex-1 sm:flex-none rounded-xl" disabled={discoverAllIits.isPending || !scannerStatus?.openai_web_discovery} onClick={() => discoverAllIits.mutate()}>{discoverAllIits.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Radar className="w-4 h-4" />} Scan all 23 IITs</Button>
             <Button className="flex-1 sm:flex-none rounded-xl" onClick={() => { setForm(emptyEvent()); setShowEditor(true); }}><Plus className="w-4 h-4" /> Add manually</Button>
           </div>
         </div>
-        {!isScannerStatusLoading && !scannerReady && <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-[11px] leading-relaxed text-amber-800 dark:text-amber-200"><span className="font-bold">Connect Gemini once:</span> create a Gemini API key, then add it as <code className="font-mono">GEMINI_API_KEY</code> in Supabase Edge Function secrets. The same key powers Job Studio and Event Studio and is never exposed to browsers.</div>}
+        {!isScannerStatusLoading && !scannerReady && <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-[11px] leading-relaxed text-amber-800 dark:text-amber-200"><span className="font-bold">Connect an AI provider once:</span> add its API key to Supabase Edge Function secrets. OpenAI enables official-domain discovery across Job Studio and Event Studio, and the key is never exposed to browsers.</div>}
         {scannerReady && <div className="mt-4 flex items-center gap-2 rounded-xl bg-emerald-500/10 px-3 py-2 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300"><ShieldCheck className="h-4 w-4" /> Connected: {configuredProviders.join(", ")}. AI imports drafts only; an admin remains the publishing gate.</div>}
         <div className="grid grid-cols-3 gap-2 mt-4">
           {["draft", "published", "archived"].map((status) => <div key={status} className="rounded-xl bg-secondary/55 p-3 text-center"><p className="text-lg font-bold">{events.filter((event) => event.status === status).length}</p><p className="text-[10px] uppercase tracking-wide text-muted-foreground">{status}</p></div>)}
