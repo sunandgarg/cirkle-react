@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getProfileCompletion, nextProfileReminder, shouldShowProfileCompletion } from "@/lib/profileCompletion";
 
 describe("profile completion reminder", () => {
-  it("appears only on consult, jobs and events—not inside forum", () => {
+  it("appears only on consult, jobs and events - not inside forum", () => {
     expect(shouldShowProfileCompletion("/consult")).toBe(true);
     expect(shouldShowProfileCompletion("/consult/mentors")).toBe(true);
     expect(shouldShowProfileCompletion("/jobs/remote")).toBe(true);

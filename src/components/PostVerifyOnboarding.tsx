@@ -255,7 +255,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
       return;
     }
     const result = await refetchCourseRequest();
-    if (result.data?.status === "approved") toast.success("Course approved — continue your profile");
+    if (result.data?.status === "approved") toast.success("Course approved - continue your profile");
     else if (result.data?.status === "rejected") toast.error(result.data.review_notes || "Course was not approved. Choose another course.");
     else toast.info("Your course is still pending admin approval");
   };

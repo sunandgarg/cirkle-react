@@ -99,7 +99,7 @@ serve(async (req) => {
       ...COHORT_SCOPE,
       community_id: "default",
       author_id: userIds[index % userIds.length],
-      content: `${names[index % names.length]}: MBA General 2026 load conversation #${index + 1} — ${topics[index % topics.length]}.`,
+      content: `${names[index % names.length]}: MBA General 2026 load conversation #${index + 1} - ${topics[index % topics.length]}.`,
       is_anonymous: index % 37 === 0,
       created_at: new Date(Date.now() - (1200 - index) * 900).toISOString(),
     }));

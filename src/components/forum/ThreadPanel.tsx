@@ -86,7 +86,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
         return Array.from({ length: parentPost.replyCount || 0 }, (_, index) => ({
           id: `demo-thread-${parentPost.id}-${index}`,
           author_id: `demo-thread-user-${index}`,
-          content: `Cohort reply ${index + 1} — following up in this focused discussion.`,
+          content: `Cohort reply ${index + 1} - following up in this focused discussion.`,
           created_at: new Date(Date.now() - (parentPost.replyCount - index) * 60_000).toISOString(),
           is_anonymous: false,
           profile: { name: ["Aditi Rao", "Kabir Khanna", "Meera Joshi"][index % 3], avatar_url: null, slug: null },

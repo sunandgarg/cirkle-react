@@ -30,7 +30,7 @@ const PRODUCT_FEATURES = [
     icon: MessagesSquare,
     eyebrow: "Focused forums",
     title: "The right conversation, already in the right room.",
-    description: "Members are placed into relevant community spaces by shared context—not follower counts or noisy algorithms.",
+    description: "Members are placed into relevant community spaces by shared context - not follower counts or noisy algorithms.",
     accent: "bg-[#f5c8b5] dark:bg-[#44291f]",
   },
   {
@@ -78,7 +78,7 @@ const FAQS = [
   },
   {
     question: "How is this different from a public social network?",
-    answer: "Cirkle starts with shared context, verified access and relevant rooms. It is designed for useful participation—not public follower races, viral reach or unsolicited inbox traffic.",
+    answer: "Cirkle starts with shared context, verified access and relevant rooms. It is designed for useful participation - not public follower races, viral reach or unsolicited inbox traffic.",
   },
 ];
 
@@ -94,10 +94,10 @@ const Landing = () => {
   const { user, loading } = useAuth();
 
   useMetaTags({
-    title: "Cirkle — Invite-only community-specific networking",
+    title: "Cirkle - Invite-only community-specific networking",
     description: "Cirkle is the private networking platform for verified communities: focused forums, trusted connections, relevant opportunities, events and expert access.",
-    ogTitle: "Cirkle — Find the network you actually belong in",
-    ogDescription: "Invite-only, community-specific networking built around shared context—not public follower counts.",
+    ogTitle: "Cirkle - Find the network you actually belong in",
+    ogDescription: "Invite-only, community-specific networking built around shared context - not public follower counts.",
     ogImage: "https://cirkle.world/cirkle-logo.png",
     ogUrl: "https://cirkle.world",
     canonicalUrl: "https://cirkle.world",
@@ -165,7 +165,7 @@ const Landing = () => {
                 The network that starts with what you <span className="font-black">share.</span>
               </h1>
               <p className="mt-7 max-w-xl text-base font-medium leading-7 text-black/66 dark:text-white/66 sm:text-lg sm:leading-8">
-                Cirkle brings verified communities into one private network—for focused conversations, trusted connections and opportunities that arrive with context.
+                Cirkle brings verified communities into one private network - for focused conversations, trusted connections and opportunities that arrive with context.
               </p>
 
               <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -213,7 +213,7 @@ const Landing = () => {
                     <div className="mx-auto mb-5 w-fit rounded-full border border-black/8 bg-white px-3 py-1 text-[9px] font-bold text-black/45 shadow-sm dark:border-white/8 dark:bg-white/5 dark:text-white/45">Today</div>
                     <div className="max-w-[88%] rounded-2xl rounded-tl-md border border-black/8 bg-white p-3 shadow-sm dark:border-white/8 dark:bg-[#20242c]">
                       <div className="flex items-center gap-2"><div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#d9d5ff] text-[10px] font-black text-[#463ca1]">AK</div><div><p className="text-[11px] font-black">Aarav K.</p><p className="text-[8px] text-black/42 dark:text-white/42">Verified member</p></div></div>
-                      <p className="mt-2 text-[11px] leading-5 text-black/72 dark:text-white/72">Sharing the referral opening here first—happy to help anyone from this circle prepare.</p>
+                      <p className="mt-2 text-[11px] leading-5 text-black/72 dark:text-white/72">Sharing the referral opening here first - happy to help anyone from this circle prepare.</p>
                     </div>
                     <div className="ml-auto mt-3 max-w-[82%] rounded-2xl rounded-tr-md bg-[#d4f0e4] p-3 dark:bg-[#194334]">
                       <p className="text-[11px] leading-5">This is exactly the context I needed. Sending a connection request.</p>
@@ -271,9 +271,9 @@ const Landing = () => {
             <motion.div {...reveal} className="grid gap-12 lg:grid-cols-[.85fr_1.15fr] lg:items-end">
               <div>
                 <p className="mb-4 text-[11px] font-extrabold uppercase tracking-[0.18em] text-[#f3b99e]">A network of networks</p>
-                <h2 className="font-display text-4xl font-medium leading-[1.02] tracking-[-0.05em] sm:text-6xl">Built around belonging—not broadcasting.</h2>
+                <h2 className="font-display text-4xl font-medium leading-[1.02] tracking-[-0.05em] sm:text-6xl">Built around belonging - not broadcasting.</h2>
               </div>
-              <p className="max-w-2xl text-sm leading-7 text-white/58 sm:text-base">Public platforms ask everyone to perform for everyone. Cirkle gives each community its own boundaries, shared context and way to participate—then lets trusted connections grow naturally across them.</p>
+              <p className="max-w-2xl text-sm leading-7 text-white/58 sm:text-base">Public platforms ask everyone to perform for everyone. Cirkle gives each community its own boundaries, shared context and way to participate - then lets trusted connections grow naturally across them.</p>
             </motion.div>
 
             <div className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

@@ -335,7 +335,7 @@ const Auth = () => {
 
               <p className="mb-2 mt-4 text-xs leading-4 text-[#637083] dark:text-white/45" aria-live="polite">
                 {authMethod === "otp"
-                  ? "Use your personal email here—an institute email is not required. We'll send a 6-digit secure code."
+                  ? "Use your personal email here - an institute email is not required. We'll send a 6-digit secure code."
                   : "Sign in with your existing account password."}
               </p>
 

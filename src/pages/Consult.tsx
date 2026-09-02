@@ -249,7 +249,7 @@ const Consult = () => {
               <ShieldCheck className="mr-1.5 inline h-4 w-4 text-primary" /> The mentor reviews this request before a private conversation is opened. Payment is not collected on this screen.
             </div>
             <Button className="w-full h-12 rounded-2xl text-sm font-bold gap-2" onClick={() => bookMutation.mutate()} disabled={bookMutation.isPending || !selectedDate || !selectedTime || bookingPrice === null}>
-              {bookMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending request…</> : <><Sparkles className="w-4 h-4" /> Send request · ₹{bookingPrice ?? "—"}</>}
+              {bookMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending request…</> : <><Sparkles className="w-4 h-4" /> Send request · ₹{bookingPrice ?? "-"}</>}
             </Button>
           </div>
         </div>
