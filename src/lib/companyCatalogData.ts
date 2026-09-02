@@ -3,6 +3,10 @@ export interface CompanyCatalogRecord {
   name: string;
   ticker: string;
   logo: string;
+  iitRecruiter?: boolean;
+  iitCount?: number;
+  careerUrl?: string | null;
+  logoStatus?: string;
 }
 
 let catalogPromise: Promise<CompanyCatalogRecord[]> | null = null;

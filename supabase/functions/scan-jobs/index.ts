@@ -8,10 +8,11 @@ import {
   normalizeExperienceBucket,
   useSmallDashes,
 } from "../_shared/discoveryCatalog.ts";
+import { parseFreshJobPostedAt } from "../_shared/jobFreshness.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-recruiter-scan-secret",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -44,6 +45,8 @@ type ScanConfig = {
   publishMode: PublishMode;
   sourceId: string | null;
 };
+
+type RecruiterSource = { company: string; source_url: string };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -299,8 +302,11 @@ serve(async (request) => {
   const adminClient = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
   let actorId: string | null = null;
+  const configuredScanSecret = Deno.env.get("RECRUITER_SCAN_SECRET") || "";
+  const suppliedScanSecret = request.headers.get("x-recruiter-scan-secret") || "";
+  const isSecretScan = configuredScanSecret.length >= 32 && suppliedScanSecret === configuredScanSecret;
   const isServiceCall = authorization === `Bearer ${serviceKey}` || request.headers.get("apikey") === serviceKey;
-  if (isServiceCall) {
+  if (isServiceCall || isSecretScan) {
     const { data: role } = await adminClient.from("user_roles").select("user_id").eq("role", "admin").limit(1).maybeSingle();
     actorId = role?.user_id || null;
   } else {
@@ -330,6 +336,20 @@ serve(async (request) => {
       });
     }
     const isDiscovery = body.action === "discover";
+    const isRecruiterBatch = body.action === "recruiter_batch";
+    const recruiterSources: RecruiterSource[] = isRecruiterBatch && Array.isArray(body.sources)
+      ? body.sources.slice(0, 5).flatMap((item: unknown) => {
+        if (!item || typeof item !== "object") return [];
+        const record = item as Record<string, unknown>;
+        const recruiterCompany = typeof record.company === "string" ? record.company.trim().slice(0, 180) : "";
+        const recruiterUrl = typeof record.source_url === "string" ? record.source_url.trim() : "";
+        if (!recruiterCompany || !recruiterUrl) return [];
+        assertPublicHttpsUrl(recruiterUrl);
+        return [{ company: recruiterCompany, source_url: canonicalUrl(recruiterUrl) }];
+      })
+      : [];
+    if (isRecruiterBatch && !isSecretScan && !isServiceCall) throw new Error("Automated recruiter scans require the protected dispatcher.");
+    if (isRecruiterBatch && !recruiterSources.length) throw new Error("Add at least one recruiter career source.");
     const discoveryBucket = isDiscovery && typeof body.experience_bucket === "string"
       ? body.experience_bucket.trim()
       : "";
@@ -343,18 +363,20 @@ serve(async (request) => {
       if (error) throw error;
       savedSource = data;
     }
-    const provider = (isDiscovery ? "openai" : savedSource?.provider || body.provider) as Provider;
+    const provider = ((isDiscovery || isRecruiterBatch) ? "openai" : savedSource?.provider || body.provider) as Provider;
     if (!["openai", "anthropic", "gemini", "custom"].includes(provider)) throw new Error("Choose OpenAI, Anthropic, Gemini, or Custom compatible API.");
-    const model = String(isDiscovery ? (body.model || "gpt-5.4-mini") : savedSource?.model || body.model || "").trim().slice(0, 120);
+    const model = String((isDiscovery || isRecruiterBatch) ? (body.model || "gpt-5.4-mini") : savedSource?.model || body.model || "").trim().slice(0, 120);
     if (!model) throw new Error("A model name is required.");
-    const company = String(savedSource?.company || body.company || "").trim().slice(0, 180);
-    const sourceUrls = isDiscovery
+    const company = String(savedSource?.company || body.company || (isRecruiterBatch ? recruiterSources.map((source) => source.company).join(", ") : "")).trim().slice(0, 180);
+    const sourceUrls = isRecruiterBatch
+      ? recruiterSources.map((source) => source.source_url)
+      : isDiscovery
       ? TRUSTED_JOB_DOMAINS.map((domain) => `https://${domain}`)
       : savedSource ? [savedSource.source_url] : normalizeList(body.source_urls, 5);
     if (!sourceUrls.length) throw new Error("Add at least one HTTPS career source URL.");
     sourceUrls.forEach(assertPublicHttpsUrl);
     const instructions = String(savedSource?.instructions || body.instructions || "").trim().slice(0, 2500);
-    const publishMode: PublishMode = (savedSource?.auto_publish || body.publish_mode === "published") ? "published" : "draft";
+    const publishMode: PublishMode = (isRecruiterBatch || savedSource?.auto_publish || body.publish_mode === "published") ? "published" : "draft";
     const config: ScanConfig = { actorId, provider, model, company, sourceUrls, instructions, publishMode, sourceId };
 
     const { data: run, error: runError } = await adminClient.from("job_scan_runs").insert({
@@ -364,25 +386,38 @@ serve(async (request) => {
     if (runError) throw runError;
     scanRunId = run.id;
 
-    const settledSources = isDiscovery ? [] : await Promise.allSettled(sourceUrls.map(fetchSource));
-    const sourceText = isDiscovery
-      ? "Use web search across the configured trusted career and ATS domains."
+    const settledSources = (isDiscovery || isRecruiterBatch) ? [] : await Promise.allSettled(sourceUrls.map(fetchSource));
+    const sourceText = isRecruiterBatch
+      ? `Use web search only on these official recruiter career sources:\n${recruiterSources.map((source) => `- ${source.company}: ${source.source_url}`).join("\n")}`
+      : isDiscovery
+        ? "Use web search across the configured trusted career and ATS domains."
       : settledSources
         .filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled")
         .map((result) => result.value).filter(Boolean).join("\n\n");
     if (!sourceText) throw new Error("None of the supplied career sources could be read. Use a public careers page or ATS JSON feed.");
 
-    const prompt = `You extract real, currently open jobs from supplied company career-page text. Today is ${new Date().toISOString()}.
+    const scanStartedAt = Date.now();
+    const prompt = `You extract real, currently open jobs from supplied company career-page text. The authoritative current timestamp is ${new Date(scanStartedAt).toISOString()}.
 Return only JSON shaped as {"jobs":[{"title":"...","company":null,"location":null,"description":null,"job_type":null,"experience_level":null,"category":null,"salary_text":null,"skills":null,"apply_url":null,"posted_at":null,"expires_at":null,"source_url":null}]}.
-Rules: include only explicit job vacancies supported by the sources; exclude events, blogs, talent-network signup pages and closed jobs; every result must have a direct HTTPS application or job-detail URL; never invent titles, companies, locations, dates, salary, skills or URLs; use null when absent; deduplicate; maximum ${isDiscovery ? 6 : 100} jobs. Normalize experience_level to exactly one of ${JOB_EXPERIENCE_BUCKETS.join(", ")}. ${isDiscovery ? `Find up to six current ${discoveryBucket} roles, and only return roles whose official requirements support that bucket. Search only these domains: ${TRUSTED_JOB_DOMAINS.join(", ")}.` : ""} ${company ? `The expected company is ${company}.` : ""} ${instructions ? `Admin instructions: ${instructions}` : ""}
+Rules: include only explicit job vacancies supported by the official sources; exclude events, blogs, talent-network signup pages and closed jobs; every result must have a direct HTTPS application or job-detail URL; never invent titles, companies, locations, dates, salary, skills or URLs. STRICT FRESHNESS: return a job only when the official source explicitly shows a posting timestamp/date within the preceding 24 hours. Put that explicit time in posted_at as ISO 8601. If the posting time is missing, unclear, older than 24 hours, or only inferred from search ranking, omit the job entirely. source_url must identify the official page that displays the date. Deduplicate; maximum ${isDiscovery ? 6 : 100} jobs. Normalize experience_level to exactly one of ${JOB_EXPERIENCE_BUCKETS.join(", ")}. ${isDiscovery ? `Find up to six current ${discoveryBucket} roles, and only return roles whose official requirements support that bucket. Search only these domains: ${TRUSTED_JOB_DOMAINS.join(", ")}.` : ""} ${isRecruiterBatch ? `Return only jobs belonging to the listed recruiters and official sources.` : ""} ${company ? `The expected company is ${company}.` : ""} ${instructions ? `Admin instructions: ${instructions}` : ""}
 
 ${sourceText}`;
-    const extracted = await callProvider(provider, model, prompt, isDiscovery ? TRUSTED_JOB_DOMAINS : undefined);
+    const allowedDomains = isRecruiterBatch
+      ? [...new Set(sourceUrls.map((url) => new URL(url).hostname))]
+      : isDiscovery ? TRUSTED_JOB_DOMAINS : undefined;
+    const extracted = await callProvider(provider, model, prompt, allowedDomains);
     const valid = (Array.isArray(extracted) ? extracted : []).filter((job) => {
       if (!job || typeof job.title !== "string" || !job.title.trim() || typeof job.apply_url !== "string") return false;
       try {
         assertPublicHttpsUrl(job.apply_url);
-        return !isDiscovery || hostnameMatchesAnyDomain(job.apply_url, TRUSTED_JOB_DOMAINS);
+        if (!parseFreshJobPostedAt(job.posted_at, scanStartedAt)) return false;
+        if (isDiscovery && !hostnameMatchesAnyDomain(job.apply_url, TRUSTED_JOB_DOMAINS)) return false;
+        if (isRecruiterBatch) {
+          if (!job.source_url || !hostnameMatchesAnyDomain(job.source_url, allowedDomains || [])) return false;
+          const normalizedCompany = (job.company || "").trim().toLowerCase();
+          if (!recruiterSources.some((source) => normalizedCompany === source.company.toLowerCase())) return false;
+        }
+        return true;
       } catch { return false; }
     }).slice(0, 100);
 
@@ -393,8 +428,8 @@ ${sourceText}`;
       const fingerprint = await sha256(applyUrl);
       const { data: existing } = await adminClient.from("jobs").select("id").eq("source_fingerprint", fingerprint).maybeSingle();
       if (existing) { skipped += 1; continue; }
-      const parsedPostedAt = job.posted_at && Number.isFinite(Date.parse(job.posted_at)) ? new Date(job.posted_at) : new Date();
-      const postedAt = (parsedPostedAt && parsedPostedAt <= new Date()) ? parsedPostedAt.toISOString() : new Date().toISOString();
+      const postedAt = parseFreshJobPostedAt(job.posted_at, scanStartedAt);
+      if (!postedAt) { skipped += 1; continue; }
       const expiresAt = job.expires_at && Number.isFinite(Date.parse(job.expires_at)) ? new Date(job.expires_at).toISOString() : null;
       if (expiresAt && new Date(expiresAt) <= new Date()) { skipped += 1; continue; }
       const candidateSourceUrl = safeCanonicalUrl(job.source_url, applyUrl);

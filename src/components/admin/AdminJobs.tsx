@@ -16,6 +16,7 @@ import { toast } from "sonner";
 
 type JobStatus = "draft" | "published" | "archived" | "closed";
 type Provider = "gemini" | "openai" | "anthropic" | "custom";
+type RecruiterSource = { company: string; source_url: string };
 
 type JobForm = {
   id?: string;
@@ -90,6 +91,8 @@ const AdminJobs = () => {
   const [instructions, setInstructions] = useState("");
   const [publishMode, setPublishMode] = useState<"draft" | "published">("draft");
   const [saveSources, setSaveSources] = useState(true);
+  const [recruiterScanSecret, setRecruiterScanSecret] = useState("");
+  const [recruiterScanProgress, setRecruiterScanProgress] = useState({ completed: 0, total: 0 });
 
   const { data: jobs = [], isLoading, error: jobsError } = useQuery({
     queryKey: ["admin-jobs"],
@@ -278,7 +281,44 @@ const AdminJobs = () => {
     },
     onError: (error: Error) => toast.error(error.message || "OpenAI job discovery failed"),
   });
-  const agentStatus = runScan.isPending || discoverJobs.isPending ? "Running" : isScannerStatusLoading ? "Checking" : scannerReady ? "Ready" : "Setup needed";
+  const scanRecruiters = useMutation({
+    mutationFn: async () => {
+      if (recruiterScanSecret.trim().length < 32) throw new Error("Enter the protected recruiter dispatcher secret.");
+      const response = await fetch("/iit-recruiter-career-sources.json", { cache: "no-store" });
+      if (!response.ok) throw new Error("Recruiter career-source manifest is unavailable.");
+      const sources = await response.json() as RecruiterSource[];
+      const batches = Array.from({ length: Math.ceil(sources.length / 5) }, (_, index) => sources.slice(index * 5, index * 5 + 5));
+      setRecruiterScanProgress({ completed: 0, total: batches.length });
+      let imported = 0;
+      let skipped = 0;
+      const failures: string[] = [];
+      let cursor = 0;
+      await Promise.all(Array.from({ length: Math.min(3, batches.length) }, async () => {
+        while (cursor < batches.length) {
+          const batchIndex = cursor++;
+          const { data, error } = await (supabase.functions as any).invoke("scan-jobs", {
+            body: { action: "recruiter_batch", model: MODEL_DEFAULTS.openai, sources: batches[batchIndex] },
+            headers: { "x-recruiter-scan-secret": recruiterScanSecret.trim() },
+          });
+          if (error || data?.error) failures.push(`Batch ${batchIndex + 1}: ${data?.error || error?.message || "failed"}`);
+          else {
+            imported += Number(data.imported || 0);
+            skipped += Number(data.skipped || 0);
+          }
+          setRecruiterScanProgress((current) => ({ ...current, completed: current.completed + 1 }));
+        }
+      }));
+      return { imported, skipped, failures, sources: sources.length };
+    },
+    onSuccess: async (result) => {
+      setRecruiterScanSecret("");
+      await Promise.all([refreshJobs(), queryClient.invalidateQueries({ queryKey: ["admin-job-scans"] })]);
+      if (result.failures.length) toast.warning(`${result.imported} fresh jobs published; ${result.failures.length} batches need retry`);
+      else toast.success(`${result.imported} fresh jobs published from ${result.sources} recruiter sources`);
+    },
+    onError: (error: Error) => toast.error(error.message || "Recruiter workbook scan failed"),
+  });
+  const agentStatus = runScan.isPending || discoverJobs.isPending || scanRecruiters.isPending ? "Running" : isScannerStatusLoading ? "Checking" : scannerReady ? "Ready" : "Setup needed";
 
   const updateSource = async (id: string, patch: Record<string, unknown>) => {
     const { error } = await (supabase as any).from("job_scan_sources").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
@@ -316,6 +356,9 @@ const AdminJobs = () => {
         </Button>
         <Button variant="outline" className="h-11 shrink-0 rounded-full px-5 font-bold" disabled={discoverJobs.isPending || !scannerStatus?.openai_web_discovery} onClick={() => discoverJobs.mutate()}>
           {discoverJobs.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />} Discover trusted jobs
+        </Button>
+        <Button variant="outline" className="h-11 shrink-0 rounded-full px-5 font-bold" disabled={scanRecruiters.isPending || !scannerStatus?.openai_web_discovery} onClick={() => setShowScanner(true)}>
+          <ShieldCheck className="h-4 w-4" /> IIT recruiter scan
         </Button>
       </div>
 
@@ -437,6 +480,15 @@ const AdminJobs = () => {
             <label className="flex items-center justify-between gap-3 rounded-xl border border-border p-3 text-xs font-semibold">Save these sources for future scans <Switch checked={saveSources} onCheckedChange={setSaveSources} /></label>
             <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-[11px] leading-relaxed text-muted-foreground"><p className="flex items-center gap-1 font-bold text-foreground"><ShieldCheck className="h-3.5 w-3.5 text-primary" /> Verified-source AI workflow</p><p className="mt-1">AI extracts only real openings found on the career URLs, imports drafts by default, deduplicates them, and keeps API keys on the server. It never invents a vacancy.</p></div>
             <Button className="h-11 w-full rounded-xl" disabled={runScan.isPending} onClick={() => runScan.mutate(undefined)}>{runScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{runScan.isPending ? "Searching and validating…" : "Search, extract and import"}</Button>
+            <div className="rounded-2xl border border-border bg-secondary/25 p-3">
+              <p className="text-xs font-bold">IIT recruiter workbook scan</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">Scans all 413 traceable recruiter career sources. A vacancy is published only when its official source explicitly shows it was posted during the last 24 hours.</p>
+              <Input className="mt-3" type="password" autoComplete="off" value={recruiterScanSecret} onChange={(event) => setRecruiterScanSecret(event.target.value)} placeholder="Protected dispatcher secret" />
+              {scanRecruiters.isPending && <p className="mt-2 text-[11px] font-semibold text-primary">Validated {recruiterScanProgress.completed} of {recruiterScanProgress.total} source batches</p>}
+              <Button variant="outline" className="mt-3 h-10 w-full rounded-xl" disabled={scanRecruiters.isPending || !scannerStatus?.openai_web_discovery} onClick={() => scanRecruiters.mutate()}>
+                {scanRecruiters.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />} {scanRecruiters.isPending ? "Scanning official sources" : "Run recruiter workbook scan"}
+              </Button>
+            </div>
           </div>
         </div>
       </div>}

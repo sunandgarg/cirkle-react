@@ -28,9 +28,10 @@ describe("company catalog logo rules", () => {
   });
 
   it("ships 11,000 ranked and three Cirkle companies with WebP-only lazy-loadable logos", async () => {
-    expect(topCompanies).toHaveLength(11003);
+    expect(topCompanies.length).toBeGreaterThanOrEqual(11003);
     expect(topCompanies.slice(0, 11000).every((company, index) => company.rank === index + 1)).toBe(true);
     expect(topCompanies.every((company) => company.logo.endsWith(".webp"))).toBe(true);
+    expect(topCompanies.filter((company) => company.iitRecruiter).length).toBeGreaterThanOrEqual(1000);
     expect(await getCompanyLogoAsync("Apple")).toMatch(/\.webp$/);
     expect(getCompanyLogo("Google")).toBe(getCompanyLogo("Alphabet (Google)"));
     expect(getCompanyLogo("Louis Stitch")).toMatch(/11001-louis-stitch\.webp$/);

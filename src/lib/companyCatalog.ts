@@ -29,11 +29,14 @@ const featuredCompanyLogos = new Map<string, string>([
   [normalizeCompany("Kobie"), "/company-logos/custom-kobie.webp"],
 ]);
 let companyLogoIndexReady = false;
+const indexCompanyLogo = (name: string, logo: string) => {
+  if (name && !companyLogoIndex.has(name)) companyLogoIndex.set(name, logo);
+};
 const indexCompanyLogos = (companies: CompanyCatalogRecord[]) => companies.forEach((company) => {
-  companyLogoIndex.set(normalizeCompany(company.name), company.logo);
-  companyLogoIndex.set(simplifiedCompany(company.name), company.logo);
+  indexCompanyLogo(normalizeCompany(company.name), company.logo);
+  indexCompanyLogo(simplifiedCompany(company.name), company.logo);
   const parentheticalNames = [...company.name.matchAll(/\(([^)]+)\)/g)].map((match) => match[1]);
-  parentheticalNames.forEach((name) => companyLogoIndex.set(normalizeCompany(name), company.logo));
+  parentheticalNames.forEach((name) => indexCompanyLogo(normalizeCompany(name), company.logo));
 });
 
 const companyAliases: Record<string, string> = {
