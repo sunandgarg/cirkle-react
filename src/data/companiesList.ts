@@ -1,4 +1,6 @@
-export const companies: string[] = [
+import { topCompanies } from "@/data/topCompanies";
+
+const legacyCompanies: string[] = [
   // Top Indian
   "TCS", "Infosys", "Wipro", "HCL Technologies", "Tech Mahindra",
   "Reliance Industries", "HDFC Bank", "ICICI Bank", "SBI", "Axis Bank",
@@ -20,3 +22,8 @@ export const companies: string[] = [
   "Citibank", "Deutsche Bank", "Barclays", "UBS", "Credit Suisse",
   "Accenture", "Capgemini",
 ];
+
+export const companies: string[] = [...new Set([
+  ...topCompanies.map((company) => company.name),
+  ...legacyCompanies,
+])].sort((left, right) => left.localeCompare(right));

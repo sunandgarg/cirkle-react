@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { format, formatDistanceToNow } from "date-fns";
 import SearchableSelect from "@/components/SearchableSelect";
 import ExpertiseSelect from "@/components/ExpertiseSelect";
+import CompanyLogo from "@/components/CompanyLogo";
 import { institutions } from "@/data/institutionsList";
 import { passingYears } from "@/data/dropdownOptions";
 import { ALL_COURSES, getSpecialisations } from "@/data/courseSpecialisations";
@@ -833,10 +834,9 @@ const Profile = () => {
               {experience && experience.length > 0 ? (
                 <div className="space-y-4">
                   {experience.map((exp: any) => {
-                    const logoUrl = exp.logo_url;
                     return (
                       <div key={exp.id} className="flex min-w-0 gap-3">
-                        {logoUrl ? <img src={logoUrl} alt={exp.company_name} className="w-10 h-10 rounded-lg object-contain bg-white border border-border p-1 flex-shrink-0" /> : <div className="grid h-10 w-10 flex-shrink-0 place-items-center rounded-lg bg-primary/10"><Briefcase className="h-5 w-5 text-primary" /></div>}
+                        <CompanyLogo company={exp.company_name} src={exp.logo_url} className="h-10 w-10" />
                         <div className="min-w-0 flex-1">
                           <p className="break-words font-semibold text-sm text-foreground">{exp.job_title || "Role"} at {exp.company_name}</p>
                           <p className="text-xs text-muted-foreground">{exp.start_date || ""}{exp.start_date && " - "}{exp.is_current ? "Present" : exp.end_date || ""}</p>

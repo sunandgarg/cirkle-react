@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Bookmark, BriefcaseBusiness, Building2, CheckCircle2, Clock3, ExternalLink,
-  Lock, MapPin, RefreshCw, Search, Sparkles, Zap,
+  Bookmark, BriefcaseBusiness, CheckCircle2, Clock3, ExternalLink,
+  Lock, RefreshCw, Search, Zap,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import EmptyState from "@/components/EmptyState";
+import CompanyLogo from "@/components/CompanyLogo";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
@@ -28,6 +29,11 @@ const inferredSkills = (title: string): string[] => {
 const safeDate = (value: string | null | undefined) => {
   const date = value ? new Date(value) : new Date();
   return Number.isNaN(date.getTime()) ? new Date() : date;
+};
+
+const safeHostname = (value: string | null | undefined) => {
+  try { return value ? new URL(value).hostname.replace(/^www\./, "") : ""; }
+  catch { return ""; }
 };
 
 const Jobs = () => {
@@ -138,7 +144,7 @@ const Jobs = () => {
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="sticky top-0 z-20 shrink-0 border-b border-border/70 bg-background/95 backdrop-blur-xl">
-        <div className="mx-auto max-w-5xl px-4 pb-3 pt-4 sm:px-6">
+        <div className="mx-auto max-w-3xl px-4 pb-3 pt-4 sm:px-6">
           <div className="flex items-start justify-between gap-3">
             <div><h1 className="text-xl font-bold tracking-tight text-foreground">Jobs</h1><p className="mt-0.5 text-xs text-muted-foreground">Verified opportunities for your community</p></div>
             <div className="flex items-center gap-2"><span className="rounded-full bg-secondary px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">{filteredJobs.length} open</span><button aria-label="Refresh jobs" onClick={() => refetch()} disabled={isFetching} className="rounded-full border border-border p-2 text-muted-foreground hover:text-primary"><RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} /></button></div>
@@ -149,21 +155,30 @@ const Jobs = () => {
       </header>
 
       <main className="native-scroll-region flex-1">
-        <div className="mx-auto max-w-5xl px-4 py-4 pb-24 sm:px-6">
+        <div className="mx-auto max-w-3xl pb-24 sm:px-6 sm:py-4">
           {error ? <div className="rounded-2xl border border-destructive/25 bg-destructive/5 p-6 text-center"><BriefcaseBusiness className="mx-auto h-8 w-8 text-destructive" /><h2 className="mt-3 text-sm font-bold">Jobs could not be loaded</h2><p className="mt-1 text-xs text-muted-foreground">Check your connection and try again. If this continues, the jobs database migration may still need deployment.</p><Button variant="outline" className="mt-4 rounded-xl" onClick={() => refetch()}><RefreshCw className="h-4 w-4" /> Try again</Button></div>
-            : isLoading ? <div className="grid gap-3 md:grid-cols-2">{[1, 2, 3, 4].map((item) => <div key={item} className="h-56 animate-pulse rounded-2xl border border-border bg-card p-4"><div className="h-11 w-11 rounded-xl bg-secondary" /><div className="mt-4 h-4 w-2/3 rounded bg-secondary" /><div className="mt-2 h-3 w-1/2 rounded bg-secondary" /><div className="mt-7 h-14 rounded bg-secondary/70" /></div>)}</div>
-              : filteredJobs.length ? <div className="grid gap-3 md:grid-cols-2">{filteredJobs.map((job, index) => {
+            : isLoading ? <div className="divide-y divide-border border-y border-border bg-card sm:overflow-hidden sm:rounded-2xl sm:border">{[1, 2, 3, 4].map((item) => <div key={item} className="flex animate-pulse gap-3 px-4 py-5"><div className="h-12 w-12 rounded-lg bg-secondary" /><div className="flex-1"><div className="h-4 w-2/3 rounded bg-secondary" /><div className="mt-2 h-3 w-1/3 rounded bg-secondary" /><div className="mt-3 h-3 w-1/2 rounded bg-secondary" /></div></div>)}</div>
+              : filteredJobs.length ? <div className="divide-y divide-border border-y border-border bg-card sm:overflow-hidden sm:rounded-2xl sm:border">{filteredJobs.map((job) => {
                 const skills = (job.skills?.length ? job.skills : inferredSkills(job.title)).slice(0, 5);
                 const applied = myApplications.includes(job.id);
                 const saved = savedIds.has(job.id);
                 const publishedAt = safeDate(job.published_at || job.created_at);
-                return <article key={job.id} className="group rounded-2xl border border-border bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-md" style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}>
-                  <div className="flex items-start gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"><Building2 className="h-5 w-5" /></div><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><h2 className="truncate text-sm font-bold text-foreground">{job.title}</h2><p className="mt-0.5 truncate text-xs font-medium text-muted-foreground">{job.company}</p></div><button aria-label={saved ? "Remove saved job" : "Save job"} onClick={() => toggleSaved(job.id)} className={`rounded-full p-2 transition-colors ${saved ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-secondary hover:text-primary"}`}><Bookmark className={`h-4 w-4 ${saved ? "fill-current" : ""}`} /></button></div></div></div>
-                  <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-muted-foreground">{job.location && <span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{job.location}</span>}<span className="flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{formatDistanceToNow(publishedAt, { addSuffix: true })}</span>{job.source_type === "scan" && <span className="flex items-center gap-1 text-primary"><Sparkles className="h-3 w-3" />Verified source</span>}</div>
-                  {job.description && <p className="mt-3 line-clamp-3 text-xs leading-relaxed text-muted-foreground">{job.description}</p>}
-                  <div className="mt-3 flex min-h-6 flex-wrap gap-1.5">{skills.map((skill: string) => <span key={skill} className="rounded-full border border-primary/15 bg-primary/5 px-2.5 py-1 text-[10px] font-medium text-primary">{skill}</span>)}</div>
-                  <div className="mt-4 flex flex-wrap items-end justify-between gap-3 border-t border-border/70 pt-3"><div><div className="flex flex-wrap gap-1.5">{job.job_type && <span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-semibold">{job.job_type}</span>}{job.experience_level && <span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-semibold">{job.experience_level}</span>}</div>{job.salary_text && <p className="mt-1.5 text-xs font-bold text-foreground">{job.salary_text}</p>}</div>{applied ? <span className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-emerald-500/10 px-4 text-xs font-bold text-emerald-700 dark:text-emerald-300"><CheckCircle2 className="h-4 w-4" /> Applied</span> : <Button size="sm" className="min-h-10 rounded-xl px-4 text-xs" disabled={apply.isPending && job.easy_apply} onClick={() => handleApply(job)}>{job.easy_apply ? <Zap className="h-3.5 w-3.5" /> : <ExternalLink className="h-3.5 w-3.5" />}{job.easy_apply ? "Easy Apply" : "View & apply"}</Button>}</div>
-                  {job.source_url && <a href={job.source_url} target="_blank" rel="noreferrer" className="mt-3 block truncate text-[10px] text-muted-foreground underline-offset-2 hover:text-primary hover:underline">Source: {new URL(job.source_url).hostname}</a>}
+                const sourceHost = safeHostname(job.source_url);
+                return <article key={job.id} className="group overflow-hidden px-4 py-4 transition-colors hover:bg-secondary/20 sm:px-5">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <CompanyLogo company={job.company} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-start gap-2">
+                        <div className="min-w-0 flex-1"><h2 className="line-clamp-2 text-[15px] font-bold leading-snug text-primary">{job.title}</h2><p className="mt-0.5 truncate text-xs font-semibold text-foreground">{job.company}</p>{job.location && <p className="mt-0.5 truncate text-xs text-muted-foreground">{job.location}</p>}</div>
+                        <button aria-label={saved ? "Remove saved job" : "Save job"} onClick={() => toggleSaved(job.id)} className={`-mr-1 shrink-0 rounded-full p-2 transition-colors ${saved ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-secondary hover:text-primary"}`}><Bookmark className={`h-4 w-4 ${saved ? "fill-current" : ""}`} /></button>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground"><span className="flex items-center gap-1"><Clock3 className="h-3 w-3" />{formatDistanceToNow(publishedAt, { addSuffix: true })}</span>{job.source_type === "scan" && <span className="flex items-center gap-1 text-emerald-700 dark:text-emerald-300"><CheckCircle2 className="h-3 w-3" />Verified source</span>}{job.easy_apply && <span className="font-semibold text-primary">Easy Apply</span>}</div>
+                      {job.description && <p className="mt-2 line-clamp-2 break-words text-xs leading-relaxed text-muted-foreground">{job.description}</p>}
+                      {!!skills.length && <div className="mt-2 flex flex-wrap gap-1.5">{skills.slice(0, 3).map((skill: string) => <span key={skill} className="rounded-full bg-secondary px-2 py-1 text-[10px] font-medium text-foreground">{skill}</span>)}</div>}
+                      <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2"><div className="flex min-w-0 flex-wrap gap-1.5">{job.job_type && <span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-semibold">{job.job_type}</span>}{job.experience_level && <span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-semibold">{job.experience_level}</span>}{job.salary_text && <span className="truncate text-[11px] font-bold text-foreground">{job.salary_text}</span>}</div>{applied ? <span className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-500/10 px-3 text-xs font-bold text-emerald-700 dark:text-emerald-300"><CheckCircle2 className="h-3.5 w-3.5" />Applied</span> : <Button size="sm" className="h-9 shrink-0 rounded-lg px-3 text-xs" disabled={apply.isPending && job.easy_apply} onClick={() => handleApply(job)}>{job.easy_apply ? <Zap className="h-3.5 w-3.5" /> : <ExternalLink className="h-3.5 w-3.5" />}{job.easy_apply ? "Easy Apply" : "View job"}</Button>}</div>
+                      {sourceHost && <a href={job.source_url} target="_blank" rel="noreferrer" className="mt-2 block truncate text-[10px] text-muted-foreground underline-offset-2 hover:text-primary hover:underline">Source: {sourceHost}</a>}
+                    </div>
+                  </div>
                 </article>;
               })}</div>
                 : <EmptyState icon={BriefcaseBusiness} title={activeFilter === "Saved" ? "No saved jobs yet" : "No matching jobs"} description={activeFilter === "Saved" ? "Tap the bookmark on a job to keep it here." : "Try a broader search or another filter."} />}
