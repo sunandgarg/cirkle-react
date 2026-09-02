@@ -14,6 +14,14 @@ export type DirectMessageSidebarRow = {
   unread_count: number;
 };
 
+export type DirectMessageConnectionResult = {
+  peer_id: string;
+  room_id: string | null;
+  display_name: string | null;
+  display_avatar: string | null;
+  headline: string | null;
+};
+
 export const normalizeDirectMessageSidebarRow = (row: DirectMessageSidebarRow): DirectMessageSidebarRow => ({
   ...row,
   display_name: row.display_name?.trim() || "Cirkle member",
@@ -24,6 +32,9 @@ export const normalizeDirectMessageSidebarRow = (row: DirectMessageSidebarRow): 
 });
 
 export const getDirectMessageNavigationTarget = (row: DirectMessageSidebarRow) =>
+  row.room_id ? `/chats/${row.room_id}` : `/chats?peer=${encodeURIComponent(row.peer_id)}`;
+
+export const getConnectionMessageNavigationTarget = (row: DirectMessageConnectionResult) =>
   row.room_id ? `/chats/${row.room_id}` : `/chats?peer=${encodeURIComponent(row.peer_id)}`;
 
 export const getDirectMessagePreview = (row: DirectMessageSidebarRow) => {

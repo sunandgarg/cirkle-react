@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { useNavigate } from "react-router-dom";
+import { reportError } from "@/lib/errorTelemetry";
 
 const NotificationBell = () => {
   const { user } = useAuth();
@@ -16,7 +17,8 @@ const NotificationBell = () => {
     queryKey: ["notifications", user?.id],
     queryFn: async () => {
       if (!user) return [];
-      const { data } = await supabase.from("notifications").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20);
+      const { data, error } = await supabase.from("notifications").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20);
+      if (error) throw error;
       return data ?? [];
     },
     enabled: !!user,
@@ -29,9 +31,9 @@ const NotificationBell = () => {
   useEffect(() => {
     if (!user) return;
     const channel = supabase
-      .channel("notifications-realtime")
+      .channel(`notifications-realtime-${user.id}`)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` }, () => {
-        queryClient.invalidateQueries({ queryKey: ["notifications"] });
+        void queryClient.invalidateQueries({ queryKey: ["notifications", user.id] });
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -39,8 +41,12 @@ const NotificationBell = () => {
 
   const markAllRead = async () => {
     if (!user) return;
-    await supabase.from("notifications").update({ is_read: true }).eq("user_id", user.id).eq("is_read", false);
-    queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    const { error } = await supabase.from("notifications").update({ is_read: true }).eq("user_id", user.id).eq("is_read", false);
+    if (error) {
+      reportError(error, { flow: "notifications", action: "mark_all_read" });
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: ["notifications", user.id] });
   };
 
   if (!user) return null;
@@ -48,7 +54,8 @@ const NotificationBell = () => {
   return (
     <div className="relative">
       <button onClick={() => { setOpen(!open); if (!open && unreadCount > 0) markAllRead(); }}
-        className="p-2.5 text-muted-foreground hover:text-foreground hover-scale rounded-full relative" aria-label="Notifications">
+        className={`relative rounded-full p-2.5 transition-colors hover-scale ${unreadCount > 0 ? "bg-amber-100 text-amber-700 ring-1 ring-amber-300/80 hover:bg-amber-200 dark:bg-amber-400/15 dark:text-amber-300 dark:ring-amber-400/30" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+        aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications"} aria-expanded={open}>
         <Bell className="w-6 h-6" />
         {unreadCount > 0 && (
           <span className="absolute top-1 right-1 min-w-[18px] h-[18px] rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center px-1">
@@ -58,7 +65,7 @@ const NotificationBell = () => {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-12 w-80 max-h-96 bg-card border border-border rounded-2xl shadow-xl z-50 overflow-hidden animate-fade-in">
+        <div className="absolute right-0 top-12 z-50 max-h-96 w-[min(20rem,calc(100vw-1rem))] overflow-hidden rounded-2xl border border-border bg-card shadow-xl animate-fade-in">
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <h3 className="font-bold text-sm text-foreground">Notifications</h3>
             <button onClick={() => setOpen(false)} className="text-muted-foreground"><X className="w-4 h-4" /></button>

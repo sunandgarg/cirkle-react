@@ -29,6 +29,7 @@ import FileAttachment from "@/components/forum/FileAttachment";
 import ThreadPanel from "@/components/forum/ThreadPanel";
 import ScopeNavigationItem from "@/components/forum/ScopeNavigationItem";
 import DirectMessageSidebar from "@/components/forum/DirectMessageSidebar";
+import NotificationBell from "@/components/NotificationBell";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import {
   getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead,
@@ -342,7 +343,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = MAX_ROOM_HISTORY;
-const FORUM_BUILD = "2026.09.02.1";
+const FORUM_BUILD = "2026.09.02.2";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -1883,13 +1884,15 @@ const Forum = () => {
         <div className="h-12 flex items-center px-4 border-b border-border flex-shrink-0">
           <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Channels</h2>
         </div>
-        <div className="native-scroll-region flex-1 scrollbar-hide">
-          <ScopeList
-            scopes={scopes} activeScope={activeScope}
-            unreadDots={unreadDots}
-            onSelect={selectScope}
-            onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key, true); }}
-          />
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="flex-shrink-0">
+            <ScopeList
+              scopes={scopes} activeScope={activeScope}
+              unreadDots={unreadDots}
+              onSelect={selectScope}
+              onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key, true); }}
+            />
+          </div>
           <DirectMessageSidebar />
         </div>
         <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
@@ -1904,13 +1907,15 @@ const Forum = () => {
             Channels
             <button onClick={() => setSidebarOpen(false)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
           </SheetTitle>
-          <div className="native-scroll-region flex-1 scrollbar-hide">
-            <ScopeList
-              scopes={scopes} activeScope={activeScope}
-              unreadDots={unreadDots}
-              onSelect={selectScope}
-              onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key, true); }}
-            />
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="flex-shrink-0">
+              <ScopeList
+                scopes={scopes} activeScope={activeScope}
+                unreadDots={unreadDots}
+                onSelect={selectScope}
+                onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key, true); }}
+              />
+            </div>
             <DirectMessageSidebar onNavigate={() => setSidebarOpen(false)} />
           </div>
           <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
@@ -1945,6 +1950,7 @@ const Forum = () => {
           )}
 
           <div className="flex items-center gap-0 flex-shrink-0">
+            <NotificationBell />
             {isAdmin && (
               <button
                 className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${slowModeEnabled ? "text-warning bg-warning/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}

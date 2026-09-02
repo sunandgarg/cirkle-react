@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getConnectionMessageNavigationTarget,
   getDirectMessageNavigationTarget,
   getDirectMessagePreview,
   normalizeDirectMessageSidebarRow,
@@ -24,6 +25,17 @@ describe("direct message sidebar", () => {
 
   it("starts a room only with the accepted peer when none exists", () => {
     expect(getDirectMessageNavigationTarget(row({ peer_id: "peer/with space" }))).toBe("/chats?peer=peer%2Fwith%20space");
+  });
+
+  it("opens connection search results without exposing unrelated members", () => {
+    expect(getConnectionMessageNavigationTarget({
+      peer_id: "peer/with space", room_id: null, display_name: "Rahul",
+      display_avatar: null, headline: null,
+    })).toBe("/chats?peer=peer%2Fwith%20space");
+    expect(getConnectionMessageNavigationTarget({
+      peer_id: "peer-1", room_id: "room-1", display_name: "Rahul",
+      display_avatar: null, headline: null,
+    })).toBe("/chats/room-1");
   });
 
   it("normalizes labels and unread counts", () => {
