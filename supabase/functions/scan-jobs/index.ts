@@ -8,7 +8,7 @@ import {
   normalizeExperienceBucket,
   useSmallDashes,
 } from "../_shared/discoveryCatalog.ts";
-import { parseFreshJobPostedAt } from "../_shared/jobFreshness.ts";
+import { isLikelyJobDetailUrl, parseFreshJobPostedAt } from "../_shared/jobFreshness.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -410,6 +410,7 @@ ${sourceText}`;
       if (!job || typeof job.title !== "string" || !job.title.trim() || typeof job.apply_url !== "string") return false;
       try {
         assertPublicHttpsUrl(job.apply_url);
+        if (!isLikelyJobDetailUrl(job.apply_url)) return false;
         if (!parseFreshJobPostedAt(job.posted_at, scanStartedAt)) return false;
         if (isDiscovery && !hostnameMatchesAnyDomain(job.apply_url, TRUSTED_JOB_DOMAINS)) return false;
         if (isRecruiterBatch) {
