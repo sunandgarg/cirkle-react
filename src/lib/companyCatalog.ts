@@ -24,6 +24,10 @@ const simplifiedCompany = (value?: string | null) => normalizeCompany(value)
   .replace(/\s+/g, " ");
 
 const companyLogoIndex = new Map<string, string>();
+const featuredCompanyLogos = new Map<string, string>([
+  [normalizeCompany("Neuron7"), "/company-logos/custom-neuron7.webp"],
+  [normalizeCompany("Kobie"), "/company-logos/custom-kobie.webp"],
+]);
 let companyLogoIndexReady = false;
 const indexCompanyLogos = (companies: CompanyCatalogRecord[]) => companies.forEach((company) => {
   companyLogoIndex.set(normalizeCompany(company.name), company.logo);
@@ -48,7 +52,8 @@ const companyAliases: Record<string, string> = {
 export const getCompanyLogo = (company?: string | null) => {
   const normalized = normalizeCompany(company);
   const alias = companyAliases[normalized];
-  return companyLogoIndex.get(normalized)
+  return featuredCompanyLogos.get(normalized)
+    || companyLogoIndex.get(normalized)
     || companyLogoIndex.get(simplifiedCompany(company))
     || (alias ? companyLogoIndex.get(normalizeCompany(alias)) : undefined)
     || null;

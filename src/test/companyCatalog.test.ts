@@ -36,5 +36,7 @@ describe("company catalog logo rules", () => {
     expect(getCompanyLogo("Louis Stitch")).toMatch(/11001-louis-stitch\.webp$/);
     expect(getCompanyLogo("DekhoCampus")).toMatch(/11002-dekhocampus\.webp$/);
     expect(getCompanyLogo("Cirkle")).toMatch(/11003-cirkle\.webp$/);
+    expect(getCompanyLogo("Neuron7")).toBe("/company-logos/custom-neuron7.webp");
+    expect(getCompanyLogo("Kobie")).toBe("/company-logos/custom-kobie.webp");
   });
 });

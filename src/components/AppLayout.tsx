@@ -96,7 +96,7 @@ const AppLayout = () => {
         )}
         <main
           id="main-content"
-          className={`flex-1 min-h-0 ${isForum ? "overflow-hidden" : "app-scroll-region pb-[72px] lg:pb-0"}`}
+          className={`flex-1 min-h-0 ${isForum ? "overflow-hidden" : "app-scroll-region"}`}
         >
           <ErrorBoundary>
             <Outlet />
