@@ -538,7 +538,7 @@ const Admin = () => {
     <div className="native-scroll-region h-[100dvh] bg-background [scrollbar-gutter:stable]">
       <header className="sticky top-0 z-40 border-b border-border/70 bg-card/95 px-4 py-3 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center gap-3">
-          <button onClick={() => navigate(-1)} className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-border/70 text-foreground transition hover:bg-secondary" aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>
+          <button onClick={() => navigate("/cirkle-forum", { replace: true })} className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-border/70 text-foreground transition hover:bg-secondary" aria-label="Back to Cirkle Forum"><ArrowLeft className="h-4 w-4" /></button>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2"><h1 className="truncate text-lg font-black tracking-tight text-foreground sm:text-xl">Cirkle Admin</h1>{isPlatformOwner && <span className="hidden rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-primary sm:inline">Owner workspace</span>}</div>
             <p className="truncate text-[10px] text-muted-foreground">Business intelligence · Trust and safety · Content operations</p>
