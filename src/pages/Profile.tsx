@@ -20,7 +20,7 @@ import CompanyLogo from "@/components/CompanyLogo";
 import { institutions } from "@/data/institutionsList";
 import { passingYears } from "@/data/dropdownOptions";
 import { ALL_COURSES, getSpecialisations } from "@/data/courseSpecialisations";
-import { companies } from "@/data/companiesList";
+import { companies, loadCompanies } from "@/data/companiesList";
 import { locations } from "@/data/locationsList";
 import { clearMobileTestSession } from "@/lib/mobileVerification";
 import { defaultIitLogo, IIT_LIST } from "@/data/iitInstitutes";
@@ -162,15 +162,22 @@ const Profile = () => {
     enabled: !!user && isOwn,
   });
 
+  const { data: builtInCompanies = companies } = useQuery({
+    queryKey: ["company-catalog"],
+    queryFn: loadCompanies,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+
   const approvedOrMine = (category: string) => customOptions
     .filter((option: any) => option.category === category && (option.status === "approved" || option.created_by === user?.id))
     .map((option: any) => option.value as string);
-  const companyOptions = [...new Set([...companies, ...approvedOrMine("company")])].sort();
+  const companyOptions = [...new Set([...builtInCompanies, ...approvedOrMine("company")])].sort();
   const institutionOptions = [...new Set([...institutions, ...approvedOrMine("institution")])].sort();
   const locationOptions = [...new Set([...locations, ...approvedOrMine("location")])].sort();
   const mentorCategoryOptions = [...new Set([...MENTOR_CATEGORIES, ...approvedOrMine("mentor_category")])].sort();
   const selectedCompanyOption = findCompanyOption(expForm.company_name, customOptions);
-  const isNewCustomCompany = shouldOfferInitialCompanyLogo(expForm.company_name, !!editingExperienceId, companies, customOptions);
+  const isNewCustomCompany = shouldOfferInitialCompanyLogo(expForm.company_name, !!editingExperienceId, builtInCompanies, customOptions);
 
   const { data: connectionState = { kind: "none" as const } } = useQuery({
     queryKey: ["connection-status", targetId],
@@ -341,7 +348,7 @@ const Profile = () => {
   const addExperience = useMutation({
     mutationFn: async () => {
       if (!user || !expForm.company_name) throw new Error("Company required");
-      const isOtherCompany = !companies.some((company) => company.toLowerCase() === expForm.company_name.trim().toLowerCase());
+      const isOtherCompany = !builtInCompanies.some((company) => company.toLowerCase() === expForm.company_name.trim().toLowerCase());
       let companyOption: any = null;
       if (isOtherCompany) {
         const { data, error } = await (supabase as any).rpc("submit_custom_option", {

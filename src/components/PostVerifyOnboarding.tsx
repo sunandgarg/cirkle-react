@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { CheckCircle2, ArrowRight, ArrowLeft, GraduationCap, Briefcase, Sparkles, Clock3, RefreshCw, LogOut } from "lucide-react";
 import SearchableSelect from "@/components/SearchableSelect";
 import { locations } from "@/data/locationsList";
-import { companies } from "@/data/companiesList";
+import { companies, loadCompanies } from "@/data/companiesList";
 import { ALL_COURSES, getSpecialisations } from "@/data/courseSpecialisations";
 import { clearMobileTestCourseRequest, clearMobileTestSession, readMobileTestSession, saveMobileTestCourseRequest, updateMobileTestSession, withdrawMobileTestCourseRequest } from "@/lib/mobileVerification";
 import { useQuery } from "@tanstack/react-query";
@@ -92,14 +92,21 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
     staleTime: 60_000,
   });
 
+  const { data: builtInCompanies = companies } = useQuery({
+    queryKey: ["company-catalog"],
+    queryFn: loadCompanies,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+
   const onboardingCompanyOptions = useMemo(() => [
     ...new Set([
-      ...companies,
+      ...builtInCompanies,
       ...customCompanyOptions.map((option: any) => option.value as string),
     ]),
-  ].sort(), [customCompanyOptions]);
+  ].sort(), [builtInCompanies, customCompanyOptions]);
   const selectedCompanyOption = findCompanyOption(company, customCompanyOptions);
-  const isNewCustomCompany = shouldOfferInitialCompanyLogo(company, false, companies, customCompanyOptions);
+  const isNewCustomCompany = shouldOfferInitialCompanyLogo(company, false, builtInCompanies, customCompanyOptions);
 
   useEffect(() => {
     supabase.from("app_settings").select("value").eq("key", "terms_text").maybeSingle()

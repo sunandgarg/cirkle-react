@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Building2 } from "lucide-react";
-import { getCompanyLogo } from "@/lib/companyCatalog";
+import { getCompanyLogo, getCompanyLogoAsync } from "@/lib/companyCatalog";
 import { cn } from "@/lib/utils";
 
 interface CompanyLogoProps {
@@ -10,10 +10,23 @@ interface CompanyLogoProps {
 }
 
 const CompanyLogo = ({ company, src, className }: CompanyLogoProps) => {
-  const resolvedSource = src || getCompanyLogo(company);
+  const [catalogSource, setCatalogSource] = useState(() => getCompanyLogo(company));
+  const resolvedSource = src || catalogSource;
   const [failed, setFailed] = useState(false);
 
-  useEffect(() => setFailed(false), [resolvedSource]);
+  useEffect(() => {
+    let active = true;
+    setFailed(false);
+    if (src) {
+      setCatalogSource(null);
+      return () => { active = false; };
+    }
+    setCatalogSource(getCompanyLogo(company));
+    void getCompanyLogoAsync(company).then((logo) => {
+      if (active) setCatalogSource(logo);
+    });
+    return () => { active = false; };
+  }, [company, src]);
 
   return (
     <div className={cn("grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-lg border border-border/70 bg-white", className)}>

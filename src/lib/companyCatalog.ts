@@ -1,4 +1,4 @@
-import { topCompanies } from "@/data/topCompanies";
+import { loadCompanyCatalog, type CompanyCatalogRecord } from "@/lib/companyCatalogData";
 
 export interface CompanyCatalogOption {
   category?: string | null;
@@ -24,12 +24,13 @@ const simplifiedCompany = (value?: string | null) => normalizeCompany(value)
   .replace(/\s+/g, " ");
 
 const companyLogoIndex = new Map<string, string>();
-for (const company of topCompanies) {
+let companyLogoIndexReady = false;
+const indexCompanyLogos = (companies: CompanyCatalogRecord[]) => companies.forEach((company) => {
   companyLogoIndex.set(normalizeCompany(company.name), company.logo);
   companyLogoIndex.set(simplifiedCompany(company.name), company.logo);
   const parentheticalNames = [...company.name.matchAll(/\(([^)]+)\)/g)].map((match) => match[1]);
   parentheticalNames.forEach((name) => companyLogoIndex.set(normalizeCompany(name), company.logo));
-}
+});
 
 const companyAliases: Record<string, string> = {
   google: "Alphabet (Google)",
@@ -51,6 +52,16 @@ export const getCompanyLogo = (company?: string | null) => {
     || companyLogoIndex.get(simplifiedCompany(company))
     || (alias ? companyLogoIndex.get(normalizeCompany(alias)) : undefined)
     || null;
+};
+
+export const getCompanyLogoAsync = async (company?: string | null) => {
+  const cached = getCompanyLogo(company);
+  if (cached || !normalizeCompany(company)) return cached;
+  if (!companyLogoIndexReady) {
+    indexCompanyLogos(await loadCompanyCatalog());
+    companyLogoIndexReady = true;
+  }
+  return getCompanyLogo(company);
 };
 
 export const findCompanyOption = (company: string, options: CompanyCatalogOption[]) => {

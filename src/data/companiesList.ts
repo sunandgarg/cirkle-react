@@ -1,4 +1,4 @@
-import { topCompanies } from "@/data/topCompanies";
+import { loadCompanyCatalog } from "@/lib/companyCatalogData";
 
 const legacyCompanies: string[] = [
   // Top Indian
@@ -23,7 +23,9 @@ const legacyCompanies: string[] = [
   "Accenture", "Capgemini",
 ];
 
-export const companies: string[] = [...new Set([
-  ...topCompanies.map((company) => company.name),
+export const companies: string[] = [...legacyCompanies].sort((left, right) => left.localeCompare(right));
+
+export const loadCompanies = async () => [...new Set([
+  ...(await loadCompanyCatalog()).map((company) => company.name),
   ...legacyCompanies,
 ])].sort((left, right) => left.localeCompare(right));
