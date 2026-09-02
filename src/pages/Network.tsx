@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { resolveConnectionState, type ConnectionRow } from "@/lib/connections";
+import { requestRealtimeDispatch } from "@/lib/appsyncEvents";
 
 const getInitials = (name?: string | null): string => {
   if (!name) return "?";
@@ -112,7 +113,7 @@ const Network = () => {
       });
       if (error) throw error;
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connections"] }); setInvitee(null); setInviteNote(""); toast.success("Invitation sent"); },
+    onSuccess: () => { requestRealtimeDispatch(); queryClient.invalidateQueries({ queryKey: ["connections"] }); setInvitee(null); setInviteNote(""); toast.success("Invitation sent"); },
     onError: (error: any) => {
       reportError(error, { flow: "connections", action: "send_invitation", metadata: { receiverId: invitee?.user_id } });
       toast.error(error.message || "Could not send invitation");
@@ -128,6 +129,7 @@ const Network = () => {
       if (error) throw error;
     },
     onSuccess: (_data, variables) => {
+      requestRealtimeDispatch();
       queryClient.invalidateQueries({ queryKey: ["connections"] });
       queryClient.invalidateQueries({ queryKey: ["connection-status"] });
       queryClient.invalidateQueries({ queryKey: ["notifications"] });
@@ -147,7 +149,7 @@ const Network = () => {
       const { error } = await (supabase as any).rpc("withdraw_connection_request", { p_request_id: connection.id });
       if (error) throw error;
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["connections"] }); toast.success("Invitation withdrawn"); },
+    onSuccess: () => { requestRealtimeDispatch(); queryClient.invalidateQueries({ queryKey: ["connections"] }); toast.success("Invitation withdrawn"); },
     onError: (error: any) => {
       reportError(error, { flow: "connections", action: "withdraw_invitation" });
       toast.error(error.message || "Could not withdraw invitation");

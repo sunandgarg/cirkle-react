@@ -29,6 +29,7 @@ import { findCompanyOption, shouldOfferInitialCompanyLogo } from "@/lib/companyC
 import { effectiveMemberStatus } from "@/lib/memberStatus";
 import { reportError } from "@/lib/errorTelemetry";
 import { resolveConnectionState, type ConnectionRow } from "@/lib/connections";
+import { requestRealtimeDispatch } from "@/lib/appsyncEvents";
 
 const PROFILE_TABS = [
   { label: "About Me", compact: "About" },
@@ -428,6 +429,7 @@ const Profile = () => {
       if (error) throw error;
     },
     onSuccess: () => {
+      requestRealtimeDispatch();
       queryClient.invalidateQueries({ queryKey: ["connection-status"] });
       queryClient.invalidateQueries({ queryKey: ["connections"] });
       toast.success("Connection request sent");
@@ -450,6 +452,7 @@ const Profile = () => {
       return accept;
     },
     onSuccess: (accepted) => {
+      requestRealtimeDispatch();
       queryClient.invalidateQueries({ queryKey: ["connection-status"] });
       queryClient.invalidateQueries({ queryKey: ["connections"] });
       queryClient.invalidateQueries({ queryKey: ["notifications"] });

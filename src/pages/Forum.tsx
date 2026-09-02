@@ -28,6 +28,7 @@ import ImageLightbox from "@/components/forum/ImageLightbox";
 import FileAttachment from "@/components/forum/FileAttachment";
 import ThreadPanel from "@/components/forum/ThreadPanel";
 import ScopeNavigationItem from "@/components/forum/ScopeNavigationItem";
+import DirectMessageSidebar from "@/components/forum/DirectMessageSidebar";
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import {
   getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead,
@@ -341,7 +342,7 @@ const generateScopeDemos = (scopeType: string, scopeKey: string, scopeDef?: any)
 
 const PAGE_SIZE = 50;
 const MAX_RENDERED = MAX_ROOM_HISTORY;
-const FORUM_BUILD = "2026.08.30.2";
+const FORUM_BUILD = "2026.09.02.1";
 
 /* ══════════════════════════════════════════════════ */
 /*                  FORUM PAGE                       */
@@ -1889,6 +1890,7 @@ const Forum = () => {
             onSelect={selectScope}
             onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key, true); }}
           />
+          <DirectMessageSidebar />
         </div>
         <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
           <p className="text-[10px] font-semibold text-muted-foreground/70">Cirkle Forum · build {FORUM_BUILD}</p>
@@ -1909,6 +1911,7 @@ const Forum = () => {
               onSelect={selectScope}
               onToggle={(scopeId, idx) => { const scope = scopes.find(s => s.id === scopeId); if (scope?.toggleOptions?.[idx]) selectScope(scope.toggleOptions[idx].type, scope.toggleOptions[idx].key, true); }}
             />
+            <DirectMessageSidebar onNavigate={() => setSidebarOpen(false)} />
           </div>
           <div className="flex-shrink-0 border-t border-border px-4 py-2.5 bg-card">
             <p className="text-[10px] font-semibold text-muted-foreground/70">Cirkle Forum · build {FORUM_BUILD}</p>

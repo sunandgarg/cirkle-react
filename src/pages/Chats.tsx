@@ -2,7 +2,7 @@ import {
   ArrowLeft, Search, Plus, Send, Check, CheckCheck, Smile, Reply,
   X, Phone, Video, MoreVertical, Mic, Paperclip, Lock, Loader2, RotateCcw,
 } from "lucide-react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -126,6 +126,7 @@ const hydrateChatMedia = async (items: ChatMessage[]): Promise<ChatMessage[]> =>
 
 const Chats = () => {
   const navigate = useNavigate();
+  const { roomId } = useParams<{ roomId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -204,6 +205,12 @@ const Chats = () => {
     staleTime: 30_000,
     refetchOnReconnect: true,
   });
+
+  useEffect(() => {
+    if (!roomId || activeRoom) return;
+    const requestedRoom = rooms.find((room) => room.id === roomId);
+    if (requestedRoom) setActiveRoom(requestedRoom);
+  }, [activeRoom, roomId, rooms]);
 
   const markReadSoon = useCallback((roomId: string) => {
     if (readTimerRef.current) clearTimeout(readTimerRef.current);
@@ -709,7 +716,7 @@ const Chats = () => {
     return (
       <div className="bg-background h-[100dvh] flex flex-col">
         <header className="flex-shrink-0 z-40 px-3 py-2.5 flex items-center gap-3 bg-primary shadow-md">
-          <button onClick={() => { setActiveRoom(null); setReplyTo(null); setCallMode(null); }} className="text-primary-foreground p-1" aria-label="Back to conversations"><ArrowLeft className="w-5 h-5" /></button>
+          <button onClick={() => { setActiveRoom(null); setReplyTo(null); setCallMode(null); if (roomId) navigate("/cirkle-forum", { replace: true }); }} className="text-primary-foreground p-1" aria-label="Back to conversations"><ArrowLeft className="w-5 h-5" /></button>
           <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
             {activeRoom.displayAvatar ? <img src={activeRoom.displayAvatar} className="w-full h-full object-cover" alt="" /> : <span className="text-sm font-bold text-primary-foreground">{getInitials(activeRoom.displayName)}</span>}
           </div>
