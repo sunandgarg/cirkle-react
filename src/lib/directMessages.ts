@@ -37,6 +37,10 @@ export const getDirectMessageNavigationTarget = (row: DirectMessageSidebarRow) =
 export const getConnectionMessageNavigationTarget = (row: DirectMessageConnectionResult) =>
   row.room_id ? `/chats/${row.room_id}` : `/chats?peer=${encodeURIComponent(row.peer_id)}`;
 
+export const getDirectChatBackTarget = () => "/cirkle-forum?channels=open";
+
+export const getDirectChatProfileTarget = (peerId: string) => `/profile/${encodeURIComponent(peerId)}`;
+
 export const getDirectMessagePreview = (row: DirectMessageSidebarRow) => {
   if (!row.last_message) return "Start a private conversation";
   if (row.last_message.message_type === "image" || row.last_message.content?.startsWith("📷")) return "📷 Photo";

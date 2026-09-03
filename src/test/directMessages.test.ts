@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   getConnectionMessageNavigationTarget,
+  getDirectChatBackTarget,
+  getDirectChatProfileTarget,
   getDirectMessageNavigationTarget,
   getDirectMessagePreview,
   normalizeDirectMessageSidebarRow,
@@ -19,6 +21,11 @@ const row = (overrides: Partial<DirectMessageSidebarRow> = {}): DirectMessageSid
 });
 
 describe("direct message sidebar", () => {
+  it("returns a private chat to the open Forum channel panel", () => {
+    expect(getDirectChatBackTarget()).toBe("/cirkle-forum?channels=open");
+    expect(getDirectChatProfileTarget("peer/with space")).toBe("/profile/peer%2Fwith%20space");
+  });
+
   it("opens an existing room directly", () => {
     expect(getDirectMessageNavigationTarget(row({ room_id: "room-1" }))).toBe("/chats/room-1");
   });

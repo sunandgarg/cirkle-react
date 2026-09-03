@@ -29,6 +29,7 @@ import {
   requestRealtimeDispatch, subscribeAppSync,
 } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
+import { getDirectChatBackTarget, getDirectChatProfileTarget } from "@/lib/directMessages";
 
 const PAGE_SIZE = 50;
 const INBOX_CACHE_KEY = "cirkle:chat-inbox";
@@ -63,6 +64,7 @@ type ChatRoom = {
   displayAvatar?: string | null;
   lastMessage?: ChatMessage | null;
   unreadCount: number;
+  peerId?: string | null;
 };
 
 type RawRoom = Partial<ChatRoom> & Pick<ChatRoom, "id" | "is_group" | "created_at"> & {
@@ -70,6 +72,7 @@ type RawRoom = Partial<ChatRoom> & Pick<ChatRoom, "id" | "is_group" | "created_a
   display_avatar?: string | null;
   last_message?: unknown;
   unread_count?: number;
+  peer_id?: string | null;
 };
 
 const getInitials = (name?: string | null) => {
@@ -91,6 +94,7 @@ const normalizeRoom = (room: RawRoom): ChatRoom => ({
   displayAvatar: room.display_avatar || room.displayAvatar || room.avatar_url,
   lastMessage: (room.last_message && typeof room.last_message === "object" ? room.last_message as ChatMessage : null) || room.lastMessage || null,
   unreadCount: Number(room.unread_count ?? room.unreadCount ?? 0),
+  peerId: room.peer_id || room.peerId || null,
 });
 
 const readInboxCache = (): ChatRoom[] => {
@@ -194,9 +198,15 @@ const Chats = () => {
   const { data: rooms = [], isLoading: roomsLoading, error: roomsError } = useQuery({
     queryKey: ["chat-rooms", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase.rpc("get_chat_inbox");
+      const [{ data, error }, { data: directRows }] = await Promise.all([
+        supabase.rpc("get_chat_inbox"),
+        (supabase as any).rpc("get_direct_message_sidebar"),
+      ]);
       if (error) throw error;
-      const inbox = (data || []).map(normalizeRoom);
+      const peerByRoom = new Map<string, string>((directRows || [])
+        .filter((row: { room_id?: string | null; peer_id?: string | null }) => row.room_id && row.peer_id)
+        .map((row: { room_id: string; peer_id: string }) => [row.room_id, row.peer_id]));
+      const inbox = (data || []).map((room) => normalizeRoom({ ...room, peer_id: peerByRoom.get(room.id) || null }));
       localStorage.setItem(INBOX_CACHE_KEY, JSON.stringify(inbox));
       return inbox as ChatRoom[];
     },
@@ -207,9 +217,12 @@ const Chats = () => {
   });
 
   useEffect(() => {
-    if (!roomId || activeRoom) return;
+    if (!roomId) return;
     const requestedRoom = rooms.find((room) => room.id === roomId);
-    if (requestedRoom) setActiveRoom(requestedRoom);
+    if (!requestedRoom) return;
+    if (!activeRoom || activeRoom.id !== requestedRoom.id || activeRoom.peerId !== requestedRoom.peerId) {
+      setActiveRoom(requestedRoom);
+    }
   }, [activeRoom, roomId, rooms]);
 
   const markReadSoon = useCallback((roomId: string) => {
@@ -660,6 +673,7 @@ const Chats = () => {
       displayName: peer?.name || "User",
       displayAvatar: peer?.avatar_url,
       unreadCount: 0,
+      peerId,
     });
     void queryClient.invalidateQueries({ queryKey: ["chat-rooms", user.id] });
   }, [friendIds, friendProfiles, queryClient, user]);
@@ -713,20 +727,32 @@ const Chats = () => {
   }, [activeRoom, messageVirtualizer, timelineRows.length]);
 
   if (activeRoom) {
+    const openMemberProfile = () => {
+      if (!activeRoom.is_group && activeRoom.peerId) navigate(getDirectChatProfileTarget(activeRoom.peerId));
+    };
+    const leaveConversation = () => {
+      setReplyTo(null);
+      setCallMode(null);
+      if (!activeRoom.is_group) {
+        navigate(getDirectChatBackTarget(), { replace: true });
+        return;
+      }
+      setActiveRoom(null);
+    };
     return (
       <div className="bg-background h-[100dvh] flex flex-col">
-        <header className="flex-shrink-0 z-40 px-3 py-2.5 flex items-center gap-3 bg-primary shadow-md">
-          <button onClick={() => { setActiveRoom(null); setReplyTo(null); setCallMode(null); if (roomId) navigate("/cirkle-forum", { replace: true }); }} className="text-primary-foreground p-1" aria-label="Back to conversations"><ArrowLeft className="w-5 h-5" /></button>
-          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
-            {activeRoom.displayAvatar ? <img src={activeRoom.displayAvatar} className="w-full h-full object-cover" alt="" /> : <span className="text-sm font-bold text-primary-foreground">{getInitials(activeRoom.displayName)}</span>}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-primary-foreground truncate">{activeRoom.displayName}</p>
-            <p className="text-[11px] text-primary-foreground/70">{typingUsers.length ? `${typingUsers.join(", ")} typing…` : activeRoom.is_group ? "Group chat" : "Connected"}</p>
-          </div>
-          {CALLS_ENABLED && <button onClick={() => setCallMode("video")} className="p-2 text-primary-foreground/80" aria-label="Video call"><Video className="w-5 h-5" /></button>}
-          {CALLS_ENABLED && <button onClick={() => setCallMode("audio")} className="p-2 text-primary-foreground/80" aria-label="Audio call"><Phone className="w-5 h-5" /></button>}
-          <button onClick={() => setShowConversationInfo(true)} className="p-2 text-primary-foreground/80" aria-label="Conversation options"><MoreVertical className="w-5 h-5" /></button>
+        <header className="flex-shrink-0 z-40 px-3 py-2.5 flex items-center gap-3 border-b border-border bg-card shadow-sm">
+          <button onClick={leaveConversation} className="rounded-xl p-2 text-foreground hover:bg-accent" aria-label="Open Forum channels"><ArrowLeft className="w-5 h-5" /></button>
+          <button onClick={openMemberProfile} disabled={activeRoom.is_group || !activeRoom.peerId} className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center overflow-hidden disabled:cursor-default" aria-label={activeRoom.is_group ? undefined : `Open ${activeRoom.displayName}'s profile`}>
+            {activeRoom.displayAvatar ? <img src={activeRoom.displayAvatar} className="w-full h-full object-cover" alt="" /> : <span className="text-sm font-bold text-primary">{getInitials(activeRoom.displayName)}</span>}
+          </button>
+          <button onClick={openMemberProfile} disabled={activeRoom.is_group || !activeRoom.peerId} className="flex-1 min-w-0 text-left disabled:cursor-default" aria-label={activeRoom.is_group ? undefined : `Open ${activeRoom.displayName}'s profile`}>
+            <p className="text-sm font-semibold text-foreground truncate">{activeRoom.displayName}</p>
+            <p className="text-[11px] text-muted-foreground">{typingUsers.length ? `${typingUsers.join(", ")} typing…` : activeRoom.is_group ? "Group chat" : "Connected"}</p>
+          </button>
+          {CALLS_ENABLED && <button onClick={() => setCallMode("video")} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Video call"><Video className="w-5 h-5" /></button>}
+          {CALLS_ENABLED && <button onClick={() => setCallMode("audio")} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Audio call"><Phone className="w-5 h-5" /></button>}
+          <button onClick={() => setShowConversationInfo(true)} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Conversation options"><MoreVertical className="w-5 h-5" /></button>
         </header>
 
         <div ref={scrollRef} onScroll={(event) => {
@@ -793,7 +819,7 @@ const Chats = () => {
         {callMode && <Suspense fallback={null}><CallModal roomId={activeRoom.id} mode={callMode} onClose={() => setCallMode(null)} /></Suspense>}
         <Dialog open={showConversationInfo} onOpenChange={setShowConversationInfo}>
           <DialogContent className="max-w-sm"><DialogHeader><DialogTitle>Conversation details</DialogTitle></DialogHeader>
-            <div className="flex items-center gap-3 py-2"><div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-primary/10">{activeRoom.displayAvatar ? <img src={activeRoom.displayAvatar} alt="" className="h-full w-full object-cover" /> : <span className="font-bold text-primary">{getInitials(activeRoom.displayName)}</span>}</div><div><p className="font-semibold">{activeRoom.displayName}</p><p className="text-xs text-muted-foreground">{activeRoom.is_group ? "System-managed group" : "Connected member"}</p></div></div>
+            <button onClick={() => { setShowConversationInfo(false); openMemberProfile(); }} disabled={activeRoom.is_group || !activeRoom.peerId} className="flex w-full items-center gap-3 rounded-xl py-2 text-left hover:bg-accent disabled:cursor-default disabled:hover:bg-transparent"><div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-primary/10">{activeRoom.displayAvatar ? <img src={activeRoom.displayAvatar} alt="" className="h-full w-full object-cover" /> : <span className="font-bold text-primary">{getInitials(activeRoom.displayName)}</span>}</div><div><p className="font-semibold">{activeRoom.displayName}</p><p className="text-xs text-muted-foreground">{activeRoom.is_group ? "System-managed group" : "View member profile"}</p></div></button>
           </DialogContent>
         </Dialog>
       </div>

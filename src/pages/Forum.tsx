@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Textarea } from "@/components/ui/textarea";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -351,6 +351,7 @@ const Forum = () => {
   const { user, profile, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const realtimeActive = useRealtimeActivity();
 
   // Core state
@@ -398,6 +399,14 @@ const Forum = () => {
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get("channels") !== "open") return;
+    if (!desktopSidebarActive) setSidebarOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("channels");
+    setSearchParams(next, { replace: true });
+  }, [desktopSidebarActive, searchParams, setSearchParams]);
 
   // Pagination state
   const [loadingOlder, setLoadingOlder] = useState(false);
