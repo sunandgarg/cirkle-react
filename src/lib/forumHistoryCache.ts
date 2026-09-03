@@ -65,6 +65,27 @@ const transactionDone = (transaction: IDBTransaction) =>
     transaction.onabort = () => resolve();
   });
 
+const oldestRoomKeys = (db: IDBDatabase, limit: number): Promise<string[]> =>
+  new Promise((resolve) => {
+    if (limit <= 0) {
+      resolve([]);
+      return;
+    }
+    const keys: string[] = [];
+    const store = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME);
+    const request = store.index("updatedAt").openKeyCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor || keys.length >= limit) {
+        resolve(keys);
+        return;
+      }
+      keys.push(String(cursor.primaryKey));
+      cursor.continue();
+    };
+    request.onerror = () => resolve(keys);
+  });
+
 export const readForumHistory = async <T extends CachedForumPost>(
   viewerId: string,
   scopeType: string,
@@ -104,14 +125,15 @@ export const persistForumHistory = <T extends CachedForumPost>(
       await transactionDone(writeTransaction);
 
       const listTransaction = db.transaction(STORE_NAME, "readonly");
-      const allRows = await requestResult(listTransaction.objectStore(STORE_NAME).getAll()) as RoomHistory[] | null;
-      if (allRows && allRows.length > MAX_CACHED_ROOMS) {
+      const listStore = listTransaction.objectStore(STORE_NAME);
+      const roomCount = await requestResult(listStore.count()) || 0;
+      if (roomCount > MAX_CACHED_ROOMS) {
+        // Read only the oldest keys. getAll() cloned every cached post in every
+        // room onto the main thread and could briefly stall an active timeline.
+        const keysToEvict = await oldestRoomKeys(db, roomCount - MAX_CACHED_ROOMS);
         const evictionTransaction = db.transaction(STORE_NAME, "readwrite");
         const evictionStore = evictionTransaction.objectStore(STORE_NAME);
-        allRows
-          .sort((left, right) => left.updatedAt - right.updatedAt)
-          .slice(0, allRows.length - MAX_CACHED_ROOMS)
-          .forEach((room) => evictionStore.delete(room.roomKey));
+        keysToEvict.forEach((oldestKey) => evictionStore.delete(oldestKey));
         await transactionDone(evictionTransaction);
       }
     } finally {

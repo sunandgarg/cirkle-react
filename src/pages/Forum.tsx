@@ -429,6 +429,10 @@ const Forum = () => {
   const processingOutboxRef = useRef(false);
   const outboxPreviewUrlsRef = useRef<Map<string, string>>(new Map());
   const anchorLatestDuringKeyboardRef = useRef(false);
+  const scrollWorkFrameRef = useRef<number | null>(null);
+  const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const olderPageRequestRef = useRef(false);
+  const olderPageTriggerArmedRef = useRef(true);
 
   // Slow mode state
   const [slowModeEnabled, setSlowModeEnabled] = useState(false);
@@ -636,6 +640,10 @@ const Forum = () => {
     const scrollContainer = scrollContainerRef.current;
     setContent(getForumDraft(activeScope.type, activeScope.key));
     return () => {
+      if (scrollWorkFrameRef.current !== null) cancelAnimationFrame(scrollWorkFrameRef.current);
+      scrollWorkFrameRef.current = null;
+      if (scrollSaveTimerRef.current !== null) clearTimeout(scrollSaveTimerRef.current);
+      scrollSaveTimerRef.current = null;
       const offset = scrollContainer?.scrollTop || 0;
       setForumScroll(activeScope.type, activeScope.key, offset);
     };
@@ -648,6 +656,8 @@ const Forum = () => {
     setNewMsgCount(0);
     setHasMoreOlder(true);
     setOlderPages([]);
+    olderPageRequestRef.current = false;
+    olderPageTriggerArmedRef.current = true;
     if (user?.id && !readMobileTestSession()) {
       void (supabase as any).rpc("mark_forum_scope_read", {
         p_scope_type: activeScope.type,
@@ -1223,7 +1233,7 @@ const Forum = () => {
       historyPersistTimer = setTimeout(() => {
         historyPersistTimer = null;
         void persistForumHistory(user.id, activeScope.type, activeScope.key, latestHistorySnapshot);
-      }, 400);
+      }, 1_200);
     };
     const flushRoomEvents = () => {
       flushFrame = null;
@@ -1527,18 +1537,16 @@ const Forum = () => {
     setShowMentionSuggestions(false);
   }, [dismissKeyboard]);
 
-  const handleScroll = useCallback(async () => {
+  const loadOlderMessages = useCallback(async () => {
     const el = scrollContainerRef.current;
-    if (!el) return;
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    shouldFollowLiveRef.current = distFromBottom < 120;
-    setShowScrollDown(distFromBottom > 100);
-    if (distFromBottom < 50) setNewMsgCount(0);
-
-    // Real DB pagination - fetch older messages when scrolled to top
-    if (el.scrollTop < 120 && !loadingOlder && hasMoreOlder && posts && posts.length > 0) {
+    if (!el || olderPageRequestRef.current || !hasMoreOlder || !posts?.length) return;
+    olderPageRequestRef.current = true;
+    try {
       const oldestReal = posts.find((p: any) => !isDemoId(p.id));
-      if (!oldestReal) { setHasMoreOlder(false); return; }
+      if (!oldestReal) {
+        setHasMoreOlder(false);
+        return;
+      }
       setLoadingOlder(true);
       const prevHeight = el.scrollHeight;
       try {
@@ -1574,8 +1582,44 @@ const Forum = () => {
       } finally {
         setLoadingOlder(false);
       }
+    } finally {
+      olderPageRequestRef.current = false;
     }
-  }, [loadingOlder, hasMoreOlder, posts, activeScope.type, activeScope.key, enrichPosts, user?.id]);
+  }, [hasMoreOlder, posts, activeScope.type, activeScope.key, enrichPosts, user?.id]);
+
+  const handleScroll = useCallback(() => {
+    // Mobile browsers can emit well over 60 scroll events per second. Keep all
+    // React work and pagination checks to one animation-frame callback.
+    if (scrollWorkFrameRef.current !== null) return;
+    scrollWorkFrameRef.current = requestAnimationFrame(() => {
+      scrollWorkFrameRef.current = null;
+      const el = scrollContainerRef.current;
+      if (!el) return;
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      shouldFollowLiveRef.current = distFromBottom < 120;
+      const shouldShowScrollDown = distFromBottom > 100;
+      setShowScrollDown((current) => current === shouldShowScrollDown ? current : shouldShowScrollDown);
+      if (distFromBottom < 50) setNewMsgCount((current) => current === 0 ? current : 0);
+
+      // Save only after scrolling settles. Synchronous localStorage writes in a
+      // scroll handler are visible as dropped frames on iOS and slower Androids.
+      if (scrollSaveTimerRef.current !== null) clearTimeout(scrollSaveTimerRef.current);
+      const offset = el.scrollTop;
+      scrollSaveTimerRef.current = setTimeout(() => {
+        scrollSaveTimerRef.current = null;
+        setForumScroll(activeScope.type, activeScope.key, offset);
+      }, 250);
+
+      // Fire pagination once per visit to the top threshold. Cached IndexedDB
+      // history is already merged before this point, so the server is contacted
+      // only when the member reaches beyond locally available history.
+      if (el.scrollTop > 280) olderPageTriggerArmedRef.current = true;
+      if (el.scrollTop < 100 && olderPageTriggerArmedRef.current) {
+        olderPageTriggerArmedRef.current = false;
+        void loadOlderMessages();
+      }
+    });
+  }, [activeScope.type, activeScope.key, loadOlderMessages]);
 
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -2541,9 +2585,13 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContaine
     count: timelineItems.length,
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: (index) => timelineItems[index]?.type === "date" ? 48 : 82,
-    overscan: 12,
+    // Six rows keeps fast flick scrolling visually complete without mounting
+    // dozens of media/reaction-heavy message cards outside the viewport.
+    overscan: 6,
     getItemKey: (index) => timelineItems[index]?.key || index,
     scrollMargin: listRef.current?.offsetTop || 0,
+    useAnimationFrameWithResizeObserver: true,
+    isScrollingResetDelay: 120,
   });
   return (
   <>
