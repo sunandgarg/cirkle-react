@@ -5,10 +5,11 @@ import { describe, expect, it } from "vitest";
 const projectFile = (relativePath: string) => readFileSync(resolve(process.cwd(), relativePath), "utf8");
 
 describe("public market positioning", () => {
-  it("positions Cirkle as a community-specific network in static metadata", () => {
+  it("positions Cirkle as an open, verified community network in static metadata", () => {
     const html = projectFile("index.html");
-    expect(html).toContain("Invite-only community-specific networking");
-    expect(html).toContain("private networking platform for verified communities");
+    expect(html).toContain("Where your community becomes your network");
+    expect(html).toContain("verified community networking platform");
+    expect(html.toLowerCase()).not.toContain("invite-only");
     expect(html).not.toContain("IIT Community Forum, Jobs, Consult & Events");
   });
 

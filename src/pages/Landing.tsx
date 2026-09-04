@@ -10,7 +10,6 @@ import {
   ChevronRight,
   CircleDot,
   Handshake,
-  LockKeyhole,
   MessageCircleMore,
   MessagesSquare,
   Network,
@@ -65,8 +64,8 @@ const COMMUNITY_TYPES = [
 
 const FAQS = [
   {
-    question: "What does invite-only mean on Cirkle?",
-    answer: "Cirkle opens one community at a time. Access depends on a community invitation or a verifiable relationship with an active circle, rather than an unrestricted public signup.",
+    question: "Who can join Cirkle?",
+    answer: "Anyone can create an account. Access to verified community spaces is unlocked when membership can be confirmed, keeping every circle relevant, useful and trustworthy.",
   },
   {
     question: "Is Cirkle only for IIT communities?",
@@ -94,14 +93,14 @@ const Landing = () => {
   const { user, loading } = useAuth();
 
   useMetaTags({
-    title: "Cirkle - Invite-only community-specific networking",
-    description: "Cirkle is the private networking platform for verified communities: focused forums, trusted connections, relevant opportunities, events and expert access.",
-    ogTitle: "Cirkle - Find the network you actually belong in",
-    ogDescription: "Invite-only, community-specific networking built around shared context - not public follower counts.",
+    title: "Cirkle - Verified community networking that feels relevant",
+    description: "Cirkle brings verified communities together for focused conversations, trusted connections, relevant opportunities, events and expert access.",
+    ogTitle: "Cirkle - Where your community becomes your network",
+    ogDescription: "Verified community networking built around shared context, trusted people and useful opportunity.",
     ogImage: "https://cirkle.world/cirkle-logo.png",
     ogUrl: "https://cirkle.world",
     canonicalUrl: "https://cirkle.world",
-    keywords: "private community platform, invite-only network, community networking, alumni network, professional community, verified community, community forum",
+    keywords: "verified community platform, community networking, alumni network, professional community, campus network, trusted connections, community forum",
   });
 
   useEffect(() => {
@@ -123,8 +122,8 @@ const Landing = () => {
     <div className="min-h-screen touch-pan-y overflow-x-hidden bg-[#fbfaf8] text-[#12161d] selection:bg-[#1f68c5] selection:text-white dark:bg-[#0b0e13] dark:text-[#f4f6f8]">
       <div className="border-b border-black/10 bg-[#121212] px-4 py-2.5 text-center text-[11px] font-semibold tracking-wide text-white dark:border-white/10 sm:text-xs">
         <span className="mr-2 text-[#f4bd69]">●</span>
-        Cirkle is opening community by community.
-        <button onClick={goAuth} className="ml-2 underline decoration-white/40 underline-offset-4 hover:decoration-white">Check your access</button>
+        One trusted place for your community, network and next opportunity.
+        <button onClick={goAuth} className="ml-2 underline decoration-white/40 underline-offset-4 hover:decoration-white">Join Cirkle</button>
       </div>
 
       <header className="sticky top-0 z-50 border-b border-black/10 bg-[#fbfaf8]/90 px-4 backdrop-blur-xl dark:border-white/10 dark:bg-[#0b0e13]/90 sm:px-6">
@@ -146,7 +145,7 @@ const Landing = () => {
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={goAuth} className="hidden h-11 rounded-xl px-4 text-sm font-semibold sm:inline-flex">Sign in</Button>
             <Button onClick={goAuth} className="h-11 rounded-xl bg-[#151515] px-4 text-sm font-bold text-white hover:bg-[#292929] dark:bg-white dark:text-black dark:hover:bg-white/90 sm:px-5">
-              Find my Cirkle <ArrowRight className="ml-1.5 h-4 w-4" />
+              Join Cirkle <ArrowRight className="ml-1.5 h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -159,26 +158,26 @@ const Landing = () => {
           <div className="relative mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-[1.05fr_.95fr] lg:gap-16">
             <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.55 }}>
               <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/55 px-3 py-2 text-[10px] font-extrabold uppercase tracking-[0.16em] shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5 sm:text-[11px]">
-                <LockKeyhole className="h-3.5 w-3.5 text-[#1f68c5]" /> Invite-only · Community-specific · People-first
+                <BadgeCheck className="h-3.5 w-3.5 text-[#1f68c5]" /> Verified communities · Trusted connections · People-first
               </div>
               <h1 className="max-w-3xl font-display text-[3.25rem] font-medium leading-[0.94] tracking-[-0.065em] sm:text-7xl lg:text-[5.35rem]">
-                The network that starts with what you <span className="font-black">share.</span>
+                Where your community becomes your <span className="font-black">network.</span>
               </h1>
               <p className="mt-7 max-w-xl text-base font-medium leading-7 text-black/66 dark:text-white/66 sm:text-lg sm:leading-8">
-                Cirkle brings verified communities into one private network - for focused conversations, trusted connections and opportunities that arrive with context.
+                Meet the right people, join focused conversations and discover opportunities that already come with shared context.
               </p>
 
               <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
                 <Button onClick={goAuth} className="h-14 rounded-2xl bg-[#151515] px-6 text-sm font-extrabold text-white shadow-xl shadow-black/10 hover:bg-[#292929] dark:bg-white dark:text-black dark:hover:bg-white/90">
-                  Check my community access <ArrowRight className="ml-2 h-4 w-4" />
+                  Join your community <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
                 <a href="#how-it-works" className="inline-flex min-h-14 items-center justify-center rounded-2xl border border-black/15 bg-white/35 px-6 text-sm font-bold hover:bg-white/60 dark:border-white/15 dark:bg-white/5 dark:hover:bg-white/10">
-                  See how it works
+                  Explore the platform
                 </a>
               </div>
 
               <div className="mt-8 flex flex-wrap gap-x-5 gap-y-2 text-xs font-semibold text-black/56 dark:text-white/55">
-                <span className="flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-[#1f68c5]" /> Verified entry</span>
+                <span className="flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-[#1f68c5]" /> Verified profiles</span>
                 <span className="flex items-center gap-1.5"><Check className="h-4 w-4 text-[#1f68c5]" /> Relevant rooms</span>
                 <span className="flex items-center gap-1.5"><MessageCircleMore className="h-4 w-4 text-[#1f68c5]" /> Permission-first DMs</span>
               </div>
@@ -287,8 +286,8 @@ const Landing = () => {
             </div>
 
             <div className="mt-8 rounded-[28px] border border-white/10 bg-[#202020] p-6 sm:flex sm:items-center sm:justify-between sm:gap-8 sm:p-8">
-              <div><p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#f3b99e]">Current rollout</p><p className="mt-2 max-w-2xl text-lg font-bold">Cirkle is proving the model with verified campus circles, then opening carefully to more community types.</p></div>
-              <Button onClick={goAuth} className="mt-5 h-12 shrink-0 rounded-xl bg-white px-5 font-bold text-black hover:bg-white/90 sm:mt-0">Explore access <ChevronRight className="ml-1 h-4 w-4" /></Button>
+              <div><p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#f3b99e]">Growing with purpose</p><p className="mt-2 max-w-2xl text-lg font-bold">Starting with verified campus communities and expanding to alumni, professional and interest-led circles.</p></div>
+              <Button onClick={goAuth} className="mt-5 h-12 shrink-0 rounded-xl bg-white px-5 font-bold text-black hover:bg-white/90 sm:mt-0">Join the network <ChevronRight className="ml-1 h-4 w-4" /></Button>
             </div>
           </div>
         </section>
@@ -321,11 +320,11 @@ const Landing = () => {
           <motion.div {...reveal} className="mx-auto max-w-7xl overflow-hidden rounded-[32px] bg-[#1f68c5] px-6 py-12 text-white shadow-[0_30px_90px_rgba(31,104,197,.25)] sm:px-12 sm:py-16">
             <div className="grid items-center gap-10 lg:grid-cols-[1fr_auto]">
               <div>
-                <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-white/62">The next useful conversation is already inside your circle</p>
-                <h2 className="mt-4 max-w-4xl font-display text-4xl font-medium leading-[1.02] tracking-[-0.05em] sm:text-6xl">Find the network you actually belong in.</h2>
-                <p className="mt-5 max-w-2xl text-sm leading-7 text-white/72 sm:text-base">Check whether your community is live. New community categories will open carefully as the network expands.</p>
+                <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-white/62">Your next useful connection already has context</p>
+                <h2 className="mt-4 max-w-4xl font-display text-4xl font-medium leading-[1.02] tracking-[-0.05em] sm:text-6xl">Join the network built around where you belong.</h2>
+                <p className="mt-5 max-w-2xl text-sm leading-7 text-white/72 sm:text-base">Create your profile, verify your community and step into conversations, people and opportunities that are relevant from day one.</p>
               </div>
-              <Button onClick={goAuth} className="h-14 rounded-2xl bg-white px-7 font-extrabold text-black hover:bg-white/90">Find my Cirkle <ArrowRight className="ml-2 h-4 w-4" /></Button>
+              <Button onClick={goAuth} className="h-14 rounded-2xl bg-white px-7 font-extrabold text-black hover:bg-white/90">Create my profile <ArrowRight className="ml-2 h-4 w-4" /></Button>
             </div>
           </motion.div>
         </section>
@@ -352,7 +351,7 @@ const Landing = () => {
 
       <footer className="border-t border-black/10 bg-white px-4 py-8 dark:border-white/10 dark:bg-[#0f1218] sm:px-6">
         <div className="mx-auto flex max-w-7xl flex-col gap-7 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2.5"><img src={cirkLogo} alt="" className="h-8 w-8 rounded-lg" /><div><p className="text-sm font-black">Cirkle.World</p><p className="text-[9px] font-bold uppercase tracking-[0.14em] text-black/38 dark:text-white/38">Invite-only community networking</p></div></div>
+          <div className="flex items-center gap-2.5"><img src={cirkLogo} alt="" className="h-8 w-8 rounded-lg" /><div><p className="text-sm font-black">Cirkle.World</p><p className="text-[9px] font-bold uppercase tracking-[0.14em] text-black/38 dark:text-white/38">Verified community networking</p></div></div>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-3 text-xs font-semibold text-black/52 dark:text-white/52">
             <button onClick={goAuth} className="hover:text-black dark:hover:text-white">Member sign in</button>
             <Link to="/privacy" className="hover:text-black dark:hover:text-white">Privacy</Link>

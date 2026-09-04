@@ -85,7 +85,7 @@ export function renderCirkleEmail(input: CirkleTemplateInput): string {
                     </td>
                     <td style="vertical-align:middle;">
                       <div style="font-size:18px;line-height:22px;font-weight:800;letter-spacing:-.02em;color:#101828;">Cirkle.World</div>
-                      <div style="margin-top:2px;font-size:12px;line-height:17px;color:#667085;">The verified IIT network</div>
+                      <div style="margin-top:2px;font-size:12px;line-height:17px;color:#667085;">Verified communities. Useful connections.</div>
                     </td>
                   </tr>
                 </table>

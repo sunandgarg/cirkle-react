@@ -1,6 +1,6 @@
 # Cirkle
 
-Cirkle is a mobile-first, invite-only community network with scoped forums,
+Cirkle is a mobile-first, verified community network with scoped forums,
 member discovery, jobs, events, mentoring, direct chat, moderation, and admin
 workflows.
 

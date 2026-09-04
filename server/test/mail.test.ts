@@ -26,7 +26,7 @@ describe("active Cirkle email templates", () => {
     expect(message.subject).toBe("Your Cirkle.World sign-in code");
     expect(message.subject).not.toContain("482913");
     expect(message.html).toContain("Cirkle.World");
-    expect(message.html).toContain("The verified IIT network");
+    expect(message.html).toContain("Verified communities. Useful connections.");
     expect(message.html).toContain('src="cid:cirkle-logo"');
     expect(message.html).toContain("@media only screen and (max-width: 620px)");
     expect(message.html).toContain("expires in 10 minutes");

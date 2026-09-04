@@ -38,7 +38,7 @@ const Legal = () => {
             <img src="/cirkle-logo.png" alt="Cirkle.World" className="h-11 w-11 rounded-xl" />
             <div>
               <p className="font-bold">Cirkle.World</p>
-              <p className="text-xs text-slate-500 dark:text-white/50">Invite-only community network</p>
+              <p className="text-xs text-slate-500 dark:text-white/50">Verified community network</p>
             </div>
           </div>
           <h1 className="mt-8 text-3xl font-bold tracking-tight sm:text-4xl">{title}</h1>
