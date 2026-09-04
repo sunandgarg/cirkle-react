@@ -7,10 +7,78 @@ import { verifyAccessToken } from "../security/tokens.js";
 import type { AuthUser } from "../types.js";
 import { realtimeEvents, type DbChangeEvent } from "./events.js";
 import { canUseForumScope } from "../security/forumScope.js";
+import { isCanonicalRealtimeRecordId } from "./appsyncChannels.js";
+import { materializeForumReactionChange } from "./forumReactions.js";
 
 export interface Binding { type?: string; filter?: Record<string, unknown> }
 export interface Subscription { channel: string; bindings: Binding[] }
-type AuthedSocket = Socket & { data: { auth: AuthUser; accessExpiresAt: number; subscriptions?: Map<string, Subscription>; presence?: Map<string, Record<string, unknown>> } };
+interface ClientEventWindow { startedAt: number; count: number }
+type AuthedSocket = Socket & { data: {
+  auth: AuthUser;
+  accessExpiresAt: number;
+  displayName?: string;
+  subscriptions?: Map<string, Subscription>;
+  presence?: Map<string, Record<string, unknown>>;
+  clientEventWindows?: Map<string, ClientEventWindow>;
+} };
+
+export const MAX_REALTIME_SUBSCRIPTIONS = 50;
+export const CLIENT_EVENT_WINDOW_MS = 10_000;
+export const CLIENT_EVENT_LIMIT = 24;
+
+export function takeClientEventRateSlot(
+  windows: Map<string, ClientEventWindow>, key: string, now = Date.now(),
+): boolean {
+  const current = windows.get(key);
+  if (!current || now - current.startedAt >= CLIENT_EVENT_WINDOW_MS) {
+    windows.set(key, { startedAt: now, count: 1 });
+    return true;
+  }
+  if (current.count >= CLIENT_EVENT_LIMIT) return false;
+  current.count += 1;
+  return true;
+}
+
+function supportsClientTyping(channel: string): boolean {
+  return channel.startsWith("chat:") || channel.startsWith("room-") || channel.startsWith("typing-");
+}
+
+export function clientTypingEnvelope(
+  identity: { id: string; name?: string }, raw: unknown,
+): { channel: string; topic: string; type: "broadcast"; event: "typing"; payload: { userId: string; name: string; typing: boolean } } | null {
+  const input = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const channel = typeof input.channel === "string" ? input.channel : "";
+  if (!supportsClientTyping(channel) || (input.type !== undefined && input.type !== "broadcast") || input.event !== "typing") return null;
+  const payload = input.payload && typeof input.payload === "object" && !Array.isArray(input.payload)
+    ? input.payload as Record<string, unknown>
+    : {};
+  if (payload.typing !== undefined && typeof payload.typing !== "boolean") return null;
+  return {
+    channel,
+    topic: channel,
+    type: "broadcast",
+    event: "typing",
+    payload: {
+      userId: identity.id,
+      name: identity.name?.trim().slice(0, 160) || "Someone",
+      typing: payload.typing !== false,
+    },
+  };
+}
+
+export function clientPresenceState(
+  identity: { id: string; name?: string }, raw: unknown, now = new Date(),
+): { userId: string; name: string; status: "online" | "away" | "busy"; onlineAt: string } | null {
+  const payload = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const status = payload.status === undefined ? "online" : payload.status;
+  if (status !== "online" && status !== "away" && status !== "busy") return null;
+  return {
+    userId: identity.id,
+    name: identity.name?.trim().slice(0, 160) || "Someone",
+    status,
+    onlineAt: now.toISOString(),
+  };
+}
 
 export const accessTokenRemainingMs = (expiresAt: number, now = Date.now()): number => Math.max(0, expiresAt - now);
 
@@ -28,10 +96,29 @@ function channelRoomId(channel: string): string | undefined {
   return undefined;
 }
 
+export function channelRequiresVerifiedMembership(channel: string): boolean {
+  return channel.startsWith("chat:") || channel.startsWith("room-")
+    || channel.startsWith("forum:") || channel.startsWith("forum-pg-")
+    || channel.startsWith("forum-thread:") || channel.startsWith("forum-thread-pg:")
+    || channel.startsWith("typing-") || channel.startsWith("direct-message-")
+    || channel.startsWith("connections-") || channel.startsWith("notifications-realtime-");
+}
+
+export function canUsePersonalChannel(channel: string, actorId: string): boolean {
+  const requestedUser = channelUserId(channel);
+  return requestedUser === undefined || requestedUser === actorId;
+}
+
 async function canSubscribe(socket: AuthedSocket, channel: string): Promise<boolean> {
   if (!/^[a-zA-Z0-9:_|.-]{1,300}$/.test(channel)) return false;
+  if (channelRequiresVerifiedMembership(channel) && socket.data.auth.role !== "admin" && socket.data.auth.role !== "owner") {
+    const profile = await prisma.profile.findUnique({ where: { user_id: socket.data.auth.id }, select: { is_verified: true } });
+    if (!profile?.is_verified) return false;
+  }
   const requestedUser = channelUserId(channel);
-  if (requestedUser) return requestedUser === socket.data.auth.id || socket.data.auth.role === "admin" || socket.data.auth.role === "owner";
+  // Personal realtime topics are never impersonation surfaces. Moderators use
+  // explicit audited APIs, not another member's live inbox or DM sidebar.
+  if (requestedUser) return canUsePersonalChannel(channel, socket.data.auth.id);
   const roomId = channelRoomId(channel);
   if (roomId) {
     const membership = await prisma.legacyRecord.findFirst({ where: {
@@ -42,7 +129,9 @@ async function canSubscribe(socket: AuthedSocket, channel: string): Promise<bool
     return !!membership;
   }
   if (channel.startsWith("forum-thread:") || channel.startsWith("forum-thread-pg:")) {
-    const postId = channel.split(":").at(-1) ?? channel.split("forum-thread-pg:")[1];
+    const prefix = channel.startsWith("forum-thread-pg:") ? "forum-thread-pg:" : "forum-thread:";
+    const postId = channel.slice(prefix.length);
+    if (!isCanonicalRealtimeRecordId(postId)) return false;
     const post = postId ? await prisma.post.findUnique({ where: { id: postId } }) : null;
     return !!post && !post.deleted_at && !post.is_deleted_for_everyone
       && (post.author_id === socket.data.auth.id || await canUseForumScope(socket.data.auth.id, socket.data.auth.is_verified, socket.data.auth.role, post.scope_type, post.scope_key));
@@ -63,7 +152,6 @@ function rowMatchesFilter(row: Record<string, unknown>, raw: unknown): boolean {
 
 export function topicMatches(channel: string, change: DbChangeEvent): boolean {
   const row = change.row;
-  if (change.room === channel) return true;
   if (channel.startsWith("forum:")) {
     const [, type, ...key] = channel.split(":");
     return change.table === "posts" && row.scope_type === type && row.scope_key === key.join(":");
@@ -77,7 +165,17 @@ export function topicMatches(channel: string, change: DbChangeEvent): boolean {
   const roomId = channelRoomId(channel);
   if (roomId) return (change.table === "messages" || change.table === "chat_members") && row.room_id === roomId;
   const userId = channelUserId(channel);
-  if (userId) return change.audience_ids?.includes(userId) === true || row.user_id === userId || row.author_id === userId || row.requester_id === userId || row.receiver_id === userId;
+  if (userId) {
+    if (channel.startsWith("member-profile:")) return change.table === "profiles" && row.user_id === userId;
+    if (channel.startsWith("notifications-realtime-")) return change.table === "notifications" && row.user_id === userId;
+    if (channel.startsWith("connections-") || channel.startsWith("direct-message-connections-")) {
+      return change.table === "connections" && (row.requester_id === userId || row.receiver_id === userId);
+    }
+    if (channel.startsWith("direct-message-sidebar-")) {
+      return change.table === "messages" && change.audience_ids?.includes(userId) === true;
+    }
+    return false;
+  }
   return false;
 }
 
@@ -134,6 +232,7 @@ export function attachSocketServer(server: HttpServer): Server {
       const user = await prisma.user.findUnique({ where: { id: payload.sub }, include: { profile: true } });
       if (!user || user.status !== "active") throw new Error("account unavailable");
       rawSocket.data.auth = { id: user.id, email: user.email, role: user.role as AuthUser["role"], community_id: user.profile?.community_id ?? config.DEFAULT_COMMUNITY_ID, is_verified: user.profile?.is_verified ?? false };
+      rawSocket.data.displayName = user.profile?.name?.trim().slice(0, 160) || "Someone";
       rawSocket.data.accessExpiresAt = Number(payload.exp ?? 0) * 1000;
       if (!accessTokenRemainingMs(rawSocket.data.accessExpiresAt)) throw new Error("access token expired");
       next();
@@ -144,6 +243,7 @@ export function attachSocketServer(server: HttpServer): Server {
     const socket = rawSocket as AuthedSocket;
     socket.data.subscriptions = new Map();
     socket.data.presence = new Map();
+    socket.data.clientEventWindows = new Map();
     const expiryTimer = setTimeout(() => socket.disconnect(true), accessTokenRemainingMs(socket.data.accessExpiresAt));
     expiryTimer.unref();
     socket.use((_packet, next) => {
@@ -159,6 +259,10 @@ export function attachSocketServer(server: HttpServer): Server {
     socket.on("realtime:subscribe", async (raw: unknown, ack?: (result: { ok: boolean; error?: string }) => void) => {
       const input = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
       const channel = typeof input.channel === "string" ? input.channel : "";
+      if (!socket.data.subscriptions!.has(channel) && socket.data.subscriptions!.size >= MAX_REALTIME_SUBSCRIPTIONS) {
+        ack?.({ ok: false, error: "Subscription limit reached" });
+        return;
+      }
       if (!(await canSubscribe(socket, channel))) { ack?.({ ok: false, error: "Channel access denied" }); return; }
       const bindings = Array.isArray(input.bindings) ? input.bindings.filter((item): item is Binding => !!item && typeof item === "object").slice(0, 20) : [];
       socket.data.subscriptions!.set(channel, { channel, bindings });
@@ -175,11 +279,20 @@ export function attachSocketServer(server: HttpServer): Server {
     });
 
     const relay = async (raw: unknown, ack?: (result: { ok: boolean; status?: string }) => void) => {
-      const input = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-      const channel = typeof input.channel === "string" ? input.channel : "";
-      if (!socket.data.subscriptions!.has(channel) || !(await canSubscribe(socket, channel))) { ack?.({ ok: false, status: "error" }); return; }
-      const event = typeof input.event === "string" ? input.event.slice(0, 100) : "broadcast";
-      const message = { channel, topic: channel, type: input.type === "presence" ? "presence" : "broadcast", event, payload: input.payload ?? {} };
+      const message = clientTypingEnvelope({ id: socket.data.auth.id, name: socket.data.displayName }, raw);
+      const channel = message?.channel ?? "";
+      if (!message || !socket.data.subscriptions!.has(channel)) {
+        ack?.({ ok: false, status: "error" });
+        return;
+      }
+      if (!takeClientEventRateSlot(socket.data.clientEventWindows!, `${channel}:typing`)) {
+        ack?.({ ok: false, status: "error" });
+        return;
+      }
+      if (!(await canSubscribe(socket, channel))) {
+        ack?.({ ok: false, status: "error" });
+        return;
+      }
       socket.to(channel).emit("realtime:event", message);
       ack?.({ ok: true, status: "ok" });
     };
@@ -188,8 +301,13 @@ export function attachSocketServer(server: HttpServer): Server {
     socket.on("realtime:track", async (raw: unknown, ack?: (result: { ok: boolean; status?: string }) => void) => {
       const input = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
       const channel = typeof input.channel === "string" ? input.channel : "";
-      if (!socket.data.subscriptions!.has(channel)) { ack?.({ ok: false, status: "error" }); return; }
-      const presence = input.payload && typeof input.payload === "object" ? input.payload as Record<string, unknown> : {};
+      const presence = clientPresenceState({ id: socket.data.auth.id, name: socket.data.displayName }, input.payload);
+      if (!presence || !socket.data.subscriptions!.has(channel)
+        || !takeClientEventRateSlot(socket.data.clientEventWindows!, `${channel}:presence`)
+        || !(await canSubscribe(socket, channel))) {
+        ack?.({ ok: false, status: "error" });
+        return;
+      }
       socket.data.presence!.set(channel, presence);
       const message = { channel, topic: channel, type: "presence", event: "sync", payload: { joins: { [socket.data.auth.id]: [presence] }, leaves: {} } };
       socket.to(channel).emit("realtime:event", message);
@@ -197,13 +315,30 @@ export function attachSocketServer(server: HttpServer): Server {
     });
   });
 
-  const listener = (change: DbChangeEvent) => {
+  const deliver = (change: DbChangeEvent) => {
     for (const rawSocket of io.sockets.sockets.values()) {
       const socket = rawSocket as AuthedSocket;
       for (const subscription of socket.data.subscriptions?.values() ?? []) {
         if (bindingMatches(subscription, change)) emitEnvelope(socket, subscription.channel, envelopeForChange(subscription, change));
       }
     }
+  };
+  const listener = (change: DbChangeEvent) => {
+    if (change.table === "profiles" && typeof change.row.user_id === "string"
+      && (change.row.is_verified === false || change.row.force_reauthenticate === true)) {
+      for (const rawSocket of io.sockets.sockets.values()) {
+        const socket = rawSocket as AuthedSocket;
+        const forceReauthenticate = change.row.force_reauthenticate === true;
+        const revokedMember = change.row.is_verified === false
+          && socket.data.auth.role !== "admin" && socket.data.auth.role !== "owner";
+        if (socket.data.auth.id === change.row.user_id && (forceReauthenticate || revokedMember)) {
+          socket.disconnect(true);
+        }
+      }
+    }
+    void materializeForumReactionChange(change)
+      .then(deliver)
+      .catch((error: unknown) => logger.error({ err: error, table: change.table, event: change.event }, "Realtime change routing failed"));
   };
   realtimeEvents.on("db-change", listener);
   io.engine.on("close", () => realtimeEvents.off("db-change", listener));

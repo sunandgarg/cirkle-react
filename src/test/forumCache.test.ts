@@ -1,5 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { appendForumTestPost, getCachedPosts, getForumTestPosts, setCachedPosts } from "@/hooks/useForumCache";
+import {
+  appendForumTestPost,
+  getCachedPosts,
+  getForumDraft,
+  getForumScroll,
+  getForumTestPosts,
+  getUnreadChannels,
+  purgeLegacyForumLocalState,
+  setCachedPosts,
+  setChannelRead,
+  setForumDraft,
+  setForumScroll,
+} from "@/hooks/useForumCache";
 
 describe("forum test-mode messages", () => {
   beforeEach(() => localStorage.clear());
@@ -48,5 +60,35 @@ describe("forum test-mode messages", () => {
     const persisted = JSON.parse(localStorage.getItem("forum_cache_viewer-a_CAMPUS_IIT_DELHI") || "[]");
     expect(persisted).toHaveLength(100);
     expect(persisted[0].id).toBe("message-25");
+  });
+
+  it("isolates drafts, scroll positions, and unread state per signed-in user", () => {
+    setForumDraft("CAMPUS", "IIT_DELHI", "viewer A draft", "viewer-a");
+    setForumDraft("CAMPUS", "IIT_DELHI", "viewer B draft", "viewer-b");
+    setForumScroll("CAMPUS", "IIT_DELHI", 120, "viewer-a");
+    setForumScroll("CAMPUS", "IIT_DELHI", 640, "viewer-b");
+    setChannelRead("GLOBAL", "IIT_ALL_tech", "viewer-a");
+
+    expect(getForumDraft("CAMPUS", "IIT_DELHI", "viewer-a")).toBe("viewer A draft");
+    expect(getForumDraft("CAMPUS", "IIT_DELHI", "viewer-b")).toBe("viewer B draft");
+    expect(getForumScroll("CAMPUS", "IIT_DELHI", "viewer-a")).toBe(120);
+    expect(getForumScroll("CAMPUS", "IIT_DELHI", "viewer-b")).toBe(640);
+    expect(getUnreadChannels("viewer-a").GLOBAL_IIT_ALL_tech).toBeUndefined();
+    expect(getUnreadChannels("viewer-b").GLOBAL_IIT_ALL_tech).toBe(true);
+    expect(getForumDraft("CAMPUS", "IIT_DELHI", null)).toBe("");
+  });
+
+  it("purges unattributable legacy room state without deleting scoped state", () => {
+    localStorage.setItem("forum_unread_dots", JSON.stringify({ GLOBAL_IIT_ALL: true }));
+    localStorage.setItem("forum_draft_GLOBAL_IIT_ALL", "private legacy draft");
+    localStorage.setItem("forum_scroll_GLOBAL_IIT_ALL", "900");
+    setForumDraft("GLOBAL", "IIT_ALL", "safe draft", "viewer-a");
+
+    purgeLegacyForumLocalState();
+
+    expect(localStorage.getItem("forum_unread_dots")).toBeNull();
+    expect(localStorage.getItem("forum_draft_GLOBAL_IIT_ALL")).toBeNull();
+    expect(localStorage.getItem("forum_scroll_GLOBAL_IIT_ALL")).toBeNull();
+    expect(getForumDraft("GLOBAL", "IIT_ALL", "viewer-a")).toBe("safe draft");
   });
 });

@@ -4,9 +4,13 @@ import { config } from "./config.js";
 import { logger } from "./lib/logger.js";
 import { prisma } from "./lib/prisma.js";
 import { attachSocketServer } from "./realtime/socket.js";
+import { attachAppSyncPublisher } from "./realtime/appsyncPublisher.js";
+import { startMemberStatusReconciliation } from "./services/memberStatus.js";
 
 const httpServer = createServer(app);
 const io = attachSocketServer(httpServer);
+const detachAppSyncPublisher = attachAppSyncPublisher();
+const stopMemberStatusReconciliation = startMemberStatusReconciliation();
 
 const cleanupTimer = setInterval(() => {
   const now = new Date();
@@ -27,10 +31,12 @@ async function shutdown(signal: string): Promise<void> {
   stopping = true;
   logger.info({ signal }, "graceful shutdown started");
   clearInterval(cleanupTimer);
+  stopMemberStatusReconciliation();
   const force = setTimeout(() => process.exit(1), 15_000);
   force.unref();
   io.close();
   httpServer.close(async () => {
+    await detachAppSyncPublisher();
     await prisma.$disconnect();
     clearTimeout(force);
     process.exit(0);

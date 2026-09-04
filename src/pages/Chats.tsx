@@ -21,12 +21,12 @@ import {
 } from "@/lib/chatOutbox";
 import { getForumBroadcastRow } from "@/lib/forumRealtime";
 import { createRealtimeRecoveryController } from "@/lib/realtimeRecovery";
-import { mergeChatTimeline, uniqueChatMessages as uniqueMessages } from "@/lib/chatMessages";
+import { isChatMessageRealtimeEvent, mergeChatTimeline, uniqueChatMessages as uniqueMessages } from "@/lib/chatMessages";
 import { reportError } from "@/lib/errorTelemetry";
 import VoiceRecorder from "@/components/forum/VoiceRecorder";
 import {
-  appSyncRealtimeEnabled, chatAppSyncChannels, publishAppSync,
-  requestRealtimeDispatch, subscribeAppSync,
+  appSyncRealtimeEnabled, chatAppSyncChannels, requestRealtimeDispatch,
+  subscribeAppSync,
 } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { getDirectChatBackTarget, getDirectChatProfileTarget } from "@/lib/directMessages";
@@ -269,7 +269,6 @@ const Chats = () => {
     let fallbackRestartTimer: ReturnType<typeof setTimeout> | null = null;
     let recoveryController: ReturnType<typeof createRealtimeRecoveryController> | null = null;
     let unsubscribeAppSyncMessage: (() => void) | null = null;
-    let unsubscribeAppSyncTyping: (() => void) | null = null;
     const changedRoom = realtimeRoomIdRef.current !== activeRoom.id;
     realtimeRoomIdRef.current = activeRoom.id;
     if (changedRoom) {
@@ -404,8 +403,22 @@ const Chats = () => {
     if (appSyncRealtimeEnabled) {
       const channels = chatAppSyncChannels(activeRoom.id);
       unsubscribeAppSyncMessage = subscribeAppSync(channels.message_channel, (event: any) => {
+        if (!isChatMessageRealtimeEvent(event)) return;
         const eventType = String(event.eventType || "INSERT");
-        void applyMessage(eventType, (eventType === "DELETE" ? event.old : event.new) as ChatMessage);
+        const identity = (eventType === "DELETE" ? event.old : event.new) as { id?: unknown } | undefined;
+        const messageId = typeof identity?.id === "string" ? identity.id : "";
+        if (!messageId) { void (recoveryController?.recoverNow() || recoverMissedMessages()); return; }
+        if (eventType === "DELETE") { void applyMessage(eventType, { id: messageId } as ChatMessage); return; }
+        // AppSync carries only a row identity. Fetching through the API makes
+        // current verification and room membership authoritative even when an
+        // old AWS subscription has not yet expired.
+        void supabase.from("messages").select("*")
+          .eq("room_id", activeRoom.id).eq("id", messageId).maybeSingle()
+          .then(({ data, error }) => {
+            if (cancelled) return;
+            if (error || !data) { void (recoveryController?.recoverNow() || recoverMissedMessages()); return; }
+            void applyMessage(eventType, data as ChatMessage);
+          });
       }, (status) => {
         if (cancelled) return;
         if (status === "SUBSCRIBED") {
@@ -417,13 +430,15 @@ const Chats = () => {
           void recoveryController?.recoverNow();
         }
       });
-      unsubscribeAppSyncTyping = subscribeAppSync(channels.typing_channel, (payload: any) => {
-        if (!payload?.userId || payload.userId === user.id) return;
-        const name = payload.name || "Someone";
-        setTypingUsers((current) => payload.typing ? [...new Set([...current, name])] : current.filter((value) => value !== name));
-        if (payload.typing) setTimeout(() => setTypingUsers((current) => current.filter((value) => value !== name)), 3000);
-      });
-      roomChannelRef.current = { send: ({ payload }) => publishAppSync(channels.typing_channel, payload) };
+      // AppSync durable events are content-free invalidations. Typing stays on
+      // the revocable Socket.IO transport so a removed member cannot keep
+      // receiving identity/activity through an already-open AWS connection.
+      void supabase.realtime.setAuth().then(() => {
+        if (cancelled) return;
+        broadcastChannel = bindTyping(supabase.channel(`chat:${activeRoom.id}`, { config: { private: true, broadcast: { self: false } } }))
+          .subscribe();
+        roomChannelRef.current = broadcastChannel;
+      }).catch(() => { /* Typing is optional; durable delivery remains active. */ });
     } else void (async () => {
       const { data: broadcastReady } = await (supabase as any).rpc("chat_broadcast_ready");
       if (cancelled || broadcastReady !== true) { startFallback(); return; }
@@ -457,7 +472,6 @@ const Chats = () => {
       if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
       if (readTimerRef.current) clearTimeout(readTimerRef.current);
       unsubscribeAppSyncMessage?.();
-      unsubscribeAppSyncTyping?.();
     };
   }, [activeRoom, markReadSoon, queryClient, realtimeActive, user]);
 

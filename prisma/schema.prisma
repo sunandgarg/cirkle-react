@@ -36,6 +36,7 @@ model User {
   rsvps               Rsvp[]
   files               FileObject[]
   audits              AuditLog[]         @relation("AuditActor")
+  legacy_records      LegacyRecord[]     @relation("LegacyOwner")
 
   @@map("users")
 }
@@ -74,6 +75,7 @@ model Profile {
   community_id             String    @default("iit-community") @db.VarChar(80)
   role                     String    @default("member") @db.VarChar(24)
   is_verified              Boolean   @default(false)
+  verification_revoked_at  DateTime? @db.DateTime(3)
   onboarding_completed     Boolean   @default(false)
   is_mentor                Boolean   @default(false)
   mentor_category          String?   @db.VarChar(120)
@@ -118,19 +120,21 @@ model RefreshSession {
 }
 
 model EmailOtp {
-  id               String    @id @default(uuid()) @db.VarChar(36)
-  user_id          String?   @db.VarChar(36)
-  email             String    @db.VarChar(320)
-  destination_hash String    @db.Char(64)
-  code_hash         String    @db.VarChar(255)
-  purpose           String    @db.VarChar(40)
-  attempts          Int       @default(0)
-  max_attempts      Int       @default(5)
-  expires_at        DateTime  @db.DateTime(3)
-  consumed_at       DateTime? @db.DateTime(3)
-  ip_hash           String?   @db.Char(64)
-  created_at        DateTime  @default(now()) @db.DateTime(3)
-  user              User?     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id                    String    @id @default(uuid()) @db.VarChar(36)
+  user_id               String?   @db.VarChar(36)
+  email                  String    @db.VarChar(320)
+  destination_hash      String    @db.Char(64)
+  code_hash              String    @db.VarChar(255)
+  purpose                String    @db.VarChar(40)
+  pending_password_hash  String?   @db.VarChar(255)
+  pending_name           String?   @db.VarChar(160)
+  attempts               Int       @default(0)
+  max_attempts           Int       @default(5)
+  expires_at             DateTime  @db.DateTime(3)
+  consumed_at            DateTime? @db.DateTime(3)
+  ip_hash                String?   @db.Char(64)
+  created_at             DateTime  @default(now()) @db.DateTime(3)
+  user                   User?     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([destination_hash, purpose, created_at])
   @@index([expires_at])
@@ -226,15 +230,15 @@ model Post {
 model Comment {
   id         String    @id @default(uuid()) @db.VarChar(36)
   post_id    String    @db.VarChar(36)
-  author_id  String    @db.VarChar(36)
+  author_id  String?   @db.VarChar(36)
   content    String    @db.Text
   parent_comment_id String? @db.VarChar(36)
   edited_at  DateTime? @db.DateTime(3)
   created_at DateTime  @default(now()) @db.DateTime(3)
   updated_at DateTime  @updatedAt @db.DateTime(3)
   post       Post      @relation(fields: [post_id], references: [id], onDelete: Cascade)
-  author     User      @relation(fields: [author_id], references: [id], onDelete: Cascade)
-  parent     Comment?  @relation("CommentReplies", fields: [parent_comment_id], references: [id], onDelete: SetNull)
+  author     User?     @relation(fields: [author_id], references: [id], onDelete: SetNull)
+  parent     Comment?  @relation("CommentReplies", fields: [parent_comment_id], references: [id], onDelete: Restrict)
   replies    Comment[] @relation("CommentReplies")
 
   @@index([post_id, created_at])
@@ -288,6 +292,7 @@ model Connection {
   receiver     User      @relation("ConnectionReceiver", fields: [receiver_id], references: [id], onDelete: Cascade)
 
   @@index([requester_id, status])
+  @@index([requester_id, created_at])
   @@index([receiver_id, status])
   @@map("connections")
 }
@@ -443,8 +448,10 @@ model LegacyRecord {
   data       Json
   created_at DateTime @default(now()) @db.DateTime(3)
   updated_at DateTime @updatedAt @db.DateTime(3)
+  owner      User?    @relation("LegacyOwner", fields: [owner_id], references: [id], onDelete: Cascade)
 
   @@unique([table_name, record_id])
+  @@index([owner_id])
   @@index([table_name, owner_id])
   @@index([table_name, community_id])
   @@map("legacy_records")

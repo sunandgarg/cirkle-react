@@ -19,6 +19,17 @@ phone OTP is intentionally not a login method.
    isolated by room.
 7. Inspect browser and API logs. Daily keys, JWTs, OAuth codes, and signed media
    query values must never appear.
+8. Revoke a participant's verification and delete a separate test participant
+   during active calls. Also demote an unverified administrator during a call.
+   Confirm Cirkle ends the database session, ejects the affected participant,
+   deletes the unique Daily room, and rejects a token obtained before the
+   revocation but not yet used. Force a provider failure once and confirm Admin
+   shows the pending room-revocation warning.
+9. Kill one participant's tab/process without a graceful leave, wait beyond the
+   two-minute participant lease, and start another call in the same chat.
+   Confirm the stale row is closed and a fresh invitation and unique room are
+   created. During a healthy call, confirm the 30-second lease heartbeat keeps
+   calls longer than five minutes active.
 
 Configure `DAILY_API_KEY` server-side and optionally a hostname-only
 `DAILY_DOMAIN`. The API creates rooms; the key is never sent to the browser.

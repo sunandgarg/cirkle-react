@@ -24,6 +24,10 @@ const production = {
   KLIPY_API_KEY: "klipy-key",
   DAILY_API_KEY: "daily-key",
   DAILY_DOMAIN: "cirkle.daily.co",
+  APPSYNC_ENABLED: true,
+  APPSYNC_HTTP_ENDPOINT: "https://example123.appsync-api.ap-south-1.amazonaws.com/event",
+  APPSYNC_PUBLISH_TOKEN: "f".repeat(40),
+  APPSYNC_AUTHORIZER_SECRET: "g".repeat(40),
 };
 
 describe("production configuration", () => {
@@ -55,6 +59,10 @@ describe("production configuration", () => {
     expect(productionConfigIssues({ ...production, ZEPTOMAIL_API_URL: "https://attacker.invalid/v1.1/email" })
       .some((issue) => issue.includes("ZEPTOMAIL_API_URL"))).toBe(true);
     expect(productionConfigIssues({ ...production, ZEPTOMAIL_API_URL: "https://api.zeptomail.in/v1.1/email" })).toEqual([]);
+    expect(productionConfigIssues({ ...production, ZEPTOMAIL_API_URL: "https://api.zeptomail.com/v1.1/email" }))
+      .toContain("ZEPTOMAIL_API_URL must use this account's India data-center endpoint");
+    expect(productionConfigIssues({ ...production, ZEPTOMAIL_FROM_EMAIL: "other@cirkle.world" }))
+      .toContain("ZEPTOMAIL_FROM_EMAIL must equal the verified noreply@cirkle.world sender");
   });
 
   it("requires a loopback, one-hop, DNS-only API proxy model", () => {
@@ -67,6 +75,29 @@ describe("production configuration", () => {
     expect(productionConfigIssues({ ...production, COOKIE_DOMAIN: "cirkle.world" }))
       .toContain("COOKIE_DOMAIN must be unset in production so the refresh cookie remains host-only");
     expect(config.MAX_UPLOAD_BYTES).toBeLessThanOrEqual(20 * 1024 * 1024);
+  });
+
+  it("fails closed when AppSync is enabled without trusted endpoints and distinct secrets", () => {
+    const issues = productionConfigIssues({
+      ...production,
+      APPSYNC_HTTP_ENDPOINT: "https://attacker.invalid/event",
+      APPSYNC_PUBLISH_TOKEN: "short",
+      APPSYNC_AUTHORIZER_SECRET: "short",
+    });
+    expect(issues.some((issue) => issue.includes("APPSYNC_HTTP_ENDPOINT"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("APPSYNC_PUBLISH_TOKEN"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("APPSYNC_AUTHORIZER_SECRET"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("must be distinct"))).toBe(true);
+    expect(productionConfigIssues({
+      ...production,
+      APPSYNC_HTTP_ENDPOINT: "https://example123.appsync-api.us-east-1.amazonaws.com/event",
+    }).some((issue) => issue.includes("APPSYNC_HTTP_ENDPOINT"))).toBe(true);
+    expect(productionConfigIssues({
+      ...production,
+      APPSYNC_PUBLISH_TOKEN: production.JWT_ACCESS_SECRET,
+    })).toContain("AppSync credentials must be distinct from JWT, storage, hashing, and OTP secrets");
+    expect(productionConfigIssues({ ...production, APPSYNC_ENABLED: false }))
+      .toContain("APPSYNC_ENABLED must be true in production");
   });
 });
 

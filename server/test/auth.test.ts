@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/lib/prisma.js";
-import { keyedHash, sha256 } from "../src/security/crypto.js";
+import { hashOtp, keyedHash, sha256 } from "../src/security/crypto.js";
 import { signAccessToken, signRefreshToken, verifyAccessToken, verifyRefreshToken } from "../src/security/tokens.js";
 import {
   completeGoogleOAuth,
@@ -12,8 +12,10 @@ import {
   REFRESH_ROTATION_GRACE_MS,
   rotateRefreshToken,
   safeFrontendRedirect,
+  verifyAndReserveEmailOtpAttempt,
+  verifyEmailOtp,
 } from "../src/services/auth.js";
-import { oauthNonceCookieClearOptions, oauthNonceCookieOptions } from "../src/routes/auth.js";
+import { authRouter, oauthNonceCookieClearOptions, oauthNonceCookieOptions } from "../src/routes/auth.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -188,6 +190,13 @@ describe("refresh token rotation", () => {
 });
 
 describe("password reset completion", () => {
+  it("does not expose the legacy reset-token-to-session exchange", () => {
+    const paths = (authRouter as unknown as { stack: Array<{ route?: { path?: string } }> }).stack
+      .flatMap((layer) => layer.route?.path ?? []);
+    expect(paths).toContain("/password-reset/complete");
+    expect(paths).not.toContain("/recovery/verify");
+  });
+
   it("does not change the password when another request has already claimed the token", async () => {
     const token = "one-time-reset-token-that-is-long-enough";
     vi.spyOn(prisma.passwordReset, "findUnique").mockResolvedValue({
@@ -206,5 +215,63 @@ describe("password reset completion", () => {
       where: expect.objectContaining({ id: "reset-one", used_at: null, expires_at: expect.any(Object) }),
     }));
     expect(updateUser).not.toHaveBeenCalled();
+  }, 15_000);
+
+  it("does not reactivate a suspended account with an older reset link", async () => {
+    const token = "suspended-account-reset-token-long-enough";
+    vi.spyOn(prisma.passwordReset, "findUnique").mockResolvedValue({
+      id: "reset-suspended", user_id: "member-suspended", token_hash: sha256(token), used_at: null,
+      expires_at: new Date(Date.now() + 60_000), created_at: new Date(),
+    });
+    const updatePassword = vi.fn().mockResolvedValue({ count: 0 });
+    vi.spyOn(prisma, "$transaction").mockImplementation(async (callback: any) => callback({
+      passwordReset: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      user: { updateMany: updatePassword },
+      refreshSession: { updateMany: vi.fn() },
+    }));
+
+    await expect(completePasswordReset(token, "new-password-123"))
+      .rejects.toMatchObject({ status: 403, code: "account_unavailable" });
+    expect(updatePassword).toHaveBeenCalledWith({
+      where: { id: "member-suspended", status: "active" },
+      data: { password_hash: expect.any(String) },
+    });
+  }, 15_000);
+});
+
+describe("email OTP concurrency", () => {
+  const email = "member@example.com";
+  const destinationHash = keyedHash(email);
+
+  const challenge = async () => ({
+    id: "otp-one", user_id: null, email, destination_hash: destinationHash,
+    code_hash: await hashOtp("123456"), purpose: "login", attempts: 0, max_attempts: 5,
+    expires_at: new Date(Date.now() + 60_000), consumed_at: null, ip_hash: null, created_at: new Date(),
+  });
+
+  it("atomically reserves each attempt and rejects a request that lost the attempt race", async () => {
+    vi.spyOn(prisma.emailOtp, "findFirst").mockResolvedValue(await challenge());
+    const reserve = vi.spyOn(prisma.emailOtp, "updateMany").mockResolvedValue({ count: 0 });
+    await expect(verifyAndReserveEmailOtpAttempt({ destinationHash, purpose: "login", code: "123456" }))
+      .rejects.toMatchObject({ code: "invalid_otp" });
+    expect(reserve).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: "otp-one", consumed_at: null, attempts: { lt: 5 } }),
+      data: { attempts: { increment: 1 } },
+    }));
+  });
+
+  it("does not create or update a user when another correct request consumed the OTP first", async () => {
+    vi.spyOn(prisma.emailOtp, "findFirst").mockResolvedValue(await challenge());
+    vi.spyOn(prisma.emailOtp, "updateMany").mockResolvedValue({ count: 1 });
+    const findUser = vi.fn();
+    const claim = vi.fn().mockResolvedValue({ count: 0 });
+    vi.spyOn(prisma, "$transaction").mockImplementation(async (callback: any) => callback({
+      emailOtp: { updateMany: claim, update: vi.fn() },
+      user: { findUnique: findUser, update: vi.fn(), create: vi.fn() },
+    }));
+
+    await expect(verifyEmailOtp(email, "123456", "login", {})).rejects.toMatchObject({ code: "invalid_otp" });
+    expect(claim).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: "otp-one", consumed_at: null }) }));
+    expect(findUser).not.toHaveBeenCalled();
   }, 15_000);
 });

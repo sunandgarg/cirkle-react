@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildAppSyncAuthorization, dispatchRealtimeOutboxWithRetry, getAppSyncEventFrames } from "@/lib/appsyncEvents";
+import {
+  appSyncKeepAliveTimeout,
+  buildAppSyncAuthorization,
+  getAppSyncEventFrames,
+  isValidClientAppSyncChannel,
+} from "@/lib/appsyncEvents";
 
 describe("AppSync Events authorization", () => {
   it("uses the HTTP API host for realtime handshakes and subscriptions", () => {
@@ -19,32 +24,16 @@ describe("AppSync Events authorization", () => {
     expect(getAppSyncEventFrames({ events: [frame] })).toEqual([frame]);
   });
 
-  it("retries transient dispatcher failures with bounded backoff", async () => {
-    const attempts: Array<number> = [];
-    const waits: number[] = [];
-    const delivered = await dispatchRealtimeOutboxWithRetry(
-      async () => {
-        attempts.push(attempts.length + 1);
-        return { error: attempts.length < 3 ? new Error("temporary") : null };
-      },
-      async (delayMs) => { waits.push(delayMs); },
-      [0, 750, 2_000, 5_000],
-    );
-
-    expect(delivered).toBe(true);
-    expect(attempts).toHaveLength(3);
-    expect(waits).toEqual([750, 2_000]);
+  it("rejects wildcard, malformed and over-deep subscription paths", () => {
+    expect(isValidClientAppSyncChannel("/chat/11111111-1111-4111-8111-111111111111")).toBe(true);
+    expect(isValidClientAppSyncChannel("/forum/type/digest/*")).toBe(false);
+    expect(isValidClientAppSyncChannel("/chat/private_room")).toBe(false);
+    expect(isValidClientAppSyncChannel("/one/two/three/four/five/six")).toBe(false);
   });
 
-  it("stops after the configured retry budget", async () => {
-    let attempts = 0;
-    const delivered = await dispatchRealtimeOutboxWithRetry(
-      async () => { attempts += 1; throw new Error("offline"); },
-      async () => undefined,
-      [0, 1, 2, 3],
-    );
-
-    expect(delivered).toBe(false);
-    expect(attempts).toBe(4);
+  it("uses the service keep-alive timeout only inside safe bounds", () => {
+    expect(appSyncKeepAliveTimeout(120_000)).toBe(120_000);
+    expect(appSyncKeepAliveTimeout(1)).toBe(300_000);
+    expect(appSyncKeepAliveTimeout("not-a-number")).toBe(300_000);
   });
 });

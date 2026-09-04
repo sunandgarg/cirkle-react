@@ -13,7 +13,7 @@ workflows.
   Google OpenID Connect, email OTP, and password recovery
 - Transactional email: Zoho ZeptoMail
 - AI: OpenAI Responses API and the Google Gemini API
-- Realtime: Socket.IO
+- Realtime: AWS AppSync Events in production, with authorized Socket.IO fallback
 - Frontend hosting: Cloudflare Pages
 - API hosting: Nginx and PM2
 
@@ -52,7 +52,8 @@ The combined development command starts:
 - API readiness: `http://localhost:3001/readyz`
 
 Vite proxies `/api` (including Socket.IO) to the local API, so the browser uses
-the same origin in development.
+the same origin in development. Local development defaults to Socket.IO and
+does not require AWS.
 
 The seed is opt-in. Set `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` (12+ chars),
 and the optional `SEED_ADMIN_*` profile fields before running `pnpm db:seed`.
@@ -77,11 +78,15 @@ External integrations are enabled only when configured:
 - Google: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
   `GOOGLE_REDIRECT_URI`
 - ZeptoMail: `ZEPTOMAIL_TOKEN`, `ZEPTOMAIL_API_URL`,
-  `ZEPTOMAIL_FROM_EMAIL`, `ZEPTOMAIL_FROM_NAME`
+  `ZEPTOMAIL_FROM_EMAIL`, `ZEPTOMAIL_FROM_NAME` (India REST endpoint;
+  `noreply@cirkle.world`; no SMTP runtime)
 - OpenAI: `OPENAI_API_KEY`, optionally `OPENAI_MODEL`
 - Gemini: `GEMINI_API_KEY`, optionally `GEMINI_MODEL`
 - Daily calls: `DAILY_API_KEY`
 - GIF search: `KLIPY_API_KEY`
+- AppSync Events: `APPSYNC_ENABLED`, `APPSYNC_HTTP_ENDPOINT`,
+  `APPSYNC_PUBLISH_TOKEN`, `APPSYNC_AUTHORIZER_SECRET` (the last two are
+  server-only secrets)
 
 Production startup rejects placeholder or undersized secrets. Development OTP
 responses include a test code for local acceptance tests; production responses
@@ -132,7 +137,9 @@ Cloudflare Pages settings:
 - Output directory: `dist`
 - Production branch: `pages-production` (advance only after the same commit's API passes `/readyz`)
 - Public environment value: `VITE_API_URL=https://api.cirkle.world`
-- Public environment value: `VITE_CHAT_REALTIME_PROVIDER=socketio`
+- Public environment value: `VITE_CHAT_REALTIME_PROVIDER=appsync`
+- Public environment value: `VITE_APPSYNC_HTTP_ENDPOINT=<stack HTTP output>`
+- Public environment value: `VITE_APPSYNC_REALTIME_ENDPOINT=<stack WebSocket output>`
 - Public environment value: `VITE_DAILY_CALLS_ENABLED=true`
 - Build environment value: `PNPM_VERSION=11.19.0`
 
@@ -140,8 +147,11 @@ The repository also includes `wrangler.jsonc`, SPA redirects, static security
 headers, a PM2 ecosystem file, an Nginx site template, MySQL backup helpers, and
 an atomic API deployment procedure under `deploy/`.
 
-Never place MySQL, JWT, Google client secret, ZeptoMail, OpenAI, or Gemini keys
-in Cloudflare Pages browser variables. Those belong only on the API server.
+Never place MySQL, JWT, Google client secret, ZeptoMail, OpenAI, Gemini, or the
+AppSync publisher/authorizer secrets in Cloudflare Pages browser variables.
+Those belong only on the API server. AWS is used only for the AppSync Event API
+and its minimal Lambda authorizer; frontend, API, and database hosting do not
+move to AWS. See `aws/realtime/README.md`.
 
 ## Safety and migration
 

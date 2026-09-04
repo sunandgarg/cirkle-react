@@ -109,7 +109,8 @@ git archive --format=tar "${revision_full}" \
   # lifecycle scripts, compilation, and tests have finished.
   unset JWT_ACCESS_SECRET JWT_REFRESH_SECRET IP_HASH_SECRET OTP_PEPPER \
     ZEPTOMAIL_TOKEN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET OPENAI_API_KEY \
-    GEMINI_API_KEY KLIPY_API_KEY DAILY_API_KEY STORAGE_SIGNING_SECRET \
+    GEMINI_API_KEY KLIPY_API_KEY DAILY_API_KEY APPSYNC_PUBLISH_TOKEN \
+    APPSYNC_AUTHORIZER_SECRET STORAGE_SIGNING_SECRET \
     MYSQL_PASSWORD MYSQL_ROOT_PASSWORD MYSQL_BACKUP_PASSWORD
   export CI=true
   export DATABASE_URL="mysql://build:build@127.0.0.1:3306/cirkle_build"
@@ -142,6 +143,7 @@ required_settings=(
   ZEPTOMAIL_TOKEN ZEPTOMAIL_FROM_EMAIL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URI
   OPENAI_API_KEY OPENAI_MODEL GEMINI_API_KEY GEMINI_MODEL
   KLIPY_API_KEY DAILY_API_KEY
+  APPSYNC_ENABLED APPSYNC_HTTP_ENDPOINT APPSYNC_PUBLISH_TOKEN APPSYNC_AUTHORIZER_SECRET
   STORAGE_ROOT STORAGE_SIGNING_SECRET
 )
 for setting in "${required_settings[@]}"; do
@@ -156,6 +158,7 @@ done
 [[ -z "${COOKIE_DOMAIN:-}" ]] || fail "COOKIE_DOMAIN must be unset so the refresh cookie remains host-only"
 [[ "${MOBILE_TEST_MODE:-}" == "false" ]] || fail "MOBILE_TEST_MODE must equal false"
 [[ "${ENABLE_SEED_DATA:-}" == "false" ]] || fail "ENABLE_SEED_DATA must equal false in production"
+[[ "${APPSYNC_ENABLED:-}" == "true" ]] || fail "APPSYNC_ENABLED must equal true in production"
 [[ "${APP_BASE_URL}" == "https://api.cirkle.world" ]] || fail "APP_BASE_URL must equal https://api.cirkle.world"
 [[ "${FRONTEND_URL}" == "https://cirkle.world" ]] || fail "FRONTEND_URL must equal https://cirkle.world"
 [[ "${GOOGLE_REDIRECT_URI}" == "https://api.cirkle.world/api/auth/google/callback" ]] || fail "GOOGLE_REDIRECT_URI is not the registered production callback"

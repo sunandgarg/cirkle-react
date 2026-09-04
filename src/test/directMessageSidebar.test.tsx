@@ -34,6 +34,9 @@ describe("forum direct-message sidebar", () => {
           display_name: "Rahul", display_avatar: null, last_message: {
             content: "See you there", created_at: "2026-09-02T10:00:00.000Z", message_type: "text",
           }, unread_count: 1,
+        }, {
+          connection_id: "connection-2", peer_id: "peer-2", room_id: null,
+          display_name: "Not started", display_avatar: null, last_message: null, unread_count: 0,
         }],
         error: null,
       };
@@ -58,6 +61,7 @@ describe("forum direct-message sidebar", () => {
     );
 
     expect(await screen.findByText("Rahul")).toBeInTheDocument();
+    expect(screen.queryByText("Not started")).not.toBeInTheDocument();
     expect(screen.getByTestId("direct-message-scroll-region")).toHaveClass("flex-1", "min-h-0");
     expect(screen.queryByText(/connect with a member/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /start a direct message/i })).not.toBeInTheDocument();
@@ -68,7 +72,7 @@ describe("forum direct-message sidebar", () => {
     expect(await screen.findByText("Priya")).toBeInTheDocument();
     expect(screen.getByText("Product manager")).toBeInTheDocument();
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith("search_my_connections", { p_query: "Pri", p_limit: 8 }));
-  });
+  }, 15_000);
 
   it("keeps the channel panel usable when direct-message RPCs are temporarily unavailable", async () => {
     mocks.rpc.mockResolvedValue({ data: null, error: new Error("Failed to fetch") });

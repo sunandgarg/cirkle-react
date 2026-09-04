@@ -31,6 +31,9 @@ export const normalizeDirectMessageSidebarRow = (row: DirectMessageSidebarRow): 
   unread_count: Math.max(0, Number(row.unread_count || 0)),
 });
 
+export const hasStartedDirectMessageConversation = (row: DirectMessageSidebarRow): boolean =>
+  Boolean(row.room_id && row.last_message?.created_at);
+
 export const getDirectMessageNavigationTarget = (row: DirectMessageSidebarRow) =>
   row.room_id ? `/chats/${row.room_id}` : `/chats?peer=${encodeURIComponent(row.peer_id)}`;
 

@@ -49,7 +49,9 @@ jobs:
       SEED_ADMIN_PASSWORD: ci-owner-password-2026
       SEED_ADMIN_NAME: Cirkle CI Owner
       VITE_API_URL: https://api.cirkle.world
-      VITE_CHAT_REALTIME_PROVIDER: socketio
+      VITE_CHAT_REALTIME_PROVIDER: appsync
+      VITE_APPSYNC_HTTP_ENDPOINT: https://ci-example.appsync-api.ap-south-1.amazonaws.com/event
+      VITE_APPSYNC_REALTIME_ENDPOINT: wss://ci-example.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime
       VITE_DAILY_CALLS_ENABLED: "true"
     steps:
       - name: Check out source

@@ -73,6 +73,7 @@ const Profile = () => {
   const [editingSection, setEditingSection] = useState<string | null>(searchParams.get("edit") === "true" ? "about" : null);
   const coverInputRef = useRef<HTMLInputElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const editorCloseRef = useRef<HTMLButtonElement>(null);
 
   // Slug edit state
   const [editingSlug, setEditingSlug] = useState(false);
@@ -157,6 +158,24 @@ const Profile = () => {
     staleTime: 60_000,
   });
 
+  useEffect(() => {
+    if (!editingSection) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    editorCloseRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setEditingSection(null);
+      setEditingEducationId(null);
+      setEditingExperienceId(null);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("keydown", closeOnEscape);
+      previouslyFocused?.focus();
+    };
+  }, [editingSection]);
+
   const { data: pendingProfileOptions = [] } = useQuery({
     queryKey: ["pending-profile-options", user?.id],
     queryFn: async () => {
@@ -215,7 +234,7 @@ const Profile = () => {
       if (!targetId) return { posts: 0, connections: 0, sessions: 0 };
       const [postsRes, connectionsRes, sessionsRes] = await Promise.all([
         supabase.from("posts").select("id", { count: "exact", head: true })
-          .eq("author_id", targetId).eq("is_anonymous", false),
+          .eq("author_id", targetId).eq("is_anonymous", false).is("channel", null),
         supabase.from("connections").select("id", { count: "exact", head: true })
           .or(`requester_id.eq.${targetId},receiver_id.eq.${targetId}`).eq("status", "accepted"),
         supabase.from("consultations").select("id", { count: "exact", head: true })
@@ -680,10 +699,10 @@ const Profile = () => {
         {/* Section Edit Modals */}
         {editingSection && (
           <div className="fixed inset-0 z-[60] flex items-end justify-center bg-background/80 backdrop-blur-sm sm:items-center">
-            <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md animate-fade-in overflow-y-auto rounded-t-[24px] border border-border bg-card p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:max-h-[85dvh] sm:rounded-[24px] sm:p-6">
+            <div role="dialog" aria-modal="true" aria-labelledby="profile-editor-title" className="max-h-[calc(100dvh-2rem)] w-full max-w-md animate-fade-in overflow-y-auto rounded-t-[24px] border border-border bg-card p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:max-h-[85dvh] sm:rounded-[24px] sm:p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-bold text-foreground">{editingSection === "about" ? "Edit About Me" : editingSection === "expertise" ? "Edit Expertise" : editingSection === "pricing" ? "Edit Pricing" : editingSection === "social" ? "Edit Social Handles" : editingSection === "education" ? (editingEducationId ? "Edit Education" : "Add Education") : (editingExperienceId ? "Edit Experience" : "Add Experience")}</h3>
-                <button onClick={() => { setEditingSection(null); setEditingEducationId(null); setEditingExperienceId(null); }} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
+                <h3 id="profile-editor-title" className="font-bold text-foreground">{editingSection === "about" ? "Edit About Me" : editingSection === "expertise" ? "Edit Expertise" : editingSection === "pricing" ? "Edit Pricing" : editingSection === "social" ? "Edit Social Handles" : editingSection === "education" ? (editingEducationId ? "Edit Education" : "Add Education") : (editingExperienceId ? "Edit Experience" : "Add Experience")}</h3>
+                <button ref={editorCloseRef} type="button" aria-label="Close profile editor" onClick={() => { setEditingSection(null); setEditingEducationId(null); setEditingExperienceId(null); }} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
               </div>
 
               {editingSection === "about" && (

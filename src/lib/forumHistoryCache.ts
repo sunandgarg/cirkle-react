@@ -145,3 +145,14 @@ export const persistForumHistory = <T extends CachedForumPost>(
   writeQueues.set(key, next);
   return next;
 };
+
+export const clearForumHistoryCache = async (): Promise<void> => {
+  writeQueues.clear();
+  if (typeof indexedDB === "undefined") return;
+  await new Promise<void>((resolve) => {
+    const request = indexedDB.deleteDatabase(DB_NAME);
+    request.onsuccess = () => resolve();
+    request.onerror = () => resolve();
+    request.onblocked = () => resolve();
+  });
+};

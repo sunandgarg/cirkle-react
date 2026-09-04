@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeChatTimeline, uniqueChatMessages } from "@/lib/chatMessages";
+import { isChatMessageRealtimeEvent, mergeChatTimeline, uniqueChatMessages } from "@/lib/chatMessages";
 
 const message = (id: string, createdAt: string, roomId = "room-1", clientId?: string) => ({
   id, created_at: createdAt, room_id: roomId, client_id: clientId || null,
@@ -29,5 +29,11 @@ describe("chat timeline merging", () => {
     const current = message("current", "2026-08-31T10:00:01.000Z");
 
     expect(mergeChatTimeline([stale], [current], "room-1")).toEqual([current]);
+  });
+
+  it("ignores membership and call events sharing the AppSync room channel", () => {
+    expect(isChatMessageRealtimeEvent({ table: "messages", eventType: "INSERT" })).toBe(true);
+    expect(isChatMessageRealtimeEvent({ table: "chat_members", eventType: "UPDATE" })).toBe(false);
+    expect(isChatMessageRealtimeEvent({ table: "call_sessions", eventType: "INSERT" })).toBe(false);
   });
 });

@@ -48,7 +48,7 @@ storageRouter.get(/^\/public\/([^/]+)\/(.+)$/, asyncHandler(async (req, res) => 
 
 storageRouter.get(/^\/private\/([^/]+)\/(.+)$/, asyncHandler(async (req, res) => {
   const bucket = String(req.params[0]);
-  const objectPath = verifySignedUrl(bucket, String(req.params[1]), req.query.expires, req.query.sig);
+  const objectPath = await verifySignedUrl(bucket, String(req.params[1]), req.query.expires, req.query.sig);
   const object = await loadObject(bucket, objectPath, false);
   res.setHeader("Content-Type", object.mime);
   res.setHeader("Cache-Control", "private, no-store");

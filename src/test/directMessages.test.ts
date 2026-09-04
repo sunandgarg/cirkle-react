@@ -5,6 +5,7 @@ import {
   getDirectChatProfileTarget,
   getDirectMessageNavigationTarget,
   getDirectMessagePreview,
+  hasStartedDirectMessageConversation,
   normalizeDirectMessageSidebarRow,
   type DirectMessageSidebarRow,
 } from "@/lib/directMessages";
@@ -52,5 +53,14 @@ describe("direct message sidebar", () => {
   it("uses concise previews for media", () => {
     expect(getDirectMessagePreview(row({ last_message: { message_type: "image", content: "" } }))).toBe("📷 Photo");
     expect(getDirectMessagePreview(row({ last_message: { message_type: "voice", content: "" } }))).toBe("🎙 Voice message");
+  });
+
+  it("shows only rooms that already contain a direct message", () => {
+    expect(hasStartedDirectMessageConversation(row())).toBe(false);
+    expect(hasStartedDirectMessageConversation(row({ room_id: "room-1" }))).toBe(false);
+    expect(hasStartedDirectMessageConversation(row({
+      room_id: "room-1",
+      last_message: { created_at: "2026-09-04T10:00:00.000Z", content: "Hello" },
+    }))).toBe(true);
   });
 });

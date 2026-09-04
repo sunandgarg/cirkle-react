@@ -1,5 +1,5 @@
 process.env.NODE_ENV = "test";
-process.env.DATABASE_URL ||= "mysql://root:root@127.0.0.1:3307/cirkle_test";
+process.env.DATABASE_URL ||= "mysql://cirkle:cirkle_local_only_change_me@127.0.0.1:3306/cirkle";
 process.env.JWT_ACCESS_SECRET ||= "test-access-secret-that-is-at-least-32-characters";
 process.env.JWT_REFRESH_SECRET ||= "test-refresh-secret-that-is-at-least-32-characters";
 process.env.STORAGE_SIGNING_SECRET ||= "test-storage-signing-secret-value";

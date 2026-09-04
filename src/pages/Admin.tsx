@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { convertToWebP } from "@/lib/imageUtils";
 import { defaultIitLogo, IIT_LIST, iitLogoSettingKey } from "@/data/iitInstitutes";
+import { versionedInstituteLogoPath } from "@/lib/adminMedia";
 import AdminEvents from "@/components/admin/AdminEvents";
 import AdminJobs from "@/components/admin/AdminJobs";
 import AdminAnalyticsDashboard from "@/components/admin/AdminAnalyticsDashboard";
@@ -48,7 +49,8 @@ const Admin = () => {
   const { data: navConfig } = useQuery({
     queryKey: ["nav-config-admin"],
     queryFn: async () => {
-      const { data } = await supabase.from("nav_config").select("*");
+      const { data, error } = await supabase.from("nav_config").select("*");
+      if (error) throw error;
       const map: Record<string, any> = {};
       (data as any[])?.forEach((c: any) => { map[c.tab_key] = c; });
       return map;
@@ -68,7 +70,8 @@ const Admin = () => {
   const { data: posts } = useQuery({
     queryKey: ["admin-posts"],
     queryFn: async () => {
-      const { data } = await supabase.from("posts").select("*").order("created_at", { ascending: false }).limit(100);
+      const { data, error } = await supabase.from("posts").select("*").order("created_at", { ascending: false }).limit(100);
+      if (error) throw error;
       return data ?? [];
     },
     enabled: !!isAdmin,
@@ -77,18 +80,24 @@ const Admin = () => {
   const { data: reports } = useQuery({
     queryKey: ["admin-reports"],
     queryFn: async () => {
-      const { data: rep } = await supabase.from("reports").select("*").eq("entity_type", "forum_msg").order("created_at", { ascending: false }).limit(500);
+      const { data: rep, error } = await supabase.from("reports").select("*").eq("entity_type", "forum_msg").order("created_at", { ascending: false }).limit(500);
+      if (error) throw error;
       const list = (rep ?? []) as any[];
       if (!list.length) return [];
       const postIds = [...new Set(list.map((r) => r.entity_id))];
       const reporterIds = [...new Set(list.map((r) => r.reporter_id))];
-      const [{ data: posts }, { data: profs }] = await Promise.all([
+      const [postsResult, profilesResult] = await Promise.all([
         supabase.from("posts").select("id, content, author_id, is_anonymous, created_at, image_url, scope_type, scope_key").in("id", postIds),
         supabase.from("profiles").select("user_id, name, avatar_url").in("user_id", reporterIds),
       ]);
+      if (postsResult.error) throw postsResult.error;
+      if (profilesResult.error) throw profilesResult.error;
+      const posts = postsResult.data;
+      const profs = profilesResult.data;
       const postMap = new Map<string, any>(((posts ?? []) as any[]).map((p: any) => [p.id, p]));
       const authorIds = [...new Set((posts ?? []).map((p: any) => p.author_id))];
-      const { data: authors } = await supabase.from("profiles").select("user_id, name, avatar_url").in("user_id", authorIds);
+      const { data: authors, error: authorsError } = await supabase.from("profiles").select("user_id, name, avatar_url").in("user_id", authorIds);
+      if (authorsError) throw authorsError;
       const authorMap = new Map((authors ?? []).map((p: any) => [p.user_id, p]));
       const profMap = new Map((profs ?? []).map((p: any) => [p.user_id, p]));
       const grouped = new Map<string, any>();
@@ -117,7 +126,8 @@ const Admin = () => {
       const submissions = (data ?? []) as any[];
       const ids = [...new Set(submissions.map((item) => item.user_id))];
       if (!ids.length) return submissions;
-      const { data: profiles } = await supabase.from("profiles").select("user_id,name,avatar_url").in("user_id", ids);
+      const { data: profiles, error: profilesError } = await supabase.from("profiles").select("user_id,name,avatar_url").in("user_id", ids);
+      if (profilesError) throw profilesError;
       const profileMap = new Map((profiles ?? []).map((item: any) => [item.user_id, item]));
       return submissions.map((item) => ({ ...item, profile: profileMap.get(item.user_id) }));
     },
@@ -136,7 +146,8 @@ const Admin = () => {
       const requests = (data ?? []) as any[];
       const ids = [...new Set(requests.map((item) => item.user_id))];
       if (!ids.length) return requests;
-      const { data: profiles } = await supabase.from("profiles").select("user_id,name,avatar_url").in("user_id", ids);
+      const { data: profiles, error: profilesError } = await supabase.from("profiles").select("user_id,name,avatar_url").in("user_id", ids);
+      if (profilesError) throw profilesError;
       const profileMap = new Map((profiles ?? []).map((item: any) => [item.user_id, item]));
       return requests.map((item) => ({ ...item, profile: profileMap.get(item.user_id) }));
     },
@@ -152,7 +163,8 @@ const Admin = () => {
       const options = (data ?? []) as any[];
       const submitterIds = [...new Set(options.map((option) => option.created_by).filter(Boolean))];
       if (!submitterIds.length) return options;
-      const { data: profiles } = await supabase.from("profiles").select("user_id,name,avatar_url").in("user_id", submitterIds);
+      const { data: profiles, error: profilesError } = await supabase.from("profiles").select("user_id,name,avatar_url").in("user_id", submitterIds);
+      if (profilesError) throw profilesError;
       const profileMap = new Map((profiles ?? []).map((profile: any) => [profile.user_id, profile]));
       return options.map((option) => ({ ...option, submitter: profileMap.get(option.created_by) }));
     },
@@ -163,10 +175,12 @@ const Admin = () => {
   const { data: adminUsers } = useQuery({
     queryKey: ["admin-roles-list"],
     queryFn: async () => {
-      const { data } = await supabase.from("user_roles").select("user_id, role").eq("role", "admin");
+      const { data, error } = await supabase.from("user_roles").select("user_id, role").eq("role", "admin");
+      if (error) throw error;
       const ids = (data ?? []).map((r: any) => r.user_id);
       if (!ids.length) return [];
-      const { data: profs } = await supabase.from("profiles").select("user_id, name, avatar_url").in("user_id", ids);
+      const { data: profs, error: profilesError } = await supabase.from("profiles").select("user_id, name, avatar_url").in("user_id", ids);
+      if (profilesError) throw profilesError;
       return profs ?? [];
     },
     enabled: !!isAdmin,
@@ -191,11 +205,16 @@ const Admin = () => {
     toast.success("Promoted to admin");
   };
   const revokeAdmin = async (uid: string) => {
-    const { error } = await supabase.rpc("revoke_admin_role" as any, { p_target_user_id: uid });
+    const { data, error } = await supabase.rpc("revoke_admin_role" as any, { p_target_user_id: uid });
     if (error) { toast.error(error.message); return; }
     queryClient.invalidateQueries({ queryKey: ["admin-roles-list"] });
     queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-    toast.success("Removed admin role");
+    const result = data as any;
+    if (result?.daily_revocation_pending || result?.daily_ejection_pending) {
+      toast.warning(`Admin role removed, but ${result.daily_revocation_failures || result.daily_ejection_failures || "some"} active-call room revocation operation(s) need Daily console attention`);
+    } else {
+      toast.success("Removed admin role");
+    }
   };
 
   const viewVerificationDocument = async (submission: any) => {
@@ -319,22 +338,36 @@ const Admin = () => {
   };
 
   const dismissReports = async (postId: string) => {
-    await supabase.from("reports").delete().eq("entity_id", postId);
-    queryClient.invalidateQueries({ queryKey: ["admin-reports"] });
-    toast.success("Reports dismissed");
+    try {
+      const { error } = await supabase.from("reports").delete().eq("entity_id", postId);
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ["admin-reports"] });
+      toast.success("Reports dismissed");
+    } catch (error: any) {
+      toast.error(error?.message || "Reports could not be dismissed");
+    }
   };
   const removeReportedPost = async (postId: string) => {
-    await supabase.from("posts").delete().eq("id", postId);
-    await supabase.from("reports").delete().eq("entity_id", postId);
-    queryClient.invalidateQueries({ queryKey: ["admin-reports"] });
-    queryClient.invalidateQueries({ queryKey: ["forum-posts"] });
-    toast.success("Message removed");
+    try {
+      const { error: postError } = await supabase.from("posts").delete().eq("id", postId);
+      if (postError) throw postError;
+      const { error: reportError } = await supabase.from("reports").delete().eq("entity_id", postId);
+      if (reportError) throw new Error(`Message was removed, but its reports could not be dismissed: ${reportError.message}`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-reports"] }),
+        queryClient.invalidateQueries({ queryKey: ["forum-posts"] }),
+      ]);
+      toast.success("Message removed");
+    } catch (error: any) {
+      toast.error(error?.message || "Message could not be removed");
+    }
   };
 
   const { data: appSettings } = useQuery({
     queryKey: ["admin-app-settings"],
     queryFn: async () => {
-      const { data } = await supabase.from("app_settings").select("*");
+      const { data, error } = await supabase.from("app_settings").select("*");
+      if (error) throw error;
       const map: Record<string, string> = {};
       (data as any[])?.forEach((s: any) => { map[s.key] = s.value; });
       return map;
@@ -343,10 +376,17 @@ const Admin = () => {
   });
 
   const updateSetting = async (key: string, value: string) => {
-    await supabase.from("app_settings").update({ value, updated_at: new Date().toISOString() } as any).eq("key", key);
-    queryClient.invalidateQueries({ queryKey: ["admin-app-settings"] });
-    queryClient.invalidateQueries({ queryKey: ["app-setting-test-mode"] });
-    toast.success(`${key} updated!`);
+    try {
+      const { error } = await supabase.from("app_settings").update({ value, updated_at: new Date().toISOString() } as any).eq("key", key);
+      if (error) throw error;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-app-settings"] }),
+        queryClient.invalidateQueries({ queryKey: ["app-setting-test-mode"] }),
+      ]);
+      toast.success(`${key} updated!`);
+    } catch (error: any) {
+      toast.error(error?.message || `${key} could not be updated`);
+    }
   };
 
   const manageTestData = async (action: "seed" | "purge") => {
@@ -401,16 +441,18 @@ const Admin = () => {
     setUploadingIitLogo(domain);
     try {
       const optimized = await convertToWebP(file, 0.82, 256);
-      const path = `${domain.replace(/[^a-z0-9]/gi, "-")}.webp`;
+      // Published objects are immutable. Every replacement gets a new key and
+      // the setting switch below atomically moves readers to the new version.
+      const path = versionedInstituteLogoPath(domain);
       const { error: uploadError } = await supabase.storage
         .from("institute-logos")
-        .upload(path, optimized, { upsert: true, contentType: "image/webp", cacheControl: "31536000" });
+        .upload(path, optimized, { upsert: false, contentType: "image/webp", cacheControl: "31536000" });
       if (uploadError) throw uploadError;
       const { data: publicUrl } = supabase.storage.from("institute-logos").getPublicUrl(path);
       const key = iitLogoSettingKey(domain);
       const { error: settingError } = await supabase.from("app_settings").upsert({
         key,
-        value: `${publicUrl.publicUrl}?v=${Date.now()}`,
+        value: publicUrl.publicUrl,
         updated_at: new Date().toISOString(),
         updated_by: user.id,
       }, { onConflict: "key" });
@@ -441,24 +483,34 @@ const Admin = () => {
   };
 
   const deletePost = async (postId: string) => {
-    await supabase.from("posts").delete().eq("id", postId);
-    queryClient.invalidateQueries({ queryKey: ["admin-posts"] });
-    toast.success("Post deleted");
+    try {
+      const { error } = await supabase.from("posts").delete().eq("id", postId);
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ["admin-posts"] });
+      toast.success("Post deleted");
+    } catch (error: any) {
+      toast.error(error?.message || "Post could not be deleted");
+    }
   };
 
   const toggleVerify = async (userId: string, current: boolean) => {
-    const { error } = await supabase.rpc("set_member_verification", {
+    const { data, error } = await supabase.rpc("set_member_verification", {
       p_target_user_id: userId,
       p_verified: !current,
     });
     if (error) { toast.error(error.message); return; }
     queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-    toast.success(current ? "Unverified" : "Verified!");
+    const result = data as any;
+    if (result?.daily_revocation_pending || result?.daily_ejection_pending) {
+      toast.warning(`Verification was revoked, but ${result.daily_revocation_failures || result.daily_ejection_failures || "some"} active-call room revocation operation(s) need Daily console attention`);
+    } else {
+      toast.success(current ? "Unverified" : "Verified!");
+    }
   };
 
   const createVerifiedMember = async () => {
-    if (!memberForm.name.trim() || !memberForm.email.trim() || memberForm.password.length < 8) {
-      toast.error("Enter a name, valid email and password of at least 8 characters");
+    if (!memberForm.name.trim() || !memberForm.email.trim() || memberForm.password.length < 10) {
+      toast.error("Enter a name, valid email and password of at least 10 characters");
       return;
     }
     setCreatingMember(true);
@@ -493,7 +545,7 @@ const Admin = () => {
 
   const deleteMember = async (member: any) => {
     const displayName = member.name || "Unnamed member";
-    const confirmation = window.prompt(`This permanently deletes ${displayName} and their account data. Type the member name exactly to continue:`);
+    const confirmation = window.prompt(`This permanently deletes ${displayName}'s profile, authored content, private conversations and owned uploads. Security audit records are retained. Type the member name exactly to continue:`);
     if (confirmation === null) return;
     setDeletingMemberId(member.user_id);
     try {
@@ -506,7 +558,17 @@ const Admin = () => {
       }
       if (data?.error) throw new Error(data.error);
       await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-      toast.success(`${displayName} was permanently deleted`);
+      if (data?.storage_cleanup_pending || data?.daily_revocation_pending || data?.daily_ejection_pending) {
+        const pending = [
+          data.storage_cleanup_pending ? `${data.storage_cleanup_failures || "some"} upload cleanup operation(s)` : null,
+          data.daily_revocation_pending || data.daily_ejection_pending
+            ? `${data.daily_revocation_failures || data.daily_ejection_failures || "some"} active-call room revocation operation(s)`
+            : null,
+        ].filter(Boolean).join(" and ");
+        toast.warning(`${displayName} was deleted, but ${pending} need server attention`);
+      } else {
+        toast.success(`${displayName} was permanently deleted`);
+      }
     } catch (error: any) {
       toast.error(error.message || "Could not delete this member");
     } finally {
@@ -1011,7 +1073,7 @@ const Admin = () => {
           <div className="space-y-3">
             <div><Label htmlFor="member-name">Full name</Label><Input id="member-name" value={memberForm.name} onChange={(e) => setMemberForm((v) => ({ ...v, name: e.target.value }))} className="mt-1.5" autoComplete="off" /></div>
             <div><Label htmlFor="member-email">Email</Label><Input id="member-email" type="email" value={memberForm.email} onChange={(e) => setMemberForm((v) => ({ ...v, email: e.target.value }))} className="mt-1.5" autoComplete="off" /></div>
-            <div><Label htmlFor="member-password">Temporary password</Label><Input id="member-password" type="password" value={memberForm.password} onChange={(e) => setMemberForm((v) => ({ ...v, password: e.target.value }))} className="mt-1.5" autoComplete="new-password" /></div>
+            <div><Label htmlFor="member-password">Temporary password</Label><Input id="member-password" type="password" minLength={10} maxLength={128} value={memberForm.password} onChange={(e) => setMemberForm((v) => ({ ...v, password: e.target.value }))} className="mt-1.5" autoComplete="new-password" aria-describedby="member-password-help" /><p id="member-password-help" className="mt-1 text-xs text-muted-foreground">10–128 characters.</p></div>
             <div>
               <Label htmlFor="member-status">Member status</Label>
               <select id="member-status" value={memberForm.student_status} onChange={(e) => setMemberForm((v) => ({ ...v, student_status: e.target.value }))} className="mt-1.5 h-10 w-full rounded-md border border-input bg-background px-3 text-sm">

@@ -26,6 +26,7 @@ const ownershipFields: Record<string, string[]> = {
 
 const plan: Array<{ table: string; rows: Row[] }> = [];
 const pollVoteKeys = new Set<string>();
+const plannedOwnerIds = new Set<string>();
 for (const [table, value] of Object.entries(parsed.tables)) {
   if (!legacyTables.has(table) || table === "user_roles") throw new Error(`Table ${table} is not a supported LegacyRecord import target`);
   if (!Array.isArray(value) || value.some((row) => !row || typeof row !== "object" || Array.isArray(row))) throw new Error(`Table ${table} must be an array of objects`);
@@ -38,6 +39,8 @@ for (const [table, value] of Object.entries(parsed.tables)) {
       if (pollVoteKeys.has(key)) throw new Error(`poll_votes contains duplicate poll_id/user_id at index ${index}; deduplicate the export before import`);
       pollVoteKeys.add(key);
     }
+    const owner = (ownershipFields[table] ?? []).map((field) => row[field]).find((value): value is string => typeof value === "string" && Boolean(value));
+    if (owner) plannedOwnerIds.add(owner);
   }
   plan.push({ table, rows });
 }
@@ -47,17 +50,25 @@ if (!apply) {
   process.stdout.write(`${JSON.stringify({ mode: "plan", rows: summary }, null, 2)}\n`);
   process.stdout.write("No data was written. Re-run with --apply after reviewing the plan.\n");
 } else {
-  for (const { table, rows } of plan) {
-    for (const row of rows) {
-      const owner = (ownershipFields[table] ?? []).map((field) => row[field]).find((value): value is string => typeof value === "string");
-      const community = typeof row.community_id === "string" ? row.community_id : null;
-      await prisma.legacyRecord.upsert({
-        where: { table_name_record_id: { table_name: table, record_id: String(row.id) } },
-        create: { table_name: table, record_id: String(row.id), owner_id: owner, community_id: community, data: row as Prisma.InputJsonValue },
-        update: { owner_id: owner, community_id: community, data: row as Prisma.InputJsonValue },
-      });
-    }
+  const existingOwners = await prisma.user.findMany({ where: { id: { in: [...plannedOwnerIds] } }, select: { id: true } });
+  const existingOwnerIds = new Set(existingOwners.map((user) => user.id));
+  const missingOwners = [...plannedOwnerIds].filter((id) => !existingOwnerIds.has(id));
+  if (missingOwners.length) {
+    throw new Error(`Import references ${missingOwners.length} users that do not exist in MySQL. Import typed users/auth identities first; no LegacyRecord rows were written.`);
   }
+  await prisma.$transaction(async (tx) => {
+    for (const { table, rows } of plan) {
+      for (const row of rows) {
+        const owner = (ownershipFields[table] ?? []).map((field) => row[field]).find((value): value is string => typeof value === "string" && Boolean(value));
+        const community = typeof row.community_id === "string" ? row.community_id : null;
+        await tx.legacyRecord.upsert({
+          where: { table_name_record_id: { table_name: table, record_id: String(row.id) } },
+          create: { table_name: table, record_id: String(row.id), owner_id: owner, community_id: community, data: row as Prisma.InputJsonValue },
+          update: { owner_id: owner, community_id: community, data: row as Prisma.InputJsonValue },
+        });
+      }
+    }
+  }, { timeout: 60_000 });
   process.stdout.write(`${JSON.stringify({ mode: "applied", rows: summary }, null, 2)}\n`);
 }
 

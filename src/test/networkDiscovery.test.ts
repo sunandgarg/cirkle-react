@@ -3,6 +3,7 @@ import {
   collectNetworkMemberPages,
   memberMatchesNetworkSearch,
   pageCount,
+  networkSearchTerms,
   resolveNetworkTab,
   type NetworkMember,
 } from "@/lib/networkDiscovery";
@@ -31,6 +32,10 @@ describe("network discovery", () => {
     expect(memberMatchesNetworkSearch(member, "pune react")).toBe(true);
     expect(memberMatchesNetworkSearch(member, "carbon fundraising")).toBe(true);
     expect(memberMatchesNetworkSearch(member, "quantum")).toBe(false);
+  });
+
+  it("normalizes server-search terms so filter syntax cannot be injected", () => {
+    expect(networkSearchTerms("AI/ML),role.eq.owner")).toEqual(["ai", "ml", "role", "eq", "owner"]);
   });
 
   it("continues through every server page instead of truncating discovery", async () => {

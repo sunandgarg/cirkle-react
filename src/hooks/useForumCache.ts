@@ -97,9 +97,12 @@ export const setCachedPosts = (scopeType: string, scopeKey: string, posts: any[]
 };
 
 // ─── Unread dots persistence ───
-const UNREAD_KEY = "forum_unread_dots";
-const DRAFT_PREFIX = "forum_draft_";
-const SCROLL_PREFIX = "forum_scroll_";
+const UNREAD_PREFIX = "forum_v2_unread_dots_";
+const DRAFT_PREFIX = "forum_v2_draft_";
+const SCROLL_PREFIX = "forum_v2_scroll_";
+const LEGACY_UNREAD_KEY = "forum_unread_dots";
+const LEGACY_DRAFT_PREFIX = "forum_draft_";
+const LEGACY_SCROLL_PREFIX = "forum_scroll_";
 const TEST_POSTS_PREFIX = "forum_test_posts_";
 const LAST_ROOM_PREFIX = "forum_last_room_";
 
@@ -117,29 +120,55 @@ export const setLastForumRoom = (viewerId: string, room: LastForumRoom) => {
   try { localStorage.setItem(`${LAST_ROOM_PREFIX}${viewerId}`, JSON.stringify(room)); } catch {}
 };
 
-const roomStateKey = (prefix: string, scopeType: string, scopeKey: string) =>
-  `${prefix}${scopeType}_${scopeKey}`;
+const viewerKey = (viewerId?: string | null) => viewerId?.trim() || null;
 
-export const getForumDraft = (scopeType: string, scopeKey: string) => {
-  try { return localStorage.getItem(roomStateKey(DRAFT_PREFIX, scopeType, scopeKey)) || ""; }
+const roomStateKey = (prefix: string, viewerId: string, scopeType: string, scopeKey: string) =>
+  `${prefix}${viewerId}_${scopeType}_${scopeKey}`;
+
+/**
+ * Pre-user-scoping forum state cannot be attributed safely to an account on a
+ * shared browser. Delete it instead of guessing an owner or leaking a draft.
+ */
+export const purgeLegacyForumLocalState = () => {
+  try {
+    localStorage.removeItem(LEGACY_UNREAD_KEY);
+    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(LEGACY_DRAFT_PREFIX) || key?.startsWith(LEGACY_SCROLL_PREFIX)) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {}
+};
+
+export const getForumDraft = (scopeType: string, scopeKey: string, viewerId?: string | null) => {
+  const owner = viewerKey(viewerId);
+  if (!owner) return "";
+  try { return localStorage.getItem(roomStateKey(DRAFT_PREFIX, owner, scopeType, scopeKey)) || ""; }
   catch { return ""; }
 };
 
-export const setForumDraft = (scopeType: string, scopeKey: string, draft: string) => {
+export const setForumDraft = (scopeType: string, scopeKey: string, draft: string, viewerId?: string | null) => {
+  const owner = viewerKey(viewerId);
+  if (!owner) return;
   try {
-    const key = roomStateKey(DRAFT_PREFIX, scopeType, scopeKey);
+    const key = roomStateKey(DRAFT_PREFIX, owner, scopeType, scopeKey);
     if (draft) localStorage.setItem(key, draft.slice(0, 4000));
     else localStorage.removeItem(key);
   } catch {}
 };
 
-export const getForumScroll = (scopeType: string, scopeKey: string) => {
-  try { return Math.max(0, Number(localStorage.getItem(roomStateKey(SCROLL_PREFIX, scopeType, scopeKey))) || 0); }
+export const getForumScroll = (scopeType: string, scopeKey: string, viewerId?: string | null) => {
+  const owner = viewerKey(viewerId);
+  if (!owner) return 0;
+  try { return Math.max(0, Number(localStorage.getItem(roomStateKey(SCROLL_PREFIX, owner, scopeType, scopeKey))) || 0); }
   catch { return 0; }
 };
 
-export const setForumScroll = (scopeType: string, scopeKey: string, offset: number) => {
-  try { localStorage.setItem(roomStateKey(SCROLL_PREFIX, scopeType, scopeKey), String(Math.max(0, Math.round(offset)))); }
+export const setForumScroll = (scopeType: string, scopeKey: string, offset: number, viewerId?: string | null) => {
+  const owner = viewerKey(viewerId);
+  if (!owner) return;
+  try { localStorage.setItem(roomStateKey(SCROLL_PREFIX, owner, scopeType, scopeKey), String(Math.max(0, Math.round(offset)))); }
   catch {}
 };
 
@@ -163,16 +192,19 @@ export const appendForumTestPost = (scopeType: string, scopeKey: string, post: a
   }
 };
 
-export const getUnreadChannels = (): Record<string, boolean> => {
+export const getUnreadChannels = (viewerId?: string | null): Record<string, boolean> => {
+  const owner = viewerKey(viewerId);
+  if (!owner) return {};
+  const key = `${UNREAD_PREFIX}${owner}`;
   try {
-    const raw = localStorage.getItem(UNREAD_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) {
       // First load defaults
       const defaults: Record<string, boolean> = {
         "GLOBAL_IIT_ALL_tech": true,
         "GLOBAL_IIT_ALL_jobs": true,
       };
-      localStorage.setItem(UNREAD_KEY, JSON.stringify(defaults));
+      localStorage.setItem(key, JSON.stringify(defaults));
       return defaults;
     }
     return JSON.parse(raw);
@@ -181,21 +213,25 @@ export const getUnreadChannels = (): Record<string, boolean> => {
   }
 };
 
-export const setChannelRead = (scopeType: string, scopeKey: string) => {
+export const setChannelRead = (scopeType: string, scopeKey: string, viewerId?: string | null) => {
+  const owner = viewerKey(viewerId);
+  if (!owner) return;
   try {
-    const current = getUnreadChannels();
+    const current = getUnreadChannels(owner);
     const key = `${scopeType}_${scopeKey}`;
     delete current[key];
-    localStorage.setItem(UNREAD_KEY, JSON.stringify(current));
+    localStorage.setItem(`${UNREAD_PREFIX}${owner}`, JSON.stringify(current));
   } catch {}
 };
 
-export const setChannelUnread = (scopeType: string, scopeKey: string) => {
+export const setChannelUnread = (scopeType: string, scopeKey: string, viewerId?: string | null) => {
+  const owner = viewerKey(viewerId);
+  if (!owner) return;
   try {
-    const current = getUnreadChannels();
+    const current = getUnreadChannels(owner);
     const key = `${scopeType}_${scopeKey}`;
     current[key] = true;
-    localStorage.setItem(UNREAD_KEY, JSON.stringify(current));
+    localStorage.setItem(`${UNREAD_PREFIX}${owner}`, JSON.stringify(current));
   } catch {}
 };
 

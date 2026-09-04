@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertUploadOverwriteAllowed, isOwnedReadyFile, messageReferencesObject, storyIsActive } from "../src/services/storage.js";
+import { assertUploadOverwriteAllowed, isOwnedReadyFile, messageReferencesObject, publicStorageObjectUrl, storyIsActive, verificationEvidenceIsLocked } from "../src/services/storage.js";
 
 describe("friends-only story lifetime", () => {
   const now = new Date("2026-09-04T12:00:00.000Z");
@@ -31,5 +31,18 @@ describe("friends-only story lifetime", () => {
     expect(() => assertUploadOverwriteAllowed("verification-documents", true)).toThrow(/cannot be overwritten/);
     expect(() => assertUploadOverwriteAllowed("verification-documents", false)).not.toThrow();
     expect(() => assertUploadOverwriteAllowed("post-images", true)).not.toThrow();
+  });
+
+  it("locks verification evidence while it is pending or approved", () => {
+    expect(verificationEvidenceIsLocked({ document_path: "member/doc.pdf", status: "pending" }, "member/doc.pdf")).toBe(true);
+    expect(verificationEvidenceIsLocked({ document_path: "member/doc.pdf", status: "approved" }, "member/doc.pdf")).toBe(true);
+    expect(verificationEvidenceIsLocked({ document_path: "member/doc.pdf", status: "rejected" }, "member/doc.pdf")).toBe(false);
+    expect(verificationEvidenceIsLocked({ document_path: "member/doc.pdf", status: "withdrawn" }, "member/doc.pdf")).toBe(false);
+    expect(verificationEvidenceIsLocked({ document_path: "member/other.pdf", status: "approved" }, "member/doc.pdf")).toBe(false);
+  });
+
+  it("builds the canonical public URL used to lock submitted company logos", () => {
+    expect(publicStorageObjectUrl("entity-logos", "member one/logo 1.webp"))
+      .toContain("/api/storage/public/entity-logos/member%20one/logo%201.webp");
   });
 });

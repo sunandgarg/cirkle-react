@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BadgeCheck, MessageCircle, Phone, Video, Search, Lock, X, Calendar, Clock, CheckCircle2, Users, Sparkles, AlertCircle, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,7 @@ const getInitials = (name?: string | null): string => {
 
 // Topmate-style service card
 const ServiceButton = ({ icon: Icon, label, price, color, active, onClick }: any) => (
-  <button onClick={onClick} disabled={price === undefined || price === null}
+  <button type="button" onClick={onClick} disabled={price === undefined || price === null} aria-pressed={active}
     className={`flex-1 py-3 rounded-2xl text-xs font-semibold flex flex-col items-center justify-center gap-1.5 transition-all border-2 hover-scale ${
       active ? `${color} shadow-sm` : "bg-card border-border text-muted-foreground hover:border-primary/30"
     } disabled:cursor-not-allowed disabled:opacity-40`}>
@@ -59,6 +59,7 @@ const Consult = () => {
   const [selectedDuration, setSelectedDuration] = useState(30);
   const [bookingNotes, setBookingNotes] = useState("");
   const [activeTab, setActiveTab] = useState<"mentors" | "bookings">(() => location.pathname.endsWith("/bookings") ? "bookings" : "mentors");
+  const bookingCloseRef = useRef<HTMLButtonElement>(null);
 
   const isVerified = !!user && !!profile?.is_verified && !!profile?.onboarding_completed;
 
@@ -66,6 +67,23 @@ const Consult = () => {
     if (location.pathname.endsWith("/bookings")) setActiveTab("bookings");
     else if (location.pathname.endsWith("/mentors")) setActiveTab("mentors");
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (!bookingExpert) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    bookingCloseRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setBookingExpert(null);
+      }
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("keydown", closeOnEscape);
+      previouslyFocused?.focus();
+    };
+  }, [bookingExpert]);
 
   // Only fetch mentors who opted in
   const { data: experts, isLoading: expertsLoading, error: expertsError, refetch: refetchExperts } = useQuery({
@@ -195,7 +213,7 @@ const Consult = () => {
       {/* Booking Modal - topmate.io style */}
       {bookingExpert && (
         <div className="fixed inset-0 z-[60] bg-background/80 backdrop-blur-sm flex items-end sm:items-center justify-center">
-          <div className="bg-card w-full max-w-md rounded-t-3xl sm:rounded-3xl border border-border p-6 animate-fade-in max-h-[90vh] overflow-y-auto shadow-2xl">
+          <div role="dialog" aria-modal="true" aria-labelledby="consult-booking-title" className="bg-card w-full max-w-md rounded-t-3xl sm:rounded-3xl border border-border p-6 animate-fade-in max-h-[90vh] overflow-y-auto shadow-2xl">
             {/* Expert mini card */}
             <div className="flex items-center gap-3 mb-5">
               {bookingExpert.avatar_url ? (
@@ -206,13 +224,13 @@ const Consult = () => {
                 </div>
               )}
               <div className="flex-1 min-w-0">
-                <h3 className="font-bold text-foreground text-sm flex items-center gap-1">
+                <h3 id="consult-booking-title" className="font-bold text-foreground text-sm flex items-center gap-1">
                   {bookingExpert.name}
                   {bookingExpert.is_verified && <BadgeCheck className="w-4 h-4 text-primary" />}
                 </h3>
                 <p className="text-xs text-muted-foreground truncate">{bookingExpert.headline || "Mentor"}</p>
               </div>
-              <button onClick={() => setBookingExpert(null)} className="p-1.5 rounded-full hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"><X className="w-5 h-5" /></button>
+              <button ref={bookingCloseRef} type="button" onClick={() => setBookingExpert(null)} className="p-1.5 rounded-full hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors" aria-label="Close booking dialog"><X className="w-5 h-5" /></button>
             </div>
 
             {/* Service type - topmate style */}

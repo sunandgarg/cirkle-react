@@ -1,4 +1,4 @@
-import type { Event, Prisma, Profile } from "@prisma/client";
+import { Prisma, type Event, type Profile } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { ApiError } from "../lib/errors.js";
 import type { RequestContext } from "../types.js";
@@ -10,6 +10,10 @@ import { contentTombstone, deletedContentFields, isDeletedForEveryone, privateMe
 import { dateOnly, normalizeDateOfBirth, normalizeHttpUrl, normalizeSocialLinks } from "./profile.js";
 import { assertOwnedReadyObject, canAccessStoryOwner, storyIsActive } from "./storage.js";
 import { applyProfileEntryModeration, assertModeratedProfileWrite, profileEntryVisible, validateModeratedProfileEntry, type CatalogOption, type ModeratedProfileTable } from "./moderation.js";
+import { createForumPostsWithSlowMode } from "./forumSlowMode.js";
+import { isCanonicalRealtimeRecordId } from "../realtime/appsyncChannels.js";
+import { forumPostMediaHandles, redactAnonymousPostForViewer } from "./forum.js";
+import { dailyParticipantLeaseIsFresh } from "./daily.js";
 
 type Row = Record<string, unknown>;
 
@@ -36,7 +40,7 @@ const policies: Record<string, TablePolicy> = {
   jobs: { delegate: "job", read: ["id", "created_by", "community_id", "title", "company", "company_logo_url", "location", "job_type", "category", "experience", "experience_level", "easy_apply", "description", "application_url", "apply_url", "source_url", "source_type", "status", "salary_min", "salary_max", "salary_currency", "salary_text", "skills", "source_fingerprint", "scan_run_id", "discovered_at", "last_seen_at", "expires_at", "published_at", "created_at", "updated_at"], write: ["created_by", "community_id", "title", "company", "company_logo_url", "location", "job_type", "category", "experience", "experience_level", "easy_apply", "description", "application_url", "apply_url", "source_url", "source_type", "status", "salary_min", "salary_max", "salary_currency", "salary_text", "skills", "source_fingerprint", "scan_run_id", "discovered_at", "last_seen_at", "expires_at", "published_at"], adminWrite: true },
   applications: { delegate: "application", read: ["id", "job_id", "applicant_id", "note", "resume_url", "status", "created_at", "updated_at"], write: ["job_id", "note", "resume_url"], ownerField: "applicant_id", verifiedRead: true },
   events: { delegate: "event", read: ["id", "title", "description", "location", "start_time", "end_time", "image_url", "registration_url", "organizer_name", "organizer", "source_iit", "audience_type", "audience_targets", "audience_mode", "target_iits", "target_courses", "target_specialisations", "source_url", "source_fingerprint", "scan_run_id", "source_type", "status", "community_id", "created_by", "published_at", "created_at", "updated_at"], write: ["title", "description", "location", "start_time", "end_time", "image_url", "registration_url", "organizer_name", "organizer", "source_iit", "audience_type", "audience_targets", "audience_mode", "target_iits", "target_courses", "target_specialisations", "source_url", "source_fingerprint", "scan_run_id", "source_type", "status", "community_id", "published_at"], adminWrite: true },
-  rsvps: { delegate: "rsvp", read: ["id", "event_id", "user_id", "status", "created_at", "updated_at"], write: ["event_id", "status"], ownerField: "user_id" },
+  rsvps: { delegate: "rsvp", read: ["id", "event_id", "user_id", "status", "created_at", "updated_at"], write: ["event_id", "status"], ownerField: "user_id", verifiedRead: true },
 };
 
 export const legacyTables = new Set([
@@ -62,6 +66,12 @@ const legacyRpcWriteOnly = new Set([
 
 const isAdmin = (ctx: RequestContext): boolean => ctx.auth.role === "admin" || ctx.auth.role === "owner";
 const delegate = (name: string): any => (prisma as unknown as Record<string, any>)[name];
+const verifiedLegacyTables = new Set([
+  "messages", "chat_rooms", "chat_members", "call_sessions", "call_participants", "consultations",
+  "stories", "polls", "poll_votes", "blog_comments", "blog_likes", "blog_bookmarks",
+]);
+
+export const legacyTableRequiresVerification = (table: string): boolean => verifiedLegacyTables.has(table);
 
 export function blogIsPublic(row: Row, now = Date.now()): boolean {
   if (row.published !== true) return false;
@@ -118,6 +128,21 @@ function assertColumns(policy: TablePolicy, query: SerializedQuery): void {
 }
 
 const privateProfileQueryColumns = new Set(["iit_email", "date_of_birth", "phone_country_code", "phone_number", "phone_full"]);
+const anonymousPostPrivateQueryColumns = new Set([
+  "author_id",
+  "deleted_by_user_id",
+  "client_id",
+  "image_url",
+  "image_path",
+  "media_url",
+  "media_path",
+  "media_metadata",
+  "file_url",
+  "file_path",
+  "file_name",
+  "voice_url",
+  "voice_path",
+]);
 
 export function assertPrivateQuerySafety(query: Pick<SerializedQuery, "table" | "filters" | "order">, ctx: RequestContext): void {
   if (isAdmin(ctx)) return;
@@ -134,13 +159,17 @@ export function assertPrivateQuerySafety(query: Pick<SerializedQuery, "table" | 
     }
   }
   if (query.table === "posts") {
-    const referencesAuthor = query.order.some((order) => order.column === "author_id")
-      || query.filters.some((filter) => filter.operator !== "or" && filter.column === "author_id")
-      || query.filters.some((filter) => filter.operator === "or" && (filter.expression ?? String(filter.value ?? "")).includes("author_id."));
+    const containsAnonymousPrivateField = (part: ParsedLogicNode): boolean => part.kind === "predicate"
+      ? anonymousPostPrivateQueryColumns.has(part.column)
+      : part.children.some(containsAnonymousPrivateField);
+    const referencesAnonymousPrivate = query.order.some((order) => anonymousPostPrivateQueryColumns.has(order.column))
+      || query.filters.some((filter) => filter.operator !== "or" && !!filter.column && anonymousPostPrivateQueryColumns.has(filter.column))
+      || query.filters.some((filter) => filter.operator === "or"
+        && parseOrExpression(filter.expression ?? String(filter.value ?? "")).some(containsAnonymousPrivateField));
     const explicitlyPublic = directlyEquals("is_anonymous", false) || directlyEquals("is_anonymous", "false");
     const ownAuthor = directlyEquals("author_id", ctx.auth.id);
-    if (referencesAuthor && !explicitlyPublic && !ownAuthor) {
-      throw new ApiError(403, "anonymous_author_query_denied", "Anonymous author identity cannot be filtered or ordered");
+    if (referencesAnonymousPrivate && !explicitlyPublic && !ownAuthor) {
+      throw new ApiError(403, "anonymous_author_query_denied", "Anonymous author identity-bearing fields cannot be filtered or ordered");
     }
   }
 }
@@ -312,17 +341,48 @@ function normalizeLegacyExternalUrls(table: string, row: Row): void {
   }
 }
 
-async function visiblePost(postId: unknown, ctx: RequestContext): Promise<{ id: string; author_id: string | null; scope_type: string; scope_key: string }> {
+async function visiblePost(postId: unknown, ctx: RequestContext): Promise<{ id: string; author_id: string | null; scope_type: string; scope_key: string; reply_to_id: string | null }> {
   if (typeof postId !== "string" || !postId) throw new ApiError(400, "post_required", "A valid post ID is required");
-  const post = await prisma.post.findUnique({ where: { id: postId }, select: { id: true, author_id: true, scope_type: true, scope_key: true, deleted_at: true, is_deleted_for_everyone: true } });
+  const post = await prisma.post.findUnique({ where: { id: postId }, select: { id: true, author_id: true, scope_type: true, scope_key: true, reply_to_id: true, deleted_at: true, is_deleted_for_everyone: true } });
   if (!post || post.deleted_at || post.is_deleted_for_everyone || (post.author_id !== ctx.auth.id && !(await canUseForumScope(ctx.auth.id, ctx.auth.is_verified, ctx.auth.role, post.scope_type, post.scope_key)))) {
     throw new ApiError(404, "post_not_found", "The post is unavailable");
   }
   return post;
 }
 
+export function assertPostReferenceScope(
+  source: Row,
+  target: Row,
+  kind: "reply" | "reshare",
+): void {
+  if (target.reply_to_id || target.scope_type !== source.scope_type || target.scope_key !== source.scope_key) {
+    throw new ApiError(
+      400,
+      kind === "reply" ? "invalid_reply_target" : "invalid_reshare_target",
+      `${kind === "reply" ? "Reply" : "Reshare"} target must be a visible top-level post in the same forum scope`,
+    );
+  }
+}
+
+export function assertCommentParent(
+  postId: unknown,
+  parent: { post_id: string; parent_comment_id: string | null } | null,
+): void {
+  if (!parent || typeof postId !== "string" || !postId || parent.post_id !== postId || parent.parent_comment_id) {
+    throw new ApiError(400, "invalid_parent_comment", "Replies must target a top-level comment on the same post");
+  }
+}
+
+export function commentTombstonePatch(now = new Date()): { content: string; author_id: null; edited_at: Date } {
+  return { content: "", author_id: null, edited_at: now };
+}
+
 export function pollVoteRecordKey(pollId: string, userId: string): string {
   return `poll-vote:${sha256(`${pollId}\n${userId}`).slice(0, 64)}`;
+}
+
+export function pollRecordKey(postId: string): string {
+  return `poll:${sha256(postId).slice(0, 64)}`;
 }
 
 export function validatePollOption(poll: Row, value: unknown): number {
@@ -354,10 +414,12 @@ export function assertPollVotePayload(row: Row): void {
 
 async function visiblePoll(pollId: unknown, ctx: RequestContext): Promise<Row> {
   if (typeof pollId !== "string" || !pollId) throw new ApiError(400, "poll_required", "A valid poll ID is required");
-  const record = await prisma.legacyRecord.findFirst({ where: {
+  const records = await prisma.legacyRecord.findMany({ where: {
     table_name: "polls",
     data: { path: "$.id", equals: pollId },
-  } });
+  }, take: 2 });
+  if (records.length > 1) throw new ApiError(409, "poll_identity_conflict", "The poll identity is ambiguous and requires administrator repair");
+  const record = records[0];
   const poll = record?.data as Row | undefined;
   if (!poll || !Array.isArray(poll.options) || poll.options.length < 2 || poll.options.length > 20) {
     throw new ApiError(404, "poll_not_found", "The poll is unavailable");
@@ -418,6 +480,12 @@ async function validateCoreWrite(table: string, value: Row, ctx: RequestContext)
     }
   }
   if (table === "posts") {
+    if (value.id != null) {
+      if (typeof value.id !== "string" || !isCanonicalRealtimeRecordId(value.id.toLowerCase())) {
+        throw new ApiError(400, "invalid_post_id", "Forum post IDs must use canonical UUID format");
+      }
+      value.id = value.id.toLowerCase();
+    }
     if (!value.scope_type || !value.scope_key) {
       const global = (await allowedForumScopes(ctx.auth.id, ctx.auth.is_verified, ctx.auth.role)).find((scope) => scope.scope_type === "GLOBAL");
       value.scope_type = global?.scope_type ?? "GLOBAL";
@@ -426,8 +494,8 @@ async function validateCoreWrite(table: string, value: Row, ctx: RequestContext)
     if (!(await canUseForumScope(ctx.auth.id, ctx.auth.is_verified, ctx.auth.role, String(value.scope_type), String(value.scope_key)))) {
       throw new ApiError(403, "forum_scope_denied", "Forum community access denied");
     }
-    if (value.reply_to_id) await visiblePost(value.reply_to_id, ctx);
-    if (value.reshared_post_id) await visiblePost(value.reshared_post_id, ctx);
+    if (value.reply_to_id) assertPostReferenceScope(value, await visiblePost(value.reply_to_id, ctx), "reply");
+    if (value.reshared_post_id) assertPostReferenceScope(value, await visiblePost(value.reshared_post_id, ctx), "reshare");
     for (const [field, bucket] of [["image_path", "post-images"], ["media_path", "post-images"], ["file_path", "forum-files"], ["voice_path", "voice-notes"]] as const) {
       if (value[field] != null && value[field] !== "") value[field] = await assertOwnedReadyObject(bucket, value[field], ctx.auth.id);
     }
@@ -435,8 +503,8 @@ async function validateCoreWrite(table: string, value: Row, ctx: RequestContext)
   if (table === "comments") {
     await visiblePost(value.post_id, ctx);
     if (value.parent_comment_id) {
-      const parent = await prisma.comment.findUnique({ where: { id: String(value.parent_comment_id) }, select: { post_id: true } });
-      if (!parent || parent.post_id !== value.post_id) throw new ApiError(400, "invalid_parent_comment", "Parent comment must belong to the same post");
+      const parent = await prisma.comment.findUnique({ where: { id: String(value.parent_comment_id) }, select: { post_id: true, parent_comment_id: true } });
+      assertCommentParent(value.post_id, parent);
     }
   }
   if (table === "reactions" || table === "reports") {
@@ -455,6 +523,36 @@ async function validateCoreWrite(table: string, value: Row, ctx: RequestContext)
     const event = typeof value.event_id === "string" ? await prisma.event.findUnique({ where: { id: value.event_id } }) : null;
     const audience = await eventAudienceContext(ctx);
     if (!event || !eventVisibleToMember(event, audience.profile, audience.education, isAdmin(ctx))) throw new ApiError(404, "event_not_available", "This event is not available");
+  }
+}
+
+const immutableCoreUpdateFields: Record<string, readonly string[]> = {
+  posts: ["community_id", "scope_type", "scope_key", "reply_to_id", "reshared_post_id"],
+  comments: ["post_id", "parent_comment_id"],
+  reactions: ["entity_id", "entity_type"],
+  reports: ["entity_id", "entity_type"],
+  applications: ["job_id"],
+  rsvps: ["event_id"],
+};
+
+export function assertCoreUpdateRelationsImmutable(table: string, patch: Row): void {
+  const changed = (immutableCoreUpdateFields[table] ?? []).filter((field) => Object.prototype.hasOwnProperty.call(patch, field));
+  if (changed.length) {
+    throw new ApiError(400, "relation_immutable", `${changed.join(", ")} cannot be changed after creation`);
+  }
+}
+
+export function assertCoreUpsertRelationsUnchanged(table: string, value: Row, current: Row): void {
+  const changed = (immutableCoreUpdateFields[table] ?? []).filter((field) =>
+    Object.prototype.hasOwnProperty.call(value, field) && JSON.stringify(value[field]) !== JSON.stringify(current[field]));
+  if (changed.length) {
+    throw new ApiError(400, "relation_immutable", `${changed.join(", ")} cannot be changed after creation`);
+  }
+}
+
+export function assertCoreDeleteAllowed(table: string, ctx: RequestContext): void {
+  if (table === "posts" && !isAdmin(ctx)) {
+    throw new ApiError(403, "post_delete_requires_tombstone", "Members must use the time-bounded delete-for-everyone or hide-for-me workflow");
   }
 }
 
@@ -488,6 +586,38 @@ export function deriveVirtualUserRoles(users: Array<{ id: string; role: string }
 
 function uniqueWhere(table: string, row: Row): Row {
   return table === "profiles" ? { user_id: row.user_id } : { id: row.id };
+}
+
+function guardedMutationWhere(table: string, row: Row, policy: TablePolicy, ctx: RequestContext): Row {
+  const where = uniqueWhere(table, row);
+  if (!isAdmin(ctx) && policy.ownerField) where[policy.ownerField] = ctx.auth.id;
+  return where;
+}
+
+async function lockSecuritySensitiveCoreRow(client: any, table: string, row: Row): Promise<Row | null> {
+  if (table === "profiles") await client.$queryRaw(Prisma.sql`SELECT user_id FROM profiles WHERE user_id = ${String(row.user_id)} LIMIT 1 FOR UPDATE`);
+  else if (table === "posts") await client.$queryRaw(Prisma.sql`SELECT id FROM posts WHERE id = ${String(row.id)} LIMIT 1 FOR UPDATE`);
+  else if (table === "comments") await client.$queryRaw(Prisma.sql`SELECT id FROM comments WHERE id = ${String(row.id)} LIMIT 1 FOR UPDATE`);
+  else if (table === "reactions") await client.$queryRaw(Prisma.sql`SELECT id FROM reactions WHERE id = ${String(row.id)} LIMIT 1 FOR UPDATE`);
+  else if (table === "reports") await client.$queryRaw(Prisma.sql`SELECT id FROM reports WHERE id = ${String(row.id)} LIMIT 1 FOR UPDATE`);
+  else if (table === "applications") await client.$queryRaw(Prisma.sql`SELECT id FROM applications WHERE id = ${String(row.id)} LIMIT 1 FOR UPDATE`);
+  else if (table === "rsvps") await client.$queryRaw(Prisma.sql`SELECT id FROM rsvps WHERE id = ${String(row.id)} LIMIT 1 FOR UPDATE`);
+  else return row;
+  const model = (client as Record<string, any>)[policies[table]!.delegate];
+  return model.findUnique({ where: uniqueWhere(table, row) });
+}
+
+function assertFreshPostMutation(current: Row, patch: Row, ctx: RequestContext): void {
+  if (patch.is_deleted_for_everyone === false && isDeletedForEveryone(current)) {
+    throw new ApiError(409, "deleted_content_immutable", "A post deleted for everyone cannot be restored");
+  }
+  if (isDeletedForEveryone(current) && patch.is_deleted_for_everyone !== true) {
+    throw new ApiError(409, "deleted_content_immutable", "A post deleted for everyone cannot be restored or edited");
+  }
+  if (patch.is_deleted_for_everyone === true && !isAdmin(ctx)
+    && new Date(String(current.created_at)).getTime() < Date.now() - 3 * 60_000) {
+    throw new ApiError(409, "delete_window_expired", "Cannot delete for everyone after 3 minutes");
+  }
 }
 
 function privateMediaKeys(rows: Row[], kind: "post" | "message" | "story"): string[] {
@@ -535,9 +665,9 @@ async function revokePrivateMedia(rows: Row[], kind: "post" | "message" | "story
   }
 }
 
-function secureOutput(table: string, row: Row, ctx: RequestContext, columns?: string | string[]): Row {
-  const copy = table === "posts" ? contentTombstone(row) : { ...row };
-  if (table === "posts" && copy.is_anonymous === true && !isAdmin(ctx)) copy.author_id = null;
+function secureOutput(table: string, row: Row, ctx: RequestContext, columns?: string | string[], mediaHandles?: Map<string, string>): Row {
+  let copy = table === "posts" ? contentTombstone(row) : { ...row };
+  if (table === "posts") copy = redactAnonymousPostForViewer(copy, ctx.auth.id, ctx.auth.role, mediaHandles);
   if (table === "profiles") copy.date_of_birth = dateOnly(copy.date_of_birth);
   if (table === "profiles" && copy.user_id !== ctx.auth.id && !isAdmin(ctx)) {
     delete copy.iit_email;
@@ -549,14 +679,9 @@ function secureOutput(table: string, row: Row, ctx: RequestContext, columns?: st
   return projectColumns(copy, columns);
 }
 
-export function realtimeSafeCoreRow(table: string, row: Row): Row {
+export function realtimeSafeCoreRow(table: string, row: Row, mediaHandles?: Map<string, string>): Row {
   const copy = table === "posts" ? contentTombstone(row) : { ...row };
-  if (table === "posts" && copy.is_anonymous === true) {
-    copy.author_id = null;
-    copy.viewer_is_author = false;
-    copy.profile = null;
-  }
-  return copy;
+  return table === "posts" ? redactAnonymousPostForViewer(copy, "", "member", mediaHandles) : copy;
 }
 
 export function queryReferencesDeletedContent(query: Pick<SerializedQuery, "filters" | "order">): boolean {
@@ -587,7 +712,9 @@ async function executeCore(query: SerializedQuery, ctx: RequestContext): Promise
       query.options?.head ? Promise.resolve([]) : model.findMany({ where, skip: from, take, orderBy: query.order.map((item) => ({ [item.column]: item.ascending ? "asc" : "desc" })) }),
       query.options?.count ? model.count({ where }) : Promise.resolve(undefined),
     ]);
-    const result = (serialize(rows) as Row[]).map((row) => secureOutput(query.table, row, ctx, query.columns));
+    const serializedRows = serialize(rows) as Row[];
+    const mediaHandles = query.table === "posts" ? await forumPostMediaHandles(serializedRows as any) : undefined;
+    const result = serializedRows.map((row) => secureOutput(query.table, row, ctx, query.columns, mediaHandles));
     return { data: applyCardinality(result, query.cardinality), ...(count === undefined ? {} : { count }) };
   }
 
@@ -608,34 +735,41 @@ async function executeCore(query: SerializedQuery, ctx: RequestContext): Promise
       const existing = await model.findFirst({ where: secured });
       let saved: Row;
       if (existing) {
+        assertCoreUpsertRelationsUnchanged(query.table, value, existing as Row);
         if (query.table === "profiles") assertProfilePatch(value, existing as Row, ctx);
-        if (query.table === "posts" && value.is_deleted_for_everyone === false && isDeletedForEveryone(existing as Row)) {
-          throw new ApiError(409, "deleted_content_immutable", "A post deleted for everyone cannot be restored");
-        }
-        if (query.table === "posts" && value.is_deleted_for_everyone === true && !isAdmin(ctx)
-          && new Date(String((existing as Row).created_at)).getTime() < Date.now() - 3 * 60_000) {
-          throw new ApiError(409, "delete_window_expired", "Cannot delete for everyone after 3 minutes");
-        }
         const patch = { ...value }; delete patch.id;
         if (query.table === "jobs" || query.table === "events") {
           delete patch.created_by;
           delete patch.community_id;
         }
-        if (query.table === "posts" && value.is_deleted_for_everyone === true) {
+        if (query.table === "posts") {
           saved = await prisma.$transaction(async (tx) => {
-            const transactionModel = (tx as unknown as Record<string, any>)[policy.delegate];
-            const updated = await transactionModel.update({ where: uniqueWhere(query.table, existing), data: patch });
-            await revokePrivateMedia([existing as Row], "post", tx);
+            const fresh = await lockSecuritySensitiveCoreRow(tx, query.table, existing as Row);
+            if (!fresh || (!isAdmin(ctx) && fresh.author_id !== ctx.auth.id)) throw new ApiError(409, "record_changed", "The post changed while this request was being processed");
+            assertFreshPostMutation(fresh, patch, ctx);
+            const updated = await tx.post.update({ where: guardedMutationWhere(query.table, fresh, policy, ctx) as any, data: patch as any });
+            if (value.is_deleted_for_everyone === true) await revokePrivateMedia([fresh], "post", tx);
             return updated;
           });
-        } else saved = await model.update({ where: uniqueWhere(query.table, existing), data: patch });
+        } else if (query.table === "profiles") {
+          saved = await prisma.$transaction(async (tx) => {
+            const fresh = await lockSecuritySensitiveCoreRow(tx, query.table, existing as Row);
+            if (!fresh || (!isAdmin(ctx) && fresh.user_id !== ctx.auth.id)) throw new ApiError(409, "record_changed", "The profile changed while this request was being processed");
+            assertProfilePatch(patch, fresh, ctx);
+            return tx.profile.update({ where: { user_id: String(fresh.user_id) }, data: patch as any });
+          }) as unknown as Row;
+        } else saved = await model.update({ where: guardedMutationWhere(query.table, existing as Row, policy, ctx), data: patch });
       } else {
         if (query.table === "profiles") assertProfilePatch(value, undefined, ctx);
-        saved = await model.create({ data: value });
+        saved = query.table === "posts"
+          ? (await createForumPostsWithSlowMode([value as Prisma.PostUncheckedCreateInput], ctx.auth))[0] as unknown as Row
+          : await model.create({ data: value });
       }
-      const row = secureOutput(query.table, serialize(saved) as Row, ctx, query.columns);
+      const savedRow = serialize(saved) as Row;
+      const mediaHandles = query.table === "posts" ? await forumPostMediaHandles([savedRow as any]) : undefined;
+      const row = secureOutput(query.table, savedRow, ctx, query.columns, mediaHandles);
       output.push(row);
-      emitDbChange({ table: query.table, event: existing ? "UPDATE" : "INSERT", row: realtimeSafeCoreRow(query.table, serialize(saved) as Row), actor_id: ctx.auth.id });
+      emitDbChange({ table: query.table, event: existing ? "UPDATE" : "INSERT", row: realtimeSafeCoreRow(query.table, savedRow, mediaHandles), actor_id: ctx.auth.id });
     }
     return { data: applyCardinality(output, query.cardinality) };
   }
@@ -663,11 +797,15 @@ async function executeCore(query: SerializedQuery, ctx: RequestContext): Promise
         })));
       rows = results.map((result) => result.application);
       notificationRows.push(...results.flatMap((result) => result.notification ? [result.notification] : []));
+    } else if (query.table === "posts") {
+      rows = await createForumPostsWithSlowMode(values as Prisma.PostUncheckedCreateInput[], ctx.auth);
     } else {
       rows = await prisma.$transaction(values.map((data) => model.create({ data })));
     }
-    const output = (serialize(rows) as Row[]).map((row) => secureOutput(query.table, row, ctx, query.columns));
-    (serialize(rows) as Row[]).forEach((row) => emitDbChange({ table: query.table, event: "INSERT", row: realtimeSafeCoreRow(query.table, row), actor_id: ctx.auth.id }));
+    const serializedRows = serialize(rows) as Row[];
+    const mediaHandles = query.table === "posts" ? await forumPostMediaHandles(serializedRows as any) : undefined;
+    const output = serializedRows.map((row) => secureOutput(query.table, row, ctx, query.columns, mediaHandles));
+    serializedRows.forEach((row) => emitDbChange({ table: query.table, event: "INSERT", row: realtimeSafeCoreRow(query.table, row, mediaHandles), actor_id: ctx.auth.id }));
     notificationRows.forEach((row) => emitDbChange({ table: "notifications", event: "INSERT", row, actor_id: ctx.auth.id, audience_ids: [String(row.user_id)] }));
     return { data: applyCardinality(output, query.cardinality) };
   }
@@ -678,13 +816,49 @@ async function executeCore(query: SerializedQuery, ctx: RequestContext): Promise
   if (!matches.length) return { data: applyCardinality([], query.cardinality) };
 
   if (query.operation === "delete") {
+    assertCoreDeleteAllowed(query.table, ctx);
+    if (query.table === "posts") {
+      const deletedAt = new Date();
+      const saved = await prisma.$transaction(async (tx) => {
+        const rows = await Promise.all(matches.map((row: Row) => tx.post.update({
+          where: { id: String(row.id) },
+          data: {
+            content: "", tags: Prisma.DbNull, campus_filter: null, degree_filter: null, branch_filter: null,
+            batch_filter: null, cohort_filter: null, student_status_filter: null,
+            image_url: null, image_path: null, media_url: null, media_type: null, media_path: null,
+            media_metadata: Prisma.DbNull, file_url: null, file_path: null, file_name: null, file_type: null,
+            file_size: null, voice_url: null, voice_path: null, voice_duration: null,
+            is_deleted_for_everyone: true, deleted_by_user_id: ctx.auth.id, deleted_at: deletedAt,
+          },
+        })));
+        await revokePrivateMedia(matches as Row[], "post", tx);
+        return rows;
+      });
+      const serialized = serialize(saved) as Row[];
+      const output = serialized.map((row) => secureOutput(query.table, contentTombstone(row, true), ctx, query.columns));
+      serialized.forEach((row) => emitDbChange({
+        table: query.table, event: "UPDATE", row: realtimeSafeCoreRow(query.table, contentTombstone(row, true)), actor_id: ctx.auth.id,
+      }));
+      return { data: applyCardinality(output, query.cardinality) };
+    }
+    if (query.table === "comments") {
+      const patch = commentTombstonePatch();
+      const saved = await prisma.$transaction(async (tx) => Promise.all(matches.map((row: Row) => tx.comment.update({
+        where: { id: String(row.id) },
+        data: patch,
+      }))));
+      const output = (serialize(saved) as Row[]).map((row) => secureOutput(query.table, row, ctx, query.columns));
+      (serialize(saved) as Row[]).forEach((row) => emitDbChange({
+        table: query.table, event: "UPDATE", row: realtimeSafeCoreRow(query.table, row), actor_id: ctx.auth.id,
+      }));
+      return { data: applyCardinality(output, query.cardinality) };
+    }
     await prisma.$transaction(async (tx) => {
       const transactionModel = (tx as unknown as Record<string, any>)[policy.delegate];
       await Promise.all(matches.map((row: Row) => transactionModel.delete({ where: { id: row.id } })));
-      if (query.table === "posts") await revokePrivateMedia(matches as Row[], "post", tx);
     });
-    const output = (serialize(matches) as Row[]).map((row) => secureOutput(query.table, query.table === "posts" ? contentTombstone(row, true) : row, ctx, query.columns));
-    (serialize(matches) as Row[]).forEach((row) => emitDbChange({ table: query.table, event: "DELETE", row: realtimeSafeCoreRow(query.table, contentTombstone(row, query.table === "posts")), actor_id: ctx.auth.id }));
+    const output = (serialize(matches) as Row[]).map((row) => secureOutput(query.table, row, ctx, query.columns));
+    (serialize(matches) as Row[]).forEach((row) => emitDbChange({ table: query.table, event: "DELETE", row: realtimeSafeCoreRow(query.table, row), actor_id: ctx.auth.id }));
     return { data: applyCardinality(output, query.cardinality) };
   }
 
@@ -705,17 +879,40 @@ async function executeCore(query: SerializedQuery, ctx: RequestContext): Promise
   }
   const update = cleanWrite(policy, query.values, ctx, query.table, "update")[0]!;
   delete update.id;
+  assertCoreUpdateRelationsImmutable(query.table, update);
+  if (query.table === "posts") {
+    for (const [field, bucket] of [["image_path", "post-images"], ["media_path", "post-images"], ["file_path", "forum-files"], ["voice_path", "voice-notes"]] as const) {
+      if (Object.prototype.hasOwnProperty.call(update, field) && update[field] != null && update[field] !== "") {
+        update[field] = await assertOwnedReadyObject(bucket, update[field], ctx.auth.id);
+      }
+    }
+  }
   if (query.table === "profiles") await validateCoreWrite(query.table, update, ctx);
   const rows = await prisma.$transaction(async (tx) => {
     const transactionModel = (tx as unknown as Record<string, any>)[policy.delegate];
-    const updated = await Promise.all(matches.map((row: Row) => transactionModel.update({ where: uniqueWhere(query.table, row), data: update })));
+    const updated: Row[] = [];
+    const freshRows: Row[] = [];
+    const ordered = [...matches as Row[]].sort((left, right) => String(uniqueWhere(query.table, left).id ?? uniqueWhere(query.table, left).user_id)
+      .localeCompare(String(uniqueWhere(query.table, right).id ?? uniqueWhere(query.table, right).user_id)));
+    for (const row of ordered) {
+      const fresh = await lockSecuritySensitiveCoreRow(tx, query.table, row) ?? row;
+      if (!isAdmin(ctx) && policy.ownerField && fresh[policy.ownerField] !== ctx.auth.id) {
+        throw new ApiError(409, "record_changed", "The record changed while this request was being processed");
+      }
+      if (query.table === "profiles") assertProfilePatch(update, fresh, ctx);
+      if (query.table === "posts") assertFreshPostMutation(fresh, update, ctx);
+      freshRows.push(fresh);
+      updated.push(await transactionModel.update({ where: guardedMutationWhere(query.table, fresh, policy, ctx), data: update }));
+    }
     if (query.table === "posts" && (query.values as Row | undefined)?.is_deleted_for_everyone === true) {
-      await revokePrivateMedia(matches as Row[], "post", tx);
+      await revokePrivateMedia(freshRows, "post", tx);
     }
     return updated;
   });
-  const output = (serialize(rows) as Row[]).map((row) => secureOutput(query.table, row, ctx, query.columns));
-  (serialize(rows) as Row[]).forEach((row) => emitDbChange({ table: query.table, event: "UPDATE", row: realtimeSafeCoreRow(query.table, row), actor_id: ctx.auth.id }));
+  const serializedRows = serialize(rows) as Row[];
+  const mediaHandles = query.table === "posts" ? await forumPostMediaHandles(serializedRows as any) : undefined;
+  const output = serializedRows.map((row) => secureOutput(query.table, row, ctx, query.columns, mediaHandles));
+  serializedRows.forEach((row) => emitDbChange({ table: query.table, event: "UPDATE", row: realtimeSafeCoreRow(query.table, row, mediaHandles), actor_id: ctx.auth.id }));
   return { data: applyCardinality(output, query.cardinality) };
 }
 
@@ -741,9 +938,208 @@ async function isChatMember(userId: string, roomId: unknown): Promise<boolean> {
   }, select: { id: true } });
 }
 
+export function normalizeNewMessageShape(raw: Row, actorId: string, now = new Date()): Row {
+  const roomId = typeof raw.room_id === "string" ? raw.room_id.trim() : "";
+  if (!roomId || roomId.length > 100) throw new ApiError(400, "invalid_chat_room", "A valid chat room is required");
+  const messageType = raw.message_type === undefined ? "text" : raw.message_type;
+  if (messageType !== "text" && messageType !== "image" && messageType !== "voice") {
+    throw new ApiError(400, "invalid_message_type", "Message type must be text, image, or voice");
+  }
+  const clientId = raw.client_id === undefined ? newId() : raw.client_id;
+  if (typeof clientId !== "string" || !/^[a-zA-Z0-9_-]{8,100}$/.test(clientId)) {
+    throw new ApiError(400, "invalid_client_message_id", "Message identifier is invalid");
+  }
+  const mediaPath = raw.media_path == null || raw.media_path === "" ? null : raw.media_path;
+  if (mediaPath !== null && typeof mediaPath !== "string") throw new ApiError(400, "invalid_media_path", "Message media path is invalid");
+  if (messageType !== "text" && !mediaPath) throw new ApiError(400, "message_media_required", "Image and voice messages require an uploaded file");
+  if (messageType === "text" && mediaPath) throw new ApiError(400, "unexpected_message_media", "Text messages cannot include an attachment");
+  const contentInput = typeof raw.content === "string" ? raw.content.trim() : "";
+  if (messageType === "text" && !contentInput) throw new ApiError(400, "message_content_required", "Message text is required");
+  if (contentInput.length > 10_000) throw new ApiError(400, "message_too_long", "Message text is too long");
+  const replyTo = raw.reply_to_message_id == null || raw.reply_to_message_id === "" ? null : raw.reply_to_message_id;
+  if (replyTo !== null && (typeof replyTo !== "string" || replyTo.length > 100)) {
+    throw new ApiError(400, "invalid_reply_message", "Reply message is invalid");
+  }
+  let voiceDuration: number | null = null;
+  if (messageType === "voice") {
+    voiceDuration = Number(raw.voice_duration);
+    if (!Number.isInteger(voiceDuration) || voiceDuration < 1 || voiceDuration > 3_600) {
+      throw new ApiError(400, "invalid_voice_duration", "Voice duration must be between 1 and 3600 seconds");
+    }
+  }
+  const timestamp = now.toISOString();
+  return {
+    id: newId(),
+    room_id: roomId,
+    sender_id: actorId,
+    client_id: clientId,
+    content: messageType === "text" ? contentInput : messageType === "image" ? "Photo" : "Voice message",
+    message_type: messageType,
+    media_url: null,
+    media_path: mediaPath,
+    media_bucket: mediaPath ? "chat-media" : null,
+    voice_duration: voiceDuration,
+    reply_to_message_id: replyTo,
+    status: "sent",
+    read_by: [actorId],
+    deleted_for_users: [],
+    is_deleted_for_everyone: false,
+    deleted_for_everyone: false,
+    deleted_at: null,
+    created_at: timestamp,
+    updated_at: timestamp,
+  };
+}
+
+export function normalizeNewBlogCommentShape(raw: Row, actorId: string, now = new Date()): Row {
+  const blogId = typeof raw.blog_id === "string" ? raw.blog_id.trim() : "";
+  if (!blogId || blogId.length > 100) throw new ApiError(400, "invalid_blog", "A valid article is required");
+  const parentId = raw.parent_id == null || raw.parent_id === "" ? null : raw.parent_id;
+  if (parentId !== null && (typeof parentId !== "string" || parentId.length > 100)) {
+    throw new ApiError(400, "invalid_parent_comment", "Parent comment is invalid");
+  }
+  const content = typeof raw.content === "string" ? raw.content.trim() : "";
+  if (!content) throw new ApiError(400, "comment_content_required", "Comment text is required");
+  if (content.length > 5_000) throw new ApiError(400, "comment_too_long", "Comment text is too long");
+  const timestamp = now.toISOString();
+  return {
+    id: newId(), blog_id: blogId, parent_id: parentId, author_id: actorId,
+    content, is_hidden: false, created_at: timestamp, updated_at: timestamp,
+  };
+}
+
+export function normalizeBlogAffinityShape(table: "blog_likes" | "blog_bookmarks", raw: Row, actorId: string, now = new Date()): Row {
+  const blogId = typeof raw.blog_id === "string" ? raw.blog_id.trim() : "";
+  if (!blogId || blogId.length > 100) throw new ApiError(400, "invalid_blog", "A valid article is required");
+  return {
+    id: newId(),
+    blog_id: blogId,
+    user_id: actorId,
+    created_at: now.toISOString(),
+    ...(table === "blog_bookmarks" ? { updated_at: now.toISOString() } : {}),
+  };
+}
+
+async function assertBlogInteractionAvailable(blogId: unknown, ctx: RequestContext): Promise<void> {
+  const record = typeof blogId === "string" ? await prisma.legacyRecord.findFirst({ where: {
+    table_name: "blogs", data: { path: "$.id", equals: blogId },
+  }, select: { data: true } }) : null;
+  if (!record || (!isAdmin(ctx) && !blogIsPublic(record.data as Row))) {
+    throw new ApiError(404, "blog_not_available", "This article is not available");
+  }
+}
+
+export function normalizeMessageUpdatePatch(current: Row, raw: Row, actorId: string, isModerator = false, now = new Date()): Row {
+  if (current.sender_id !== actorId && !isModerator) throw new ApiError(403, "ownership_required", "You can only change your own messages");
+  if (isDeletedForEveryone(current)) throw new ApiError(409, "deleted_content_immutable", "A message deleted for everyone cannot be restored or edited");
+  const keys = Object.keys(raw);
+  const deleteIntent = raw.is_deleted_for_everyone === true || raw.deleted_for_everyone === true;
+  if (deleteIntent) {
+    if (keys.some((key) => !new Set(["is_deleted_for_everyone", "deleted_for_everyone", "deleted_at"]).has(key))) {
+      throw new ApiError(400, "column_not_writable", "Delete-for-everyone cannot be combined with other message changes");
+    }
+    const createdAt = new Date(String(current.created_at ?? "")).getTime();
+    if (!isModerator && (!Number.isFinite(createdAt) || createdAt < now.getTime() - 3 * 60_000)) {
+      throw new ApiError(409, "delete_window_expired", "Cannot delete for everyone after 3 minutes");
+    }
+    return contentTombstone({
+      ...current,
+      is_deleted_for_everyone: true,
+      deleted_for_everyone: true,
+      deleted_at: now.toISOString(),
+      deleted_by_user_id: actorId,
+    }, true);
+  }
+  if (!Object.prototype.hasOwnProperty.call(raw, "content") || keys.some((key) => !new Set(["content", "edited_at"]).has(key))) {
+    throw new ApiError(400, "column_not_writable", "Only text editing or delete-for-everyone is supported for messages");
+  }
+  if (current.message_type !== "text") throw new ApiError(400, "message_not_editable", "Only text messages can be edited");
+  const content = typeof raw.content === "string" ? raw.content.trim() : "";
+  if (!content) throw new ApiError(400, "message_content_required", "Message text is required");
+  if (content.length > 10_000) throw new ApiError(400, "message_too_long", "Message text is too long");
+  return { content, edited_at: now.toISOString() };
+}
+
+export function normalizeCallParticipantCreate(
+  currentSession: Row,
+  actorId: string,
+  now = new Date(),
+  hasLiveParticipants = false,
+): Row {
+  const sessionId = typeof currentSession.id === "string" ? currentSession.id : "";
+  const roomId = typeof currentSession.room_id === "string" ? currentSession.room_id : "";
+  const startedAt = new Date(String(currentSession.started_at ?? "")).getTime();
+  const ageMs = now.getTime() - startedAt;
+  if (!sessionId || !roomId || currentSession.ended_at || !Number.isFinite(startedAt) || ageMs < -60_000
+    || ageMs >= 24 * 60 * 60_000 || (ageMs >= 5 * 60_000 && !hasLiveParticipants)) {
+    throw new ApiError(410, "call_session_expired", "This call session is no longer accepting participants");
+  }
+  const timestamp = now.toISOString();
+  return {
+    id: newId(), session_id: sessionId, room_id: roomId, user_id: actorId,
+    joined_at: timestamp, lease_refreshed_at: timestamp, left_at: null, created_at: timestamp, updated_at: timestamp,
+  };
+}
+
+export function normalizeCallParticipantUpdate(current: Row, raw: Row, actorId: string, isModerator = false, now = new Date()): Row {
+  if (current.user_id !== actorId && !isModerator) throw new ApiError(403, "ownership_required", "You can only leave your own call participant record");
+  const keys = Object.keys(raw);
+  if (keys.length === 1 && keys[0] === "lease_refreshed_at") {
+    if (current.left_at) throw new ApiError(410, "call_participant_inactive", "This call participant is no longer active");
+    if (!dailyParticipantLeaseIsFresh(current, now.getTime())) {
+      throw new ApiError(410, "call_participant_lease_expired", "This call participant lease expired; rejoin the call");
+    }
+    return { lease_refreshed_at: now.toISOString() };
+  }
+  if (keys.some((key) => key !== "left_at") || !Object.prototype.hasOwnProperty.call(raw, "left_at")) {
+    throw new ApiError(400, "column_not_writable", "Only heartbeat or leaving an active call participant is supported");
+  }
+  if (current.left_at) return { left_at: current.left_at };
+  return { left_at: now.toISOString() };
+}
+
+export function normalizeCallSessionFinalization(
+  current: Row,
+  raw: Row,
+  participants: Row[],
+  actorId: string,
+  isModerator = false,
+  now = new Date(),
+): Row {
+  const allowed = new Set(["ended_at", "duration_seconds", "failure_reason", "participant_count"]);
+  if (Object.keys(raw).some((key) => !allowed.has(key))) {
+    throw new ApiError(400, "column_not_writable", "Unsupported call session update");
+  }
+  if (!Object.prototype.hasOwnProperty.call(raw, "ended_at") || raw.ended_at == null) {
+    throw new ApiError(400, "server_owned_call_state", "Call counts and duration are computed when the last participant leaves");
+  }
+  if (current.ended_at) {
+    return {
+      ended_at: current.ended_at,
+      duration_seconds: current.duration_seconds ?? 0,
+      participant_count: current.participant_count ?? 0,
+      failure_reason: current.failure_reason ?? null,
+    };
+  }
+  if (participants.some((row) => dailyParticipantLeaseIsFresh(row, now.getTime()))) {
+    throw new ApiError(409, "call_still_active", "The call cannot end while a participant is still active");
+  }
+  const callerParticipated = participants.some((row) => row.user_id === actorId);
+  if (!isModerator && current.started_by !== actorId && !callerParticipated) {
+    throw new ApiError(403, "call_finalize_denied", "Only the caller or a participant can finalize this call");
+  }
+  const startedAt = new Date(String(current.started_at ?? "")).getTime();
+  return {
+    ended_at: now.toISOString(),
+    duration_seconds: Number.isFinite(startedAt) ? Math.max(0, Math.floor((now.getTime() - startedAt) / 1000)) : 0,
+    participant_count: new Set(participants.flatMap((row) => typeof row.user_id === "string" ? [row.user_id] : [])).size,
+    failure_reason: raw.failure_reason ? "client_reported_failure" : null,
+  };
+}
+
 async function legacyRealtimeContext(table: string, row: Row): Promise<{ room?: string; audience_ids?: string[] }> {
   const room = typeof row.room_id === "string" ? row.room_id : undefined;
-  if (table !== "messages" || !room) return { ...(room ? { room } : {}) };
+  if (table !== "messages" || !room) return {};
   const members = await prisma.legacyRecord.findMany({ where: {
     table_name: "chat_members",
     data: { path: "$.room_id", equals: room },
@@ -808,7 +1204,17 @@ function applyLegacyQuery(rows: Row[], query: SerializedQuery, paginate = true):
   return result.slice(from, from + Math.min(amount, 500));
 }
 
-const publicLegacyRow = (table: string, row: Row): Row => table === "messages" ? contentTombstone(row) : row;
+export const publicLegacyRow = (table: string, row: Row, viewerId?: string): Row => {
+  if (table === "messages") return contentTombstone(row);
+  if (table === "polls") {
+    const { created_by: _privateCreator, ...safe } = row;
+    return safe;
+  }
+  if (table === "poll_votes" && row.user_id !== viewerId) {
+    return { poll_id: row.poll_id, option_index: row.option_index };
+  }
+  return row;
+};
 
 function requiredMessageScope(
   query: Pick<SerializedQuery, "operation" | "filters">,
@@ -837,19 +1243,40 @@ function requiredMessageScope(
 
 export function legacyCandidateWhere(query: Pick<SerializedQuery, "table" | "operation" | "filters">, actorId: string): Prisma.LegacyRecordWhereInput {
   const base: Prisma.LegacyRecordWhereInput = { table_name: query.table };
-  if (query.table !== "messages") return base;
-  const scope = requiredMessageScope(query, actorId);
-  return scope ? { ...base, AND: [scope] } : base;
+  if (query.table === "messages") {
+    const scope = requiredMessageScope(query, actorId);
+    return scope ? { ...base, AND: [scope] } : base;
+  }
+  // Push exact scalar predicates into MySQL before authorization and the
+  // compatibility-layer filters run. This keeps per-user/profile queries
+  // correct after a logical table grows beyond the former global 2,000-row
+  // sample without trusting a client-controlled SQL/JSON path.
+  const exact = query.filters.flatMap((filter): Prisma.LegacyRecordWhereInput[] => {
+    if (filter.operator !== "eq" || !filter.column || !/^[a-z][a-z0-9_]{0,79}$/.test(filter.column)) return [];
+    if (filter.value === null || !["string", "number", "boolean"].includes(typeof filter.value)) return [];
+    return [{ data: { path: `$.${filter.column}`, equals: filter.value as Prisma.InputJsonValue } }];
+  });
+  return exact.length ? { ...base, AND: exact } : base;
 }
 
 async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promise<{ data: unknown; count?: number }> {
+  if (legacyTableRequiresVerification(query.table)
+    && !ctx.auth.is_verified && !isAdmin(ctx)) {
+    throw new ApiError(403, "verification_required", "Verified membership is required for chats, consultations, and calls");
+  }
   if (legacyAdminOnly.has(query.table) && !isAdmin(ctx)) throw new ApiError(403, "admin_required", "Administrator access is required");
+  if (query.table === "poll_votes" && query.operation === "select") {
+    const privateFilter = query.filters.find((filter) => filter.column === "id"
+      || (filter.column === "user_id" && (filter.operator !== "eq" || filter.value !== ctx.auth.id)));
+    const privateOrder = query.order.find((order) => order.column === "id" || order.column === "user_id");
+    if (privateFilter || privateOrder) {
+      throw new ApiError(403, "private_poll_ballot", "Individual poll ballots are private");
+    }
+  }
   const needsSelection = query.operation === "select" || query.operation === "update" || query.operation === "delete";
-  const candidates = query.table === "messages"
-    ? needsSelection
-      ? await prisma.legacyRecord.findMany({ where: legacyCandidateWhere(query, ctx.auth.id), orderBy: { created_at: "desc" } })
-      : []
-    : await prisma.legacyRecord.findMany({ where: { table_name: query.table }, orderBy: { created_at: "desc" }, take: 2000 });
+  const candidates = needsSelection
+    ? await prisma.legacyRecord.findMany({ where: legacyCandidateWhere(query, ctx.auth.id), orderBy: { created_at: "desc" } })
+    : [];
   const storyAudience = query.table === "stories" ? new Set([
     ctx.auth.id,
     ...(await prisma.connection.findMany({ where: {
@@ -865,7 +1292,7 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
     : undefined;
   const authorized: Row[] = [];
   const potentiallyMatched = needsSelection ? candidates.filter((record) => {
-    const row = publicLegacyRow(query.table, record.data as Row);
+    const row = publicLegacyRow(query.table, record.data as Row, ctx.auth.id);
     return query.filters.every((filter) => filter.operator === "or"
       ? parseOrExpression(filter.expression ?? String(filter.value ?? "")).some((part) => matchesLogicNode(row, part))
       : matchesFilter(row, filter));
@@ -878,7 +1305,7 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
       : query.table === "messages" && scopedMessageReadable !== undefined
         ? scopedMessageReadable && !(Array.isArray(row.deleted_for_users) && row.deleted_for_users.includes(ctx.auth.id))
         : await legacyReadable(query.table, record, ctx);
-    if (readable) authorized.push(publicLegacyRow(query.table, row));
+    if (readable) authorized.push(publicLegacyRow(query.table, row, ctx.auth.id));
   }
   const selected = needsSelection ? applyLegacyQuery(authorized, query) : [];
 
@@ -907,7 +1334,7 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
 
   assertLegacyMutationAllowed(query.table, query.operation);
 
-  const adminWrite = legacyAdminOnly.has(query.table) || ["app_settings", "nav_config", "ad_messages", "custom_options", "academic_degrees", "academic_institutes", "academic_networks", "academic_specialisations", "blogs"].includes(query.table);
+  const adminWrite = legacyAdminOnly.has(query.table) || ["app_settings", "nav_config", "ad_messages", "custom_options", "custom_skills", "academic_degrees", "academic_institutes", "academic_networks", "academic_specialisations", "blogs"].includes(query.table);
   if (adminWrite && !isAdmin(ctx)) throw new ApiError(403, "admin_required", "Administrator access is required");
 
   if (query.operation === "upsert") {
@@ -931,9 +1358,19 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
       const row = { ...(raw as Row) };
       normalizeLegacyExternalUrls(query.table, row);
       if (keys.includes("user_id") && !isAdmin(ctx)) row.user_id = ctx.auth.id;
+      if (query.table === "blog_likes" || query.table === "blog_bookmarks") {
+        const normalized = normalizeBlogAffinityShape(query.table, row, ctx.auth.id);
+        for (const key of Object.keys(row)) delete row[key];
+        Object.assign(row, normalized);
+        await assertBlogInteractionAvailable(row.blog_id, ctx);
+      }
       if (query.table === "polls") {
         const post = await visiblePost(row.post_id, ctx);
         if (!isAdmin(ctx) && post.author_id !== ctx.auth.id) throw new ApiError(403, "ownership_required", "Only the post author can configure its poll");
+        const recordKey = pollRecordKey(post.id);
+        const existingPoll = await prisma.legacyRecord.findUnique({ where: { table_name_record_id: { table_name: "polls", record_id: recordKey } } });
+        row.id = existingPoll && typeof (existingPoll.data as Row).id === "string" ? (existingPoll.data as Row).id : newId();
+        row.post_id = post.id;
         row.created_by = post.author_id ?? ctx.auth.id;
         validatePollPayload(row);
       }
@@ -941,6 +1378,7 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
         assertPollVotePayload(row);
         row.user_id = ctx.auth.id;
         const poll = await visiblePoll(row.poll_id, ctx);
+        row.id = pollVoteRecordKey(String(row.poll_id), ctx.auth.id);
         row.option_index = validatePollOption(poll, row.option_index);
       }
       if (keys.some((key) => row[key] === undefined || row[key] === null || row[key] === "")) throw new ApiError(400, "missing_conflict_value", `Upsert requires ${keys.join(", ")}`);
@@ -953,9 +1391,17 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
           ? await prisma.legacyRecord.findFirst({ where: {
             table_name: "polls", data: { path: "$.post_id", equals: String(row.post_id) },
           } })
-        : candidates.find((record) => keys.every((key) => (record.data as Row)[key] === row[key]));
+        : await prisma.legacyRecord.findFirst({ where: {
+          table_name: query.table,
+          AND: keys.map((key) => ({ data: { path: `$.${key}`, equals: row[key] as Prisma.InputJsonValue } })),
+        } });
       if (existing) {
         if (!isAdmin(ctx) && query.table !== "polls" && existing.owner_id !== ctx.auth.id) throw new ApiError(403, "ownership_required", "You do not own this row");
+        if (query.table === "polls"
+          && (JSON.stringify((existing.data as Row).options ?? []) !== JSON.stringify(row.options ?? [])
+            || String((existing.data as Row).question ?? "") !== String(row.question ?? ""))) {
+          throw new ApiError(409, "poll_content_immutable", "Published poll questions and options cannot be changed");
+        }
         const next = { ...(existing.data as Row), ...row, id: (existing.data as Row).id, updated_at: new Date().toISOString() };
         const saved = await prisma.legacyRecord.update({ where: { id: existing.id }, data: { data: next as Prisma.InputJsonValue } });
         upserted.push(saved.data as Row);
@@ -996,29 +1442,91 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
       }
       if (query.table === "chat_members") throw new ApiError(403, "rpc_required", "Chat membership can only be changed through an authorized chat operation");
       if (query.table === "messages") {
-        data.sender_id = ctx.auth.id;
+        const normalized = normalizeNewMessageShape(data, ctx.auth.id);
+        for (const key of Object.keys(data)) delete data[key];
+        Object.assign(data, normalized);
         if (!(await isChatMember(ctx.auth.id, data.room_id))) throw new ApiError(403, "chat_membership_required", "Chat membership is required");
-        if (data.media_path != null && data.media_path !== "") data.media_path = await assertOwnedReadyObject("chat-media", data.media_path, ctx.auth.id);
-        data.media_bucket = "chat-media";
-        data.status ??= "sent";
-        data.read_by ??= [ctx.auth.id];
-        if (typeof data.client_id === "string" && data.client_id) {
-          const duplicate = candidates.find((record) => record.owner_id === ctx.auth.id && (record.data as Row).client_id === data.client_id);
-          if (duplicate) { created.push(duplicate.data as Row); continue; }
+        if (data.media_path) {
+          data.media_path = await assertOwnedReadyObject(
+            "chat-media",
+            data.media_path,
+            ctx.auth.id,
+            data.message_type === "image" ? /^image\// : /^audio\//,
+          );
+        }
+        if (data.reply_to_message_id) {
+          const reply = await prisma.legacyRecord.findFirst({ where: {
+            table_name: "messages",
+            AND: [
+              { data: { path: "$.id", equals: String(data.reply_to_message_id) } },
+              { data: { path: "$.room_id", equals: String(data.room_id) } },
+            ],
+          }, select: { data: true } });
+          if (!reply || isDeletedForEveryone(reply.data as Row)) throw new ApiError(400, "invalid_reply_message", "Reply message must exist in the same room");
         }
       }
+      if (query.table === "blog_comments") {
+        const normalized = normalizeNewBlogCommentShape(data, ctx.auth.id);
+        const blog = await prisma.legacyRecord.findFirst({ where: {
+          table_name: "blogs", data: { path: "$.id", equals: String(normalized.blog_id) },
+        }, select: { data: true } });
+        if (!blog || (!isAdmin(ctx) && !blogIsPublic(blog.data as Row))) throw new ApiError(404, "blog_not_available", "This article is not available for comments");
+        if (normalized.parent_id) {
+          const parent = await prisma.legacyRecord.findFirst({ where: {
+            table_name: "blog_comments",
+            AND: [
+              { data: { path: "$.id", equals: String(normalized.parent_id) } },
+              { data: { path: "$.blog_id", equals: String(normalized.blog_id) } },
+            ],
+          }, select: { data: true } });
+          if (!parent || (parent.data as Row).is_hidden === true) throw new ApiError(400, "invalid_parent_comment", "Parent comment must be visible and belong to this article");
+        }
+        for (const key of Object.keys(data)) delete data[key];
+        Object.assign(data, normalized);
+      }
+      if (query.table === "blog_likes" || query.table === "blog_bookmarks") {
+        const normalized = normalizeBlogAffinityShape(query.table, data, ctx.auth.id);
+        for (const key of Object.keys(data)) delete data[key];
+        Object.assign(data, normalized);
+        await assertBlogInteractionAvailable(data.blog_id, ctx);
+      }
       if (query.table === "call_participants") {
-        data.user_id = ctx.auth.id;
         const sessionId = typeof data.session_id === "string" ? data.session_id : "";
-        const session = sessionId
-          ? await prisma.legacyRecord.findUnique({ where: callSessionRecordIdentity(sessionId) })
-          : null;
-        const sessionRow = session?.data as Row | undefined;
-        const roomId = sessionRow?.id === sessionId ? sessionRow.room_id : undefined;
-        if (typeof roomId !== "string" || !(await isChatMember(ctx.auth.id, roomId))) throw new ApiError(403, "call_membership_required", "An active chat call membership is required");
-        data.room_id = roomId;
-        data.joined_at ??= data.created_at;
-        data.left_at ??= null;
+        if (!sessionId) throw new ApiError(400, "call_session_not_found", "Call session was not found");
+        const result = await prisma.$transaction(async (tx) => {
+          await tx.$queryRaw(Prisma.sql`SELECT id FROM legacy_records WHERE table_name = 'call_sessions' AND record_id = ${sessionId} LIMIT 1 FOR UPDATE`);
+          const session = await tx.legacyRecord.findUnique({ where: callSessionRecordIdentity(sessionId) });
+          const sessionRow = session?.data as Row | undefined;
+          if (!sessionRow || sessionRow.id !== sessionId) throw new ApiError(404, "call_session_not_found", "Call session was not found");
+          const participants = await tx.legacyRecord.findMany({ where: {
+            table_name: "call_participants",
+            data: { path: "$.session_id", equals: sessionId },
+          }, select: { data: true } });
+          const normalized = normalizeCallParticipantCreate(
+            sessionRow,
+            ctx.auth.id,
+            new Date(),
+            participants.some((record) => dailyParticipantLeaseIsFresh(record.data as Row)),
+          );
+          const membership = await tx.legacyRecord.findFirst({ where: {
+            table_name: "chat_members", owner_id: ctx.auth.id,
+            data: { path: "$.room_id", equals: String(normalized.room_id) },
+          }, select: { id: true } });
+          if (!membership) throw new ApiError(403, "call_membership_required", "An active chat call membership is required");
+          const recordId = `call-participant:${sha256(`${sessionId}\n${ctx.auth.id}`).slice(0, 64)}`;
+          const existing = await tx.legacyRecord.findUnique({ where: { table_name_record_id: { table_name: "call_participants", record_id: recordId } } });
+          const row = existing ? { ...(existing.data as Row), ...normalized, id: (existing.data as Row).id } : normalized;
+          const saved = await tx.legacyRecord.upsert({
+            where: { table_name_record_id: { table_name: "call_participants", record_id: recordId } },
+            create: { table_name: "call_participants", record_id: recordId, owner_id: ctx.auth.id, community_id: ctx.auth.community_id, data: row as Prisma.InputJsonValue },
+            update: { owner_id: ctx.auth.id, community_id: ctx.auth.community_id, data: row as Prisma.InputJsonValue },
+          });
+          return { saved, existing: !!existing, roomId: String(normalized.room_id) };
+        });
+        const output = publicLegacyRow(query.table, result.saved.data as Row, ctx.auth.id);
+        created.push(output);
+        emitDbChange({ table: query.table, event: result.existing ? "UPDATE" : "INSERT", row: output, actor_id: ctx.auth.id, room: `room-${result.roomId}` });
+        continue;
       }
       if (query.table === "document_verifications" || query.table === "course_verification_requests") data.status = "pending";
       if (query.table === "document_verifications" || query.table === "course_verification_requests") data.user_id = ctx.auth.id;
@@ -1041,6 +1549,8 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
       if (query.table === "polls") {
         const post = await visiblePost(data.post_id, ctx);
         if (!isAdmin(ctx) && post.author_id !== ctx.auth.id) throw new ApiError(403, "ownership_required", "Only the post author can configure its poll");
+        data.id = newId();
+        data.post_id = post.id;
         data.created_by = post.author_id ?? ctx.auth.id;
         validatePollPayload(data);
         const existingPoll = await prisma.legacyRecord.findFirst({ where: {
@@ -1052,6 +1562,7 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
         assertPollVotePayload(data);
         data.user_id = ctx.auth.id;
         const poll = await visiblePoll(data.poll_id, ctx);
+        data.id = pollVoteRecordKey(String(data.poll_id), ctx.auth.id);
         data.option_index = validatePollOption(poll, data.option_index);
         const existingVote = await prisma.legacyRecord.findFirst({ where: {
           table_name: "poll_votes", owner_id: ctx.auth.id,
@@ -1064,16 +1575,26 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
       const record_id = query.table === "poll_votes"
         ? pollVoteRecordKey(String(data.poll_id), ctx.auth.id)
         : query.table === "polls"
-          ? `poll:${sha256(String(data.post_id)).slice(0, 64)}`
+          ? pollRecordKey(String(data.post_id))
+        : query.table === "blog_likes" || query.table === "blog_bookmarks"
+          ? `${query.table === "blog_likes" ? "blog-like" : "blog-bookmark"}:${sha256(`${String(data.blog_id)}\n${ctx.auth.id}`).slice(0, 64)}`
         : query.table === "messages" && typeof data.client_id === "string" && data.client_id
         ? `message:${sha256(`${ctx.auth.id}\n${String(data.room_id)}\n${data.client_id}`).slice(0, 64)}`
         : typeof data.id === "string" ? data.id : newId();
       data.id = typeof data.id === "string" ? data.id : newId();
       try {
         const record = await prisma.legacyRecord.create({ data: { table_name: query.table, record_id, owner_id, community_id: typeof data.community_id === "string" ? data.community_id : ctx.auth.community_id, data: data as Prisma.InputJsonValue } });
-        created.push(publicLegacyRow(query.table, record.data as Row));
-        inserted.push(publicLegacyRow(query.table, record.data as Row));
+        created.push(publicLegacyRow(query.table, record.data as Row, ctx.auth.id));
+        inserted.push(publicLegacyRow(query.table, record.data as Row, ctx.auth.id));
       } catch (error) {
+        if ((query.table === "blog_likes" || query.table === "blog_bookmarks") && (error as { code?: string }).code === "P2002") {
+          const duplicate = await prisma.legacyRecord.findUnique({ where: { table_name_record_id: { table_name: query.table, record_id } } });
+          if (duplicate?.owner_id === ctx.auth.id) {
+            created.push(publicLegacyRow(query.table, duplicate.data as Row, ctx.auth.id));
+            continue;
+          }
+          throw new ApiError(409, "blog_interaction_conflict", "This article interaction already exists");
+        }
         if (query.table === "poll_votes" && (error as { code?: string }).code === "P2002") {
           throw new ApiError(409, "poll_vote_exists", "You have already voted in this poll");
         }
@@ -1086,7 +1607,7 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
         if (!duplicateRow || duplicate?.owner_id !== ctx.auth.id || duplicateRow.client_id !== data.client_id || duplicateRow.room_id !== data.room_id) {
           throw new ApiError(409, "message_id_conflict", "Message identifier is already in use");
         }
-        created.push(publicLegacyRow(query.table, duplicateRow));
+        created.push(publicLegacyRow(query.table, duplicateRow, ctx.auth.id));
       }
     }
     for (const row of inserted) emitDbChange({ table: query.table, event: "INSERT", row, actor_id: ctx.auth.id, ...await legacyRealtimeContext(query.table, row) });
@@ -1106,32 +1627,84 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
     if (!isAdmin(ctx) && record.owner_id !== ctx.auth.id && query.table !== "call_sessions" && query.table !== "polls") throw new ApiError(403, "ownership_required", "You do not own every selected row");
   }
   if (query.operation === "delete") {
-    if (query.table === "education" && !isAdmin(ctx) && targetRecords.some((record) => (record.data as Row).is_verified === true)) {
-      throw new ApiError(409, "verified_education_immutable", "Verified education cannot be deleted");
+    if (query.table === "messages" && !isAdmin(ctx)) {
+      throw new ApiError(403, "message_delete_requires_tombstone", "Messages cannot be hard-deleted; use delete-for-everyone within the allowed window");
     }
-    await prisma.$transaction(async (tx) => {
-      await tx.legacyRecord.deleteMany({ where: { id: { in: targetRecords.map((record) => record.id) } } });
+    if (query.table === "call_participants" && !isAdmin(ctx)) {
+      throw new ApiError(403, "call_participant_delete_denied", "Call participant history cannot be hard-deleted");
+    }
+    const deletedRows = await prisma.$transaction(async (tx) => {
+      const ids = targetRecords.map((record) => record.id).sort();
+      for (const id of ids) {
+        await tx.$queryRaw(Prisma.sql`SELECT id FROM legacy_records WHERE id = ${id} AND table_name = ${query.table} LIMIT 1 FOR UPDATE`);
+      }
+      const freshRecords = await tx.legacyRecord.findMany({ where: { id: { in: ids }, table_name: query.table } });
+      if (freshRecords.length !== ids.length) {
+        throw new ApiError(409, "record_changed", "A selected record changed while this request was being processed; refresh and try again");
+      }
+      for (const record of freshRecords) {
+        const freshRow = publicLegacyRow(query.table, record.data as Row, ctx.auth.id);
+        const stillMatches = query.filters.every((filter) => filter.operator === "or"
+          ? parseOrExpression(filter.expression ?? String(filter.value ?? "")).some((part) => matchesLogicNode(freshRow, part))
+          : matchesFilter(freshRow, filter));
+        if (!stillMatches) throw new ApiError(409, "record_changed", "A selected record changed while this request was being processed; refresh and try again");
+        if (!isAdmin(ctx) && record.owner_id !== ctx.auth.id && query.table !== "polls") {
+          throw new ApiError(403, "ownership_required", "You no longer own this row");
+        }
+        if (query.table === "education" && !isAdmin(ctx) && (record.data as Row).is_verified === true) {
+          throw new ApiError(409, "verified_education_immutable", "Verified education cannot be deleted");
+        }
+        if (query.table === "polls" && !isAdmin(ctx)) {
+          const postId = String((record.data as Row).post_id ?? "");
+          const post = postId ? await tx.post.findUnique({ where: { id: postId }, select: { author_id: true } }) : null;
+          if (!post || post.author_id !== ctx.auth.id) throw new ApiError(403, "ownership_required", "Only the post author can remove its poll");
+        }
+      }
+      if (query.table === "polls") {
+        for (const record of freshRecords) {
+          const pollId = (record.data as Row).id;
+          if (typeof pollId === "string" && pollId) {
+            await tx.legacyRecord.deleteMany({ where: {
+              table_name: "poll_votes",
+              data: { path: "$.poll_id", equals: pollId },
+            } });
+          }
+        }
+      }
+      await tx.legacyRecord.deleteMany({ where: { id: { in: ids }, table_name: query.table } });
       if (query.table === "education") {
-        const educationIds = targetRecords.map((record) => (record.data as Row).id).filter((id): id is string => typeof id === "string");
+        const educationIds = freshRecords.map((record) => (record.data as Row).id).filter((id): id is string => typeof id === "string");
         if (educationIds.length) await tx.profile.updateMany({ where: { primary_education_id: { in: educationIds } }, data: { primary_education_id: null } });
       }
       if (query.table === "messages" || query.table === "stories") {
-        await revokePrivateMedia(targetRecords.map((record) => record.data as Row), query.table === "stories" ? "story" : "message", tx);
+        await revokePrivateMedia(freshRecords.map((record) => record.data as Row), query.table === "stories" ? "story" : "message", tx);
       }
+      return freshRecords.map((record) => publicLegacyRow(query.table, record.data as Row, ctx.auth.id));
     });
-    for (const row of selected) emitDbChange({ table: query.table, event: "DELETE", row, actor_id: ctx.auth.id, ...await legacyRealtimeContext(query.table, row) });
-    return { data: applyCardinality(selected, query.cardinality) };
+    for (const row of deletedRows) emitDbChange({ table: query.table, event: "DELETE", row, actor_id: ctx.auth.id, ...await legacyRealtimeContext(query.table, row) });
+    return { data: applyCardinality(deletedRows, query.cardinality) };
   }
 
   if (!query.values || typeof query.values !== "object" || Array.isArray(query.values)) throw new ApiError(400, "invalid_values", "Update values must be an object");
   const patch = { ...(query.values as Row) };
   normalizeLegacyExternalUrls(query.table, patch);
+  if (query.table === "blog_likes" || query.table === "blog_bookmarks") {
+    throw new ApiError(403, "affinity_update_denied", "Likes and bookmarks can only be created or removed");
+  }
+  if (query.table === "blog_comments") {
+    const allowed = isAdmin(ctx) ? new Set(["content", "is_hidden"]) : new Set(["content"]);
+    if (Object.keys(patch).some((key) => !allowed.has(key))) throw new ApiError(400, "column_not_writable", "Unsupported blog comment update");
+    if (Object.prototype.hasOwnProperty.call(patch, "content")) {
+      if (typeof patch.content !== "string" || !patch.content.trim()) throw new ApiError(400, "comment_content_required", "Comment text is required");
+      if (patch.content.trim().length > 5_000) throw new ApiError(400, "comment_too_long", "Comment text is too long");
+      patch.content = patch.content.trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "is_hidden") && typeof patch.is_hidden !== "boolean") {
+      throw new ApiError(400, "invalid_comment_visibility", "Comment visibility must be a boolean");
+    }
+  }
   if (query.table === "notifications" && Object.keys(patch).some((key) => key !== "is_read")) {
     throw new ApiError(400, "column_not_writable", "Only notification read state can be changed directly");
-  }
-  if (query.table === "messages") {
-    const allowed = new Set(["content", "edited_at", "is_deleted_for_everyone", "deleted_for_everyone", "deleted_at", "deleted_for_users"]);
-    if (Object.keys(patch).some((key) => !allowed.has(key))) throw new ApiError(400, "column_not_writable", "Unsupported message update");
   }
   if (query.table === "stories" && Object.keys(patch).some((key) => !new Set(["content", "deleted_at"]).has(key))) {
     throw new ApiError(400, "column_not_writable", "Story media and audience cannot be changed after publishing");
@@ -1139,48 +1712,95 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
   if (query.table === "poll_votes" && Object.keys(patch).some((key) => key !== "option_index")) {
     throw new ApiError(400, "column_not_writable", "Only the selected poll option can be changed");
   }
-  if (query.table === "polls" && Object.keys(patch).some((key) => !new Set(["question", "options"]).has(key))) {
-    throw new ApiError(400, "column_not_writable", "Only poll question and options can be changed");
+  if (query.table === "polls") {
+    throw new ApiError(403, "poll_content_immutable", "Published poll questions and options cannot be changed; remove and recreate the poll to reset it");
   }
   const updated: Row[] = [];
   for (const record of targetRecords) {
-    const current = record.data as Row;
-    if (moderatedProfileTable(query.table)) assertModeratedProfileWrite(query.table, patch, current, isAdmin(ctx));
-    if (query.table === "messages" && current.sender_id !== ctx.auth.id && !isAdmin(ctx)) throw new ApiError(403, "ownership_required", "You can only change your own messages");
-    if (query.table === "messages" && isDeletedForEveryone(current)
-      && (patch.is_deleted_for_everyone === false || patch.deleted_for_everyone === false || patch.deleted_at === null)) {
-      throw new ApiError(409, "deleted_content_immutable", "A message deleted for everyone cannot be restored");
-    }
+    const selectedCurrent = record.data as Row;
     if (query.table === "call_sessions") {
-      const roomId = current.room_id ?? current.chat_room_id;
-      if (!isAdmin(ctx) && !(await isChatMember(ctx.auth.id, roomId))) throw new ApiError(403, "call_membership_required", "Chat membership is required");
-      const allowed = new Set(["ended_at", "duration_seconds", "failure_reason", "participant_count"]);
-      if (Object.keys(patch).some((key) => !allowed.has(key))) throw new ApiError(400, "column_not_writable", "Unsupported call session update");
+      const saved = await prisma.$transaction(async (tx) => {
+        const sessionId = String(selectedCurrent.id ?? "");
+        await tx.$queryRaw(Prisma.sql`SELECT id FROM legacy_records WHERE table_name = 'call_sessions' AND record_id = ${sessionId} LIMIT 1 FOR UPDATE`);
+        const freshRecord = await tx.legacyRecord.findUnique({ where: callSessionRecordIdentity(sessionId) });
+        const fresh = freshRecord?.data as Row | undefined;
+        if (!freshRecord || !fresh || fresh.id !== sessionId) throw new ApiError(404, "call_session_not_found", "Call session was not found");
+        const roomId = fresh.room_id ?? fresh.chat_room_id;
+        if (!isAdmin(ctx)) {
+          const membership = await tx.legacyRecord.findFirst({ where: {
+            table_name: "chat_members", owner_id: ctx.auth.id,
+            data: { path: "$.room_id", equals: String(roomId ?? "") },
+          }, select: { id: true } });
+          if (!membership) throw new ApiError(403, "call_membership_required", "Chat membership is required");
+        }
+        const participantRecords = await tx.legacyRecord.findMany({ where: {
+          table_name: "call_participants",
+          data: { path: "$.session_id", equals: sessionId },
+        }, select: { data: true } });
+        const effectivePatch = normalizeCallSessionFinalization(
+          fresh,
+          patch,
+          participantRecords.map((participant) => participant.data as Row),
+          ctx.auth.id,
+          isAdmin(ctx),
+        );
+        const next = { ...fresh, ...effectivePatch, id: fresh.id, updated_at: new Date().toISOString() };
+        return tx.legacyRecord.update({ where: { id: freshRecord.id }, data: { data: next as Prisma.InputJsonValue } });
+      });
+      updated.push(publicLegacyRow(query.table, saved.data as Row, ctx.auth.id));
+      continue;
     }
-    let next: Row = { ...current, ...patch, id: current.id, updated_at: new Date().toISOString() };
-    if (query.table === "blogs") next = normalizeBlogPublishing(next);
-    if (moderatedProfileTable(query.table)) {
-      next.user_id = current.user_id;
-      if (query.table === "education") next.is_verified = current.is_verified ?? false;
-      next = await prepareModeratedProfileRow(query.table, next, ctx.auth.id);
-    }
-    if (query.table === "poll_votes") {
-      const poll = await visiblePoll(current.poll_id, ctx);
-      next.user_id = ctx.auth.id;
-      next.poll_id = current.poll_id;
-      next.option_index = validatePollOption(poll, next.option_index);
-    }
-    if (query.table === "polls") validatePollPayload(next);
-    const saved = query.table === "messages" && isDeletedForEveryone(next) || query.table === "stories" && next.deleted_at != null
-      ? await prisma.$transaction(async (tx) => {
-        const stored = await tx.legacyRecord.update({ where: { id: record.id }, data: { data: next as Prisma.InputJsonValue } });
+    const saved = await prisma.$transaction(async (tx) => {
+      // Call participant changes and finalization share the session lock so a
+      // leave cannot race a stale participant count. Other legacy mutations
+      // lock the target row directly.
+      if (query.table === "call_participants") {
+        const sessionId = String(selectedCurrent.session_id ?? "");
+        await tx.$queryRaw(Prisma.sql`SELECT id FROM legacy_records WHERE table_name = 'call_sessions' AND record_id = ${sessionId} LIMIT 1 FOR UPDATE`);
+      }
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM legacy_records WHERE id = ${record.id} AND table_name = ${query.table} LIMIT 1 FOR UPDATE`);
+      const freshRecord = await tx.legacyRecord.findUnique({ where: { id: record.id } });
+      if (!freshRecord || freshRecord.table_name !== query.table) {
+        throw new ApiError(409, "record_changed", "The record changed while this request was being processed; refresh and try again");
+      }
+      if (!isAdmin(ctx) && freshRecord.owner_id !== ctx.auth.id && query.table !== "polls") {
+        throw new ApiError(403, "ownership_required", "You no longer own this row");
+      }
+      const current = freshRecord.data as Row;
+      if (moderatedProfileTable(query.table)) assertModeratedProfileWrite(query.table, patch, current, isAdmin(ctx));
+      const effectivePatch = query.table === "messages"
+        ? normalizeMessageUpdatePatch(current, patch, ctx.auth.id, isAdmin(ctx))
+        : query.table === "call_participants"
+          ? normalizeCallParticipantUpdate(current, patch, ctx.auth.id, isAdmin(ctx))
+          : patch;
+      let next: Row = { ...current, ...effectivePatch, id: current.id, updated_at: new Date().toISOString() };
+      if (query.table === "blogs") next = normalizeBlogPublishing(next);
+      if (moderatedProfileTable(query.table)) {
+        next.user_id = current.user_id;
+        if (query.table === "education") next.is_verified = current.is_verified ?? false;
+        next = await prepareModeratedProfileRow(query.table, next, ctx.auth.id, tx);
+      }
+      if (query.table === "poll_votes") {
+        const poll = await visiblePoll(current.poll_id, ctx);
+        next.user_id = ctx.auth.id;
+        next.poll_id = current.poll_id;
+        next.option_index = validatePollOption(poll, next.option_index);
+      }
+      if (query.table === "polls") validatePollPayload(next);
+      const stored = await tx.legacyRecord.update({ where: { id: freshRecord.id }, data: { data: next as Prisma.InputJsonValue } });
+      if (query.table === "messages" && isDeletedForEveryone(next) || query.table === "stories" && next.deleted_at != null) {
         await revokePrivateMedia([current], query.table === "stories" ? "story" : "message", tx);
-        return stored;
-      })
-      : await prisma.legacyRecord.update({ where: { id: record.id }, data: { data: next as Prisma.InputJsonValue } });
-    updated.push(publicLegacyRow(query.table, saved.data as Row));
+      }
+      return stored;
+    });
+    updated.push(publicLegacyRow(query.table, saved.data as Row, ctx.auth.id));
   }
-  for (const row of updated) emitDbChange({ table: query.table, event: "UPDATE", row, actor_id: ctx.auth.id, ...await legacyRealtimeContext(query.table, row) });
+  const leaseHeartbeat = query.table === "call_participants"
+    && Object.keys(patch).length === 1
+    && Object.prototype.hasOwnProperty.call(patch, "lease_refreshed_at");
+  if (!leaseHeartbeat) {
+    for (const row of updated) emitDbChange({ table: query.table, event: "UPDATE", row, actor_id: ctx.auth.id, ...await legacyRealtimeContext(query.table, row) });
+  }
   return { data: applyCardinality(updated.map((row) => projectColumns(row, query.columns)), query.cardinality) };
 }
 

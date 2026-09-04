@@ -120,7 +120,15 @@ export function applyProfileEntryModeration(
         .sort((left, right) => Number(right.status === "approved") - Number(left.status === "approved"))[0];
       if (option) row[reference.option] = option.id;
     }
-    if (option) statuses.push(option.status);
+    if (option) {
+      statuses.push(option.status);
+    } else if (normalized(row[reference.value])) {
+      // A client-provided display value is not proof that it belongs to the
+      // approved catalogue. The normal UI creates a pending CustomOption
+      // first; older or modified clients that omit that reference must remain
+      // owner-only instead of silently publishing unreviewed profile data.
+      statuses.push("pending");
+    }
   }
   row.approval_status = statuses.includes("rejected") ? "rejected" : statuses.includes("pending") ? "pending" : "approved";
   return row;

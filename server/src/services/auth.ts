@@ -1,5 +1,5 @@
 import { OAuth2Client } from "google-auth-library";
-import type { RefreshSession, User } from "@prisma/client";
+import type { EmailOtp, RefreshSession, User } from "@prisma/client";
 import { config } from "../config.js";
 import { ApiError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
@@ -34,6 +34,62 @@ type RefreshSessionWithUser = RefreshSession & { user: User };
 export const REFRESH_ROTATION_GRACE_MS = 10_000;
 
 export const normalizeEmail = (value: string): string => value.trim().toLowerCase();
+
+type EmailOtpPurpose = "login" | "registration" | "institute" | "phone_dev";
+interface PendingRegistration {
+  passwordHash: string;
+  name?: string;
+}
+
+function invalidOtp(): ApiError {
+  return new ApiError(400, "invalid_otp", "The code is invalid or expired");
+}
+
+export function assertEmailProofMayActivate(user: Pick<User, "status" | "email_verified_at">): void {
+  if (user.status === "active") return;
+  if (user.status === "pending" && !user.email_verified_at) return;
+  throw new ApiError(403, "account_unavailable", "This account is unavailable");
+}
+
+/**
+ * Reserve one verification attempt before performing the comparatively
+ * expensive bcrypt comparison. The conditional update keeps concurrent
+ * guesses inside the database-enforced attempt budget. A successful caller
+ * must still claim `consumed_at` in the same transaction as the verified
+ * action, so two correct requests can never both apply that action.
+ */
+export async function verifyAndReserveEmailOtpAttempt(input: {
+  destinationHash: string;
+  purpose: EmailOtpPurpose;
+  code: string;
+  userId?: string;
+}): Promise<EmailOtp> {
+  const now = new Date();
+  const challenge = await prisma.emailOtp.findFirst({
+    where: {
+      destination_hash: input.destinationHash,
+      purpose: input.purpose,
+      ...(input.userId ? { user_id: input.userId } : {}),
+    },
+    orderBy: { created_at: "desc" },
+  });
+  // Always inspect the newest challenge, including consumed challenges. This
+  // prevents an older code from becoming valid again after a newer code is
+  // consumed or otherwise supersedes it.
+  if (!challenge || challenge.consumed_at || challenge.expires_at <= now || challenge.attempts >= challenge.max_attempts) throw invalidOtp();
+
+  const reserved = await prisma.emailOtp.updateMany({
+    where: {
+      id: challenge.id,
+      consumed_at: null,
+      expires_at: { gt: now },
+      attempts: { lt: challenge.max_attempts },
+    },
+    data: { attempts: { increment: 1 } },
+  });
+  if (reserved.count !== 1 || !(await verifyOtpHash(input.code, challenge.code_hash))) throw invalidOtp();
+  return challenge;
+}
 
 export function publicUser(user: Pick<User, "id" | "email" | "phone" | "role" | "status" | "email_verified_at" | "phone_verified_at" | "created_at" | "updated_at">) {
   return {
@@ -96,14 +152,12 @@ export async function registerWithPassword(emailValue: string, password: string,
   const email = normalizeEmail(emailValue);
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing?.email_verified_at) throw new ApiError(409, "email_in_use", "An account already exists for this email");
-  const password_hash = await hashPassword(password);
-  const user = existing
-    ? await prisma.user.update({ where: { id: existing.id }, data: { password_hash } })
-    : await prisma.user.create({ data: { email, password_hash, status: "pending", profile: { create: { name, community_id: config.DEFAULT_COMMUNITY_ID } } } });
-  if (existing && name) {
-    await prisma.profile.upsert({ where: { user_id: user.id }, create: { user_id: user.id, name }, update: { name } });
-  }
-  return issueEmailOtp(email, "registration", meta);
+  const passwordHash = await hashPassword(password);
+  const pendingName = name?.trim() || undefined;
+  // Do not create or mutate an account until this exact challenge proves
+  // control of the destination email address. Otherwise a later OTP/Google
+  // login could activate an attacker-selected password.
+  return issueEmailOtp(email, "registration", meta, { passwordHash, name: pendingName });
 }
 
 export async function passwordLogin(emailValue: string, password: string, meta: SessionMeta): Promise<SessionResult> {
@@ -117,8 +171,19 @@ export async function passwordLogin(emailValue: string, password: string, meta: 
   return createSession(updated, meta);
 }
 
-export async function issueEmailOtp(emailValue: string, purpose: "login" | "registration" | "institute", meta: SessionMeta): Promise<{ debug_code?: string }> {
+export async function issueEmailOtp(
+  emailValue: string,
+  purpose: "login" | "registration" | "institute",
+  meta: SessionMeta,
+  pendingRegistration?: PendingRegistration,
+): Promise<{ debug_code?: string }> {
   const email = normalizeEmail(emailValue);
+  if (purpose === "registration" && !pendingRegistration?.passwordHash) {
+    throw new ApiError(400, "registration_details_required", "Start password registration with an email and password");
+  }
+  if (purpose !== "registration" && pendingRegistration) {
+    throw new ApiError(400, "invalid_otp_purpose", "Registration details cannot be attached to this code");
+  }
   const destination_hash = keyedHash(email);
   const ip_hash = meta.ip ? keyedHash(meta.ip) : undefined;
   const since = new Date(Date.now() - 15 * 60_000);
@@ -130,43 +195,106 @@ export async function issueEmailOtp(emailValue: string, purpose: "login" | "regi
 
   const code = randomOtp();
   const user = await prisma.user.findUnique({ where: { email } });
-  await prisma.emailOtp.create({
+  const challenge = await prisma.emailOtp.create({
     data: {
       user_id: user?.id,
       email,
       destination_hash,
       code_hash: await hashOtp(code),
       purpose,
+      ...(pendingRegistration ? {
+        pending_password_hash: pendingRegistration.passwordHash,
+        pending_name: pendingRegistration.name,
+      } : {}),
       expires_at: new Date(Date.now() + 10 * 60_000),
       ip_hash,
     },
   });
-  await sendLoginCode(email, code);
+  try {
+    await sendLoginCode(email, code);
+  } catch (error) {
+    await prisma.emailOtp.updateMany({ where: { id: challenge.id, consumed_at: null }, data: { consumed_at: new Date() } }).catch(() => undefined);
+    throw error;
+  }
   return config.NODE_ENV === "production" ? {} : { debug_code: code };
 }
 
 export async function verifyEmailOtp(emailValue: string, code: string, purpose: "login" | "registration", meta: SessionMeta): Promise<SessionResult> {
   const email = normalizeEmail(emailValue);
-  const challenge = await prisma.emailOtp.findFirst({
-    where: { destination_hash: keyedHash(email), purpose, consumed_at: null },
-    orderBy: { created_at: "desc" },
-  });
-  if (!challenge || challenge.expires_at <= new Date() || challenge.attempts >= challenge.max_attempts) {
-    throw new ApiError(400, "invalid_otp", "The code is invalid or expired");
-  }
-
-  await prisma.emailOtp.update({ where: { id: challenge.id }, data: { attempts: { increment: 1 } } });
-  if (!(await verifyOtpHash(code, challenge.code_hash))) throw new ApiError(400, "invalid_otp", "The code is invalid or expired");
+  const challenge = await verifyAndReserveEmailOtpAttempt({ destinationHash: keyedHash(email), purpose, code });
+  const registrationPasswordHash = challenge.pending_password_hash;
+  if (purpose === "registration" && !registrationPasswordHash) throw invalidOtp();
 
   const user = await prisma.$transaction(async (tx) => {
+    const now = new Date();
+    const claimed = await tx.emailOtp.updateMany({
+      where: { id: challenge.id, consumed_at: null, expires_at: { gt: now } },
+      data: { consumed_at: now },
+    });
+    if (claimed.count !== 1) throw invalidOtp();
     const current = await tx.user.findUnique({ where: { email } });
-    const verified = current
-      ? await tx.user.update({ where: { id: current.id }, data: { email_verified_at: new Date(), status: "active", last_login_at: new Date() } })
-      : await tx.user.create({ data: { email, email_verified_at: new Date(), status: "active", last_login_at: new Date(), profile: { create: { community_id: config.DEFAULT_COMMUNITY_ID } } } });
-    await tx.emailOtp.update({ where: { id: challenge.id }, data: { consumed_at: new Date(), user_id: verified.id } });
+    let verified: User;
+    if (purpose === "registration") {
+      // A previously verified account may have appeared while the challenge
+      // was in flight. Never replace that account's established password.
+      if (current?.email_verified_at) {
+        throw new ApiError(409, "email_in_use", "An account already exists for this email");
+      }
+      if (current) assertEmailProofMayActivate(current);
+      verified = current
+        ? await tx.user.update({
+            where: { id: current.id },
+            data: { password_hash: registrationPasswordHash, email_verified_at: now, status: "active", last_login_at: now },
+          })
+        : await tx.user.create({
+            data: {
+              email,
+              password_hash: registrationPasswordHash,
+              email_verified_at: now,
+              status: "active",
+              last_login_at: now,
+              profile: { create: { name: challenge.pending_name ?? undefined, community_id: config.DEFAULT_COMMUNITY_ID } },
+            },
+          });
+      if (current && challenge.pending_name) {
+        await tx.profile.upsert({
+          where: { user_id: verified.id },
+          create: { user_id: verified.id, name: challenge.pending_name, community_id: config.DEFAULT_COMMUNITY_ID },
+          update: { name: challenge.pending_name },
+        });
+      }
+    } else {
+      if (current) assertEmailProofMayActivate(current);
+      verified = current
+        ? await tx.user.update({
+            where: { id: current.id },
+            data: {
+              email_verified_at: current.email_verified_at ?? now,
+              status: "active",
+              last_login_at: now,
+              // Legacy registration wrote an attacker-selected password before
+              // email proof. OTP login may activate that account only after
+              // discarding the untrusted hash. Verified passwords are retained.
+              ...(current.email_verified_at ? {} : { password_hash: null }),
+            },
+          })
+        : await tx.user.create({
+            data: { email, email_verified_at: now, status: "active", last_login_at: now, profile: { create: { community_id: config.DEFAULT_COMMUNITY_ID } } },
+          });
+    }
+    await tx.emailOtp.update({
+      where: { id: challenge.id },
+      data: { user_id: verified.id, pending_password_hash: null, pending_name: null },
+    });
     return verified;
   });
-  await writeAudit({ actor_id: user.id, action: "auth.otp_login", resource_type: "user", resource_id: user.id, ip: meta.ip });
+  await writeAudit({
+    actor_id: user.id,
+    action: purpose === "registration" ? "auth.registration_complete" : "auth.otp_login",
+    resource_type: "user",
+    resource_id: user.id,
+    ip: meta.ip,
+  });
   return createSession(user, meta);
 }
 
@@ -278,10 +406,15 @@ export async function requestPasswordReset(emailValue: string): Promise<{ debug_
   const recent = await prisma.passwordReset.count({ where: { user_id: user.id, created_at: { gte: new Date(Date.now() - 15 * 60_000) } } });
   if (recent >= 3) return {};
   const token = randomToken();
-  await prisma.passwordReset.create({ data: { user_id: user.id, token_hash: sha256(token), expires_at: new Date(Date.now() + 30 * 60_000) } });
+  const challenge = await prisma.passwordReset.create({ data: { user_id: user.id, token_hash: sha256(token), expires_at: new Date(Date.now() + 30 * 60_000) } });
   const resetUrl = new URL("/reset-password", config.FRONTEND_URL);
   resetUrl.searchParams.set("token", token);
-  await sendPasswordReset(email, resetUrl.toString());
+  try {
+    await sendPasswordReset(email, resetUrl.toString());
+  } catch (error) {
+    await prisma.passwordReset.updateMany({ where: { id: challenge.id, used_at: null }, data: { used_at: new Date() } }).catch(() => undefined);
+    throw error;
+  }
   return config.NODE_ENV === "production" ? {} : { debug_token: token };
 }
 
@@ -296,22 +429,13 @@ export async function completePasswordReset(token: string, password: string): Pr
       data: { used_at: now },
     });
     if (claimed.count !== 1) throw new ApiError(400, "invalid_reset_token", "The reset link is invalid or expired");
-    await tx.user.update({ where: { id: reset.user_id }, data: { password_hash, status: "active" } });
+    const passwordChanged = await tx.user.updateMany({ where: { id: reset.user_id, status: "active" }, data: { password_hash } });
+    if (passwordChanged.count !== 1) throw new ApiError(403, "account_unavailable", "This account is unavailable");
     await tx.refreshSession.updateMany({
       where: { user_id: reset.user_id, revoked_at: null },
       data: { revoked_at: now, revoke_reason: "password_reset" },
     });
   });
-}
-
-export async function exchangePasswordReset(token: string, meta: SessionMeta): Promise<SessionResult> {
-  const reset = await prisma.passwordReset.findUnique({ where: { token_hash: sha256(token) }, include: { user: true } });
-  if (!reset || reset.used_at || reset.expires_at <= new Date() || reset.user.status !== "active") {
-    throw new ApiError(400, "invalid_reset_token", "The reset link is invalid or expired");
-  }
-  const claimed = await prisma.passwordReset.updateMany({ where: { id: reset.id, used_at: null, expires_at: { gt: new Date() } }, data: { used_at: new Date() } });
-  if (claimed.count !== 1) throw new ApiError(400, "invalid_reset_token", "The reset link is invalid or expired");
-  return createSession(reset.user, meta);
 }
 
 export async function updateAuthenticatedPassword(userId: string, password: string): Promise<void> {
@@ -524,12 +648,35 @@ export async function completeGoogleOAuth(
   const email = normalizeEmail(payload.email);
 
   const user = await prisma.$transaction(async (tx) => {
+    const now = new Date();
     const identity = await tx.authIdentity.findUnique({ where: { provider_provider_subject: { provider: "google", provider_subject: payload.sub } }, include: { user: true } });
-    if (identity) return identity.user;
+    if (identity) {
+      assertEmailProofMayActivate(identity.user);
+      return tx.user.update({
+        where: { id: identity.user.id },
+        data: {
+          email_verified_at: identity.user.email_verified_at ?? now,
+          last_login_at: now,
+          ...(identity.user.email_verified_at ? {} : { status: "active", password_hash: null }),
+        },
+      });
+    }
     const existing = await tx.user.findUnique({ where: { email } });
+    if (existing) assertEmailProofMayActivate(existing);
     const account = existing
-      ? await tx.user.update({ where: { id: existing.id }, data: { email_verified_at: existing.email_verified_at ?? new Date(), status: "active", last_login_at: new Date() } })
-      : await tx.user.create({ data: { email, email_verified_at: new Date(), status: "active", last_login_at: new Date(), profile: { create: { name: payload.name, community_id: config.DEFAULT_COMMUNITY_ID } } } });
+      ? await tx.user.update({
+          where: { id: existing.id },
+          data: {
+            email_verified_at: existing.email_verified_at ?? now,
+            status: "active",
+            last_login_at: now,
+            // A pre-verification password from the legacy registration flow is
+            // not evidence of account ownership. Google proves the email, but
+            // must not silently make that legacy password usable.
+            ...(existing.email_verified_at ? {} : { password_hash: null }),
+          },
+        })
+      : await tx.user.create({ data: { email, email_verified_at: now, status: "active", last_login_at: now, profile: { create: { name: payload.name, community_id: config.DEFAULT_COMMUNITY_ID } } } });
     await tx.authIdentity.create({ data: { user_id: account.id, provider: "google", provider_subject: payload.sub, provider_email: email } });
     return account;
   });
@@ -573,12 +720,14 @@ export async function verifyDevPhoneOtp(userId: string, phone: string, code: str
   if (config.NODE_ENV === "production" || !config.MOBILE_TEST_MODE || !config.mobileTestPhones.has(phone)) {
     throw new ApiError(404, "not_found", "Phone OTP fallback is unavailable");
   }
-  const challenge = await prisma.emailOtp.findFirst({ where: { destination_hash: keyedHash(phone), purpose: "phone_dev", consumed_at: null }, orderBy: { created_at: "desc" } });
-  if (!challenge || challenge.expires_at <= new Date() || !(await verifyOtpHash(code, challenge.code_hash))) {
-    throw new ApiError(400, "invalid_otp", "The code is invalid or expired");
-  }
-  await prisma.$transaction([
-    prisma.emailOtp.update({ where: { id: challenge.id }, data: { consumed_at: new Date(), user_id: userId } }),
-    prisma.user.update({ where: { id: userId }, data: { phone, phone_verified_at: new Date() } }),
-  ]);
+  const challenge = await verifyAndReserveEmailOtpAttempt({ destinationHash: keyedHash(phone), purpose: "phone_dev", code });
+  await prisma.$transaction(async (tx) => {
+    const now = new Date();
+    const claimed = await tx.emailOtp.updateMany({
+      where: { id: challenge.id, consumed_at: null, expires_at: { gt: now } },
+      data: { consumed_at: now, user_id: userId },
+    });
+    if (claimed.count !== 1) throw invalidOtp();
+    await tx.user.update({ where: { id: userId }, data: { phone, phone_verified_at: now } });
+  });
 }

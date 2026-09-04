@@ -6,7 +6,8 @@ host. Commands assume the production domains below:
 
 - Canonical frontend: `https://cirkle.world`
 - Alternate frontend: `https://www.cirkle.world`
-- API and Socket.IO: `https://api.cirkle.world`
+- API and authorized Socket.IO fallback: `https://api.cirkle.world`
+- Realtime fan-out: one AWS AppSync Event API in `ap-south-1`
 
 The `api.cirkle.world` record must be **DNS-only (grey cloud)** in Cloudflare.
 The production API deliberately trusts exactly one proxy hop: Nginx.
@@ -18,16 +19,22 @@ not deploy a partially changed set.
 
 ```text
 Browser -> Cloudflare Pages (React dist/)
+        <-> AWS AppSync Events (realtime transport only)
         -> api.cirkle.world (HTTPS)
         -> Nginx
         -> 127.0.0.1:3001 (one PM2 Node process)
         -> MySQL 8.4 on 127.0.0.1:3306
+
+Node API -> AppSync HTTP publish endpoint
+AppSync Lambda authorizer -> Node API channel authorization endpoint
 ```
 
-Socket.IO uses `/api/socket.io`. The PM2 process count is intentionally one:
-the current realtime implementation stores subscriptions in process memory.
-Do not increase it until a shared Socket.IO adapter and sticky-session plan are
-implemented and tested.
+AWS hosts only AppSync and its minimal Lambda authorizer—not the frontend, API,
+database, uploads, or background jobs. MySQL is durable truth; AppSync is
+low-latency delivery. Socket.IO at `/api/socket.io` remains the local/outage
+fallback. The PM2 count stays at one because that fallback keeps subscriptions
+in process memory; do not add API workers until a shared fallback adapter and
+sticky-session plan are tested.
 
 ## Release gates
 
@@ -41,7 +48,8 @@ Never cut production over unless all of these are true:
    `prisma/migrations/`. Production never runs `prisma db push`.
 4. `pnpm verify` succeeds on the exact commit being released.
 5. Email/password, email OTP, password reset, Google login, uploads, core data
-   writes, realtime messages, and owner/admin access have passed staging tests.
+   writes, AppSync authorization/delivery/recovery, Socket.IO fallback, and
+   owner/admin access have passed staging tests.
 6. A rollback-compatible release and a fresh MySQL backup are available.
 
 MySQL DDL can be non-transactional. Every schema migration must be backward
@@ -114,9 +122,10 @@ including the MySQL root password. The first two remain root-owned and
 group-readable by `cirkle`; the MySQL file must remain root:root mode 0600.
 All are sourced by trusted scripts, so quote shell metacharacters.
 
-Generate independent high-entropy values for every JWT, hashing, pepper, and
-storage secret. Do not reuse database, Google, ZeptoMail, OpenAI, or Gemini
-credentials. A password inside `DATABASE_URL` must be URL-encoded.
+Generate independent high-entropy values for every JWT, hashing, pepper,
+storage, AppSync authorizer, and AppSync publisher secret. Do not reuse
+database, Google, ZeptoMail, OpenAI, Gemini, or AppSync credentials. A password
+inside `DATABASE_URL` must be URL-encoded.
 
 Production-critical values include:
 
@@ -132,6 +141,8 @@ COOKIE_SECURE=true
 MOBILE_TEST_MODE=false
 ENABLE_SEED_DATA=false
 GOOGLE_REDIRECT_URI=https://api.cirkle.world/api/auth/google/callback
+APPSYNC_ENABLED=true
+APPSYNC_HTTP_ENDPOINT=https://API_ID.appsync-api.ap-south-1.amazonaws.com/event
 ```
 
 Leave `COOKIE_DOMAIN` unset. That creates a narrower, host-only refresh cookie
@@ -149,10 +160,13 @@ absent.
   `https://api.cirkle.world/api/auth/google/callback` as an authorized redirect
   URI. Use `https://cirkle.world` as the application origin and consent-screen
   home page.
-- Zoho ZeptoMail: verify `cirkle.world`, configure its current SPF/DKIM records,
-  publish a DMARC policy, verify `ZEPTOMAIL_FROM_EMAIL`, and use a server-side
-  send-mail token. Set `ZEPTOMAIL_API_URL` to the account's assigned regional
-  HTTPS `/v1.1/email` endpoint rather than assuming the `.com` data center.
+- Zoho ZeptoMail: verify `cirkle.world` and `noreply@cirkle.world`, configure its
+  current SPF/DKIM records and bounce subdomain, publish a DMARC policy, and use
+  a rotated server-side Send Mail API key. The current India Agent requires
+  `ZEPTOMAIL_API_URL=https://api.zeptomail.in/v1.1/email`; SMTP credentials are
+  not used by the Node service. A successful send response proves provider
+  acceptance only. ZeptoMail delivery/bounce webhooks are not yet persisted by
+  this application, so inspect processed-email logs during acceptance testing.
 - OpenAI and Gemini: use separate restricted production keys with billing and
   usage alerts. These keys are server-only; no key name may start with `VITE_`.
 - KLIPY: use a production API key and verify search, trending, and share
@@ -160,6 +174,12 @@ absent.
 - Daily: use a production API key. `DAILY_DOMAIN` is optional and should contain
   only the assigned room hostname (for example, `your-team.daily.co`) when a
   fallback URL is needed.
+- AWS AppSync Events: activate the AWS account, deploy only
+  `aws/realtime/template.yaml` in `ap-south-1`, and copy its endpoints to the
+  API/Pages settings exactly as documented in `aws/realtime/README.md`. Keep
+  `APPSYNC_PUBLISH_TOKEN` and `APPSYNC_AUTHORIZER_SECRET` only in the protected
+  API environment; they are never `VITE_` values. The Node host requires no AWS
+  access key for runtime publishing.
 
 Provider dashboards and DNS records change independently of this repository.
 Verify them directly before launch and after any credential rotation.
@@ -365,14 +385,18 @@ needed:
 
 ```dotenv
 VITE_API_URL=https://api.cirkle.world
-VITE_CHAT_REALTIME_PROVIDER=socketio
+VITE_CHAT_REALTIME_PROVIDER=appsync
+VITE_APPSYNC_HTTP_ENDPOINT=https://API_ID.appsync-api.ap-south-1.amazonaws.com/event
+VITE_APPSYNC_REALTIME_ENDPOINT=wss://API_ID.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime
 VITE_DAILY_CALLS_ENABLED=true
 PNPM_VERSION=11.19.0
 ```
 
 Never add `DATABASE_URL`, JWT secrets, Google client secret, ZeptoMail token,
-OpenAI key, Gemini key, or storage signing secret to Pages. Vite embeds every
-`VITE_` value in downloadable browser JavaScript.
+OpenAI/Gemini keys, AppSync publisher/authorizer secrets, or the storage signing
+secret to Pages. AppSync endpoints are public identifiers and are safe there;
+the browser authenticates them with its short-lived Cirkle access JWT. Vite
+embeds every `VITE_` value in downloadable browser JavaScript.
 
 Connect both `cirkle.world` and `www.cirkle.world` as Pages custom domains and
 choose the apex as canonical. Do not configure `main` as the Pages production
@@ -402,7 +426,11 @@ revision, validates the production build variables, and explicitly targets the
 Pages production branch:
 
 ```sh
-VITE_API_URL=https://api.cirkle.world VITE_CHAT_REALTIME_PROVIDER=socketio VITE_DAILY_CALLS_ENABLED=true pnpm pages:deploy
+VITE_API_URL=https://api.cirkle.world \
+VITE_CHAT_REALTIME_PROVIDER=appsync \
+VITE_APPSYNC_HTTP_ENDPOINT=https://API_ID.appsync-api.ap-south-1.amazonaws.com/event \
+VITE_APPSYNC_REALTIME_ENDPOINT=wss://API_ID.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime \
+VITE_DAILY_CALLS_ENABLED=true pnpm pages:deploy
 ```
 
 If frontend publication fails, leave the healthy backward-compatible API in
@@ -434,15 +462,17 @@ https://www.cirkle.world
 Additional origins, if any, must be explicit HTTPS origins with no path and no
 wildcard. The Pages CSP permits:
 
-- API fetch and realtime only to `https://api.cirkle.world` and
+- API/fallback traffic only to `https://api.cirkle.world` and
   `wss://api.cirkle.world`.
+- AppSync Event API traffic only to the `ap-south-1` HTTPS and realtime AWS
+  domains emitted by the reviewed stack.
 - Daily call connections/frames only on `*.daily.co`.
 - HTTPS images and media because user avatars, posts, GIFs, company logos, and
   call media can have externally hosted URLs.
 - Local/data fonts, local/blob workers, and inline styles used by the current
   React component stack.
 
-Legacy Supabase and AppSync origins are intentionally absent. Tightening the
+Legacy Supabase origins are intentionally absent. Tightening the
 broad HTTPS image/media allowance requires first proxying or migrating all
 external user content; doing it prematurely would visibly break existing
 posts and profiles.
@@ -484,16 +514,18 @@ Complete a real-browser acceptance pass on desktop and mobile:
    frontend origin.
 4. Create, update, and delete test content; verify permissions with a second
    non-admin account.
-5. Send forum and direct messages in two browsers and confirm Socket.IO
-   reconnects after a temporary network loss.
+5. Send forum and direct messages in two browsers; confirm AppSync denies an
+   unauthorized room, reconnects after JWT refresh/network loss, and recovers
+   missed MySQL rows. Then force the AppSync endpoint unavailable and verify the
+   authorized Socket.IO fallback instead of silent message loss.
 6. Upload and retrieve an image, audio attachment, and permitted document near
    (but below) the configured size limit.
 7. Exercise the product flows that invoke OpenAI and Gemini and confirm errors
    are surfaced without exposing provider payloads or keys.
 8. Start and end an audio/video call and check camera/microphone permission and
    Daily iframe behavior against the deployed CSP.
-9. Review API, Nginx, PM2, MySQL, Cloudflare, ZeptoMail, OpenAI, and Gemini logs
-   or dashboards for errors and unexpected cost.
+9. Review API, Nginx, PM2, MySQL, Cloudflare, AppSync/Lambda, ZeptoMail, OpenAI,
+   and Gemini logs or dashboards for errors and unexpected cost.
 
 Do not mark the release complete merely because `/healthz` is green. Liveness
 proves the Node process is running; loopback-only `/readyz` adds database and

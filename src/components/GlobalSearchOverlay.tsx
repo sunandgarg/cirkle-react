@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Search, X, User, Briefcase, Calendar, MessageSquare, LoaderCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
+import { purgeLegacyRecentSearches, readRecentSearches, saveRecentSearch } from "@/lib/recentSearches";
 
 interface SearchResult {
   id: string;
@@ -33,18 +35,20 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 export const GlobalSearchOverlay = ({ open, onClose, onSelect }: GlobalSearchOverlayProps) => {
+  const { user } = useAuth();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("recent_searches") || "[]").slice(0, 10);
-    } catch { return []; }
-  });
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    purgeLegacyRecentSearches();
+    setRecentSearches(readRecentSearches(user?.id));
+  }, [user?.id]);
 
   useEffect(() => {
     if (open) {
@@ -70,13 +74,8 @@ export const GlobalSearchOverlay = ({ open, onClose, onSelect }: GlobalSearchOve
   }, [open, onClose]);
 
   const saveSearch = useCallback((term: string) => {
-    try {
-      const recent = JSON.parse(localStorage.getItem("recent_searches") || "[]");
-      const updated = [term, ...recent.filter((s: string) => s !== term)].slice(0, 10);
-      localStorage.setItem("recent_searches", JSON.stringify(updated));
-      setRecentSearches(updated);
-    } catch { /* ignore */ }
-  }, []);
+    setRecentSearches(saveRecentSearch(user?.id, term));
+  }, [user?.id]);
 
   useEffect(() => {
     const term = query.trim();

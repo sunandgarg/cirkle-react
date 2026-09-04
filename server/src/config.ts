@@ -29,25 +29,30 @@ const schema = z.object({
   JWT_ISSUER: z.string().default("cirkle-api"),
   JWT_AUDIENCE: z.string().default("cirkle-web"),
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
-  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(30),
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(400).default(365),
   COOKIE_DOMAIN: z.string().optional(),
   COOKIE_SECURE: booleanString,
   IP_HASH_SECRET: z.string().min(16).default("replace-this-ip-hash-secret"),
   OTP_PEPPER: z.string().min(16).default("replace-this-otp-pepper"),
   ZEPTOMAIL_TOKEN: z.string().optional(),
-  ZEPTOMAIL_API_URL: z.string().url().default("https://api.zeptomail.com/v1.1/email"),
-  ZEPTOMAIL_FROM_EMAIL: z.string().email().default("verify@cirkle.world"),
+  ZEPTOMAIL_API_URL: z.string().url().default("https://api.zeptomail.in/v1.1/email"),
+  ZEPTOMAIL_FROM_EMAIL: z.string().email().default("noreply@cirkle.world"),
   ZEPTOMAIL_FROM_NAME: z.string().default("Cirkle"),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().url().optional(),
   OPENAI_API_KEY: z.string().optional(),
-  OPENAI_MODEL: z.string().default("gpt-5-mini"),
+  OPENAI_MODEL: z.string().default("gpt-5.4-mini"),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-2.5-flash"),
   KLIPY_API_KEY: z.string().optional(),
   DAILY_API_KEY: z.string().optional(),
   DAILY_DOMAIN: z.string().optional(),
+  APPSYNC_ENABLED: booleanString,
+  APPSYNC_HTTP_ENDPOINT: z.string().url().optional(),
+  APPSYNC_PUBLISH_TOKEN: z.string().optional(),
+  APPSYNC_AUTHORIZER_SECRET: z.string().optional(),
+  APPSYNC_PUBLISH_TIMEOUT_MS: z.coerce.number().int().min(500).max(10_000).default(4_000),
   STORAGE_ROOT: z.string().default("./server/storage"),
   STORAGE_SIGNING_SECRET: z.string().min(16),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().max(20 * 1024 * 1024).default(20 * 1024 * 1024),
@@ -113,7 +118,33 @@ export function productionConfigIssues(value: ServerConfig): string[] {
     if (zeptoMailUrl.protocol !== "https:" || zeptoMailUrl.username || zeptoMailUrl.password
       || zeptoMailUrl.pathname !== "/v1.1/email" || zeptoMailUrl.search || zeptoMailUrl.hash
       || !zeptoMailApiHosts.has(zeptoMailUrl.hostname.toLowerCase())) throw new Error("invalid");
+    if (zeptoMailUrl.hostname.toLowerCase() !== "api.zeptomail.in") issues.push("ZEPTOMAIL_API_URL must use this account's India data-center endpoint");
   } catch { issues.push("ZEPTOMAIL_API_URL must be the HTTPS regional ZeptoMail /v1.1/email endpoint"); }
+  if (value.ZEPTOMAIL_FROM_EMAIL.toLowerCase() !== "noreply@cirkle.world") {
+    issues.push("ZEPTOMAIL_FROM_EMAIL must equal the verified noreply@cirkle.world sender");
+  }
+  if (!value.APPSYNC_ENABLED) issues.push("APPSYNC_ENABLED must be true in production");
+  if (value.APPSYNC_ENABLED) {
+    if (!value.APPSYNC_HTTP_ENDPOINT) issues.push("APPSYNC_HTTP_ENDPOINT is required when AppSync is enabled");
+    if (!value.APPSYNC_PUBLISH_TOKEN || value.APPSYNC_PUBLISH_TOKEN.length < 32) issues.push("APPSYNC_PUBLISH_TOKEN must contain at least 32 characters when AppSync is enabled");
+    if (!value.APPSYNC_AUTHORIZER_SECRET || value.APPSYNC_AUTHORIZER_SECRET.length < 32) issues.push("APPSYNC_AUTHORIZER_SECRET must contain at least 32 characters when AppSync is enabled");
+    if (value.APPSYNC_PUBLISH_TOKEN && value.APPSYNC_AUTHORIZER_SECRET && value.APPSYNC_PUBLISH_TOKEN === value.APPSYNC_AUTHORIZER_SECRET) {
+      issues.push("APPSYNC_PUBLISH_TOKEN and APPSYNC_AUTHORIZER_SECRET must be distinct");
+    }
+    if (value.APPSYNC_HTTP_ENDPOINT) {
+      try {
+        const endpoint = new URL(value.APPSYNC_HTTP_ENDPOINT);
+        if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.pathname !== "/event"
+          || endpoint.search || endpoint.hash || !/^[a-z0-9-]+\.appsync-api\.ap-south-1\.amazonaws\.com$/i.test(endpoint.hostname)) {
+          throw new Error("invalid");
+        }
+      } catch { issues.push("APPSYNC_HTTP_ENDPOINT must be an AWS AppSync Events HTTPS /event endpoint"); }
+    }
+    const appSyncSecrets = [value.APPSYNC_PUBLISH_TOKEN, value.APPSYNC_AUTHORIZER_SECRET].filter((secret): secret is string => Boolean(secret));
+    if (appSyncSecrets.some((secret) => secrets.some((key) => value[key] === secret))) {
+      issues.push("AppSync credentials must be distinct from JWT, storage, hashing, and OTP secrets");
+    }
+  }
   if (value.COOKIE_DOMAIN) issues.push("COOKIE_DOMAIN must be unset in production so the refresh cookie remains host-only");
   if (value.DAILY_DOMAIN) {
     try {

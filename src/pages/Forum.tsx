@@ -34,6 +34,7 @@ import {
   getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead,
   getForumDraft, setForumDraft, getForumScroll, setForumScroll,
   getForumTestPosts, appendForumTestPost, getLastForumRoom, setLastForumRoom,
+  purgeLegacyForumLocalState,
 } from "@/hooks/useForumCache";
 import { useScrollBehavior } from "@/hooks/useScrollBehavior";
 import {
@@ -58,12 +59,12 @@ import {
 } from "@/lib/forumHistoryCache";
 import { createRealtimeRecoveryController } from "@/lib/realtimeRecovery";
 import {
-  appSyncRealtimeEnabled, getForumAppSyncChannels, publishAppSync, subscribeAppSync,
+  appSyncRealtimeEnabled, getForumAppSyncChannels, subscribeAppSync,
 } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { shouldAnchorLatestDuringKeyboard, useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
 import { safeHttpUrl } from "@/lib/safeUrl";
-import NotificationBell from "@/components/NotificationBell";
+import IncomingCallButton from "@/components/IncomingCallButton";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
@@ -391,9 +392,14 @@ const Forum = () => {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showFormatBar, setShowFormatBar] = useState(false);
   const [newMsgCount, setNewMsgCount] = useState(0);
-  const [unreadDots, setUnreadDots] = useState<Record<string, boolean>>(() => getUnreadChannels());
+  const [unreadDots, setUnreadDots] = useState<Record<string, boolean>>(() => getUnreadChannels(user?.id));
   const [testRoomPosts, setTestRoomPosts] = useState<any[]>([]);
   const [outboxPosts, setOutboxPosts] = useState<any[]>([]);
+
+  useEffect(() => {
+    purgeLegacyForumLocalState();
+    setUnreadDots(getUnreadChannels(user?.id));
+  }, [user?.id]);
 
   useEffect(() => {
     const media = window.matchMedia("(min-width: 1024px)");
@@ -642,21 +648,21 @@ const Forum = () => {
 
   useEffect(() => {
     const scrollContainer = scrollContainerRef.current;
-    setContent(getForumDraft(activeScope.type, activeScope.key));
+    setContent(getForumDraft(activeScope.type, activeScope.key, user?.id));
     return () => {
       if (scrollWorkFrameRef.current !== null) cancelAnimationFrame(scrollWorkFrameRef.current);
       scrollWorkFrameRef.current = null;
       if (scrollSaveTimerRef.current !== null) clearTimeout(scrollSaveTimerRef.current);
       scrollSaveTimerRef.current = null;
       const offset = scrollContainer?.scrollTop || 0;
-      setForumScroll(activeScope.type, activeScope.key, offset);
+      setForumScroll(activeScope.type, activeScope.key, offset, user?.id);
     };
-  }, [activeScope.type, activeScope.key]);
+  }, [activeScope.type, activeScope.key, user?.id]);
 
   // Mark channel as read when opened - also reset pagination
   useEffect(() => {
-    setChannelRead(activeScope.type, activeScope.key);
-    setUnreadDots(getUnreadChannels());
+    setChannelRead(activeScope.type, activeScope.key, user?.id);
+    setUnreadDots(getUnreadChannels(user?.id));
     setNewMsgCount(0);
     setHasMoreOlder(true);
     setOlderPages([]);
@@ -680,12 +686,12 @@ const Forum = () => {
       if (cancelled || error) return;
       const room = Array.isArray(data) ? data[0] : data;
       if (!room) return;
-      if (!getForumDraft(activeScope.type, activeScope.key) && room.draft) {
-        setForumDraft(activeScope.type, activeScope.key, room.draft);
+      if (!getForumDraft(activeScope.type, activeScope.key, user?.id) && room.draft) {
+        setForumDraft(activeScope.type, activeScope.key, room.draft, user?.id);
         setContent((current) => current || room.draft);
       }
-      if (!getForumScroll(activeScope.type, activeScope.key) && room.scroll_offset) {
-        setForumScroll(activeScope.type, activeScope.key, room.scroll_offset);
+      if (!getForumScroll(activeScope.type, activeScope.key, user?.id) && room.scroll_offset) {
+        setForumScroll(activeScope.type, activeScope.key, room.scroll_offset, user?.id);
       }
     });
     return () => { cancelled = true; };
@@ -1047,7 +1053,7 @@ const Forum = () => {
       // awaiting its server acknowledgement.
       if (!result?.sendIdentity || forumSendFingerprint(getCurrentSendSnapshot()) === result.sendIdentity.fingerprint) {
         setContent(""); setIsAnonymous(false); setImageFile(null); setImagePreview(null);
-        setForumDraft(activeScope.type, activeScope.key, "");
+        setForumDraft(activeScope.type, activeScope.key, "", user?.id);
         setShowPollCreator(false); setPollQuestion(""); setPollOptions(["", ""]); setReplyTo(null);
         setAttachedFile(null); setShowAttachMenu(false); setShowFormatBar(false);
       }
@@ -1366,15 +1372,26 @@ const Forum = () => {
       },
     });
 
-    // The archived AppSync compatibility branch stays disabled in production.
+    // AppSync is the production realtime path when configured; the authorized
+    // Socket.IO subscription below remains the automatic delivery fallback.
     // Socket.IO provides fan-out; MySQL remains the durable history for recovery.
     if (appSyncRealtimeEnabled) void (async () => {
       const channels = await getForumAppSyncChannels(activeScope.type, activeScope.key);
       if (disposed) return;
       unsubscribeAppSync = subscribeAppSync(channels.message_channel, (event: any) => {
         const eventType = String(event.eventType || "INSERT") as ForumRealtimeEvent["eventType"];
-        if (eventType === "DELETE") applyRoomEvent({ eventType, old: event.old || {} });
-        else applyHydratedRoomEvent({ eventType, new: event.new || {} });
+        const identity = (eventType === "DELETE" ? event.old : event.new) as { id?: unknown } | undefined;
+        const postId = typeof identity?.id === "string" ? identity.id : "";
+        if (!postId) { void (recoveryController?.recoverNow() || recoverMissedMessages()); return; }
+        if (eventType === "DELETE") { applyRoomEvent({ eventType, old: { id: postId } }); return; }
+        // Durable AppSync payloads are deliberately content-free. Refetching
+        // through the API enforces the viewer's current forum authorization.
+        void (supabase as any).rpc("get_forum_post", { p_post_id: postId }).then(async ({ data, error }: any) => {
+          if (disposed) return;
+          if (error || !data) { void (recoveryController?.recoverNow() || recoverMissedMessages()); return; }
+          const [post] = await hydrateForumMediaUrls([data]);
+          if (!disposed && post) applyRoomEvent({ eventType, new: post });
+        });
       }, (status) => {
         if (disposed) return;
         if (status === "SUBSCRIBED") {
@@ -1454,37 +1471,8 @@ const Forum = () => {
     const typingEnabled = activeScope.type === "COHORT" || activeScope.type === "COHORT_GLOBAL";
     if (!user?.id || readMobileTestSession() || !typingEnabled || !realtimeActive) return;
     const typingTimers = remoteTypingTimersRef.current;
-    if (appSyncRealtimeEnabled) {
-      let disposed = false;
-      let unsubscribe: (() => void) | null = null;
-      void getForumAppSyncChannels(activeScope.type, activeScope.key).then((channels) => {
-        if (disposed) return;
-        const handleTyping = (payload: any) => {
-          const remoteUserId = payload?.userId;
-          const name = payload?.name;
-          if (!remoteUserId || remoteUserId === user.id || !name) return;
-          setTypingUsers((current) => [...new Set([...current, name])].slice(0, 3));
-          const previousTimer = typingTimers.get(remoteUserId);
-          if (previousTimer) clearTimeout(previousTimer);
-          typingTimers.set(remoteUserId, setTimeout(() => {
-            setTypingUsers((current) => current.filter((item) => item !== name));
-            typingTimers.delete(remoteUserId);
-          }, 2500));
-        };
-        unsubscribe = subscribeAppSync(channels.typing_channel, handleTyping);
-        presenceChannelRef.current = {
-          send: ({ payload }: any) => publishAppSync(channels.typing_channel, payload),
-        };
-      }).catch(() => { /* Message delivery has its own durable fallback. */ });
-      return () => {
-        disposed = true;
-        unsubscribe?.();
-        presenceChannelRef.current = null;
-        typingTimers.forEach(clearTimeout);
-        typingTimers.clear();
-        setTypingUsers([]);
-      };
-    }
+    // AppSync carries durable content-free invalidations only. Typing stays on
+    // Socket.IO, whose server can immediately disconnect revoked members.
     const presenceChannel = supabase.channel(`typing-${activeScope.type}-${activeScope.key}`, {
       config: { broadcast: { self: false } },
     });
@@ -1529,11 +1517,11 @@ const Forum = () => {
   // Auto-scroll on initial load
   useEffect(() => {
     if (posts && posts.length > 0 && !hasScrolledRef.current && scrollContainerRef.current) {
-      const savedOffset = getForumScroll(activeScope.type, activeScope.key);
+      const savedOffset = getForumScroll(activeScope.type, activeScope.key, user?.id);
       scrollContainerRef.current.scrollTop = savedOffset || scrollContainerRef.current.scrollHeight;
       hasScrolledRef.current = true;
     }
-  }, [posts, activeScope.type, activeScope.key]);
+  }, [posts, activeScope.type, activeScope.key, user?.id]);
   useEffect(() => { hasScrolledRef.current = false; }, [activeScope.type, activeScope.key]);
 
   const dismissKeyboard = useCallback(() => {
@@ -1619,7 +1607,7 @@ const Forum = () => {
       const offset = el.scrollTop;
       scrollSaveTimerRef.current = setTimeout(() => {
         scrollSaveTimerRef.current = null;
-        setForumScroll(activeScope.type, activeScope.key, offset);
+        setForumScroll(activeScope.type, activeScope.key, offset, user?.id);
       }, 250);
 
       // Fire pagination once per visit to the top threshold. Cached IndexedDB
@@ -1631,7 +1619,7 @@ const Forum = () => {
         void loadOlderMessages();
       }
     });
-  }, [activeScope.type, activeScope.key, loadOlderMessages]);
+  }, [activeScope.type, activeScope.key, loadOlderMessages, user?.id]);
 
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -1645,7 +1633,7 @@ const Forum = () => {
   // Auto-grow textarea
   const handleContentChange = (value: string) => {
     setContent(value);
-    setForumDraft(activeScope.type, activeScope.key, value);
+    setForumDraft(activeScope.type, activeScope.key, value, user?.id);
     broadcastTyping();
 
     // Auto-resize textarea
@@ -1680,7 +1668,7 @@ const Forum = () => {
     const end = ta?.selectionEnd ?? content.length;
     const next = content.slice(0, start) + emoji + content.slice(end);
     setContent(next);
-    setForumDraft(activeScope.type, activeScope.key, next);
+    setForumDraft(activeScope.type, activeScope.key, next, user?.id);
     setShowGifPicker(false);
     requestAnimationFrame(() => {
       ta?.focus();
@@ -1883,8 +1871,8 @@ const Forum = () => {
   };
   const selectScope = (type: string, key: string, keepSidebarOpen = false) => {
     const scrollOffset = scrollContainerRef.current?.scrollTop || 0;
-    setForumDraft(activeScope.type, activeScope.key, content);
-    setForumScroll(activeScope.type, activeScope.key, scrollOffset);
+    setForumDraft(activeScope.type, activeScope.key, content, user?.id);
+    setForumScroll(activeScope.type, activeScope.key, scrollOffset, user?.id);
     if (user?.id && !readMobileTestSession()) {
       void (supabase as any).rpc("save_forum_room_state", {
         p_scope_type: activeScope.type,
@@ -1893,7 +1881,7 @@ const Forum = () => {
         p_scroll_offset: Math.max(0, Math.round(scrollOffset)),
       });
     }
-    setContent(getForumDraft(type, key));
+    setContent(getForumDraft(type, key, user?.id));
     setActiveScope({ type, key });
     if (user?.id) setLastForumRoom(user.id, { type, key });
     if (!keepSidebarOpen) setSidebarOpen(false);
@@ -2097,7 +2085,7 @@ const Forum = () => {
               </button>
             )}
 
-            <NotificationBell />
+            <IncomingCallButton />
             <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); setSearchTab("messages"); }} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${showSearch ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="Search messages">
               <Search className="w-4 h-4" />
             </button>

@@ -56,6 +56,38 @@ function signature(bucket: string, objectPath: string, expires: number): string 
   return createHmac("sha256", config.STORAGE_SIGNING_SECRET).update(`${bucket}\n${objectPath}\n${expires}`).digest("base64url");
 }
 
+const opaqueHandlePattern = /^opaque\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+
+export function opaqueObjectHandle(fileId: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fileId)) {
+    throw new ApiError(500, "invalid_file_identity", "Stored file identity is invalid");
+  }
+  return `opaque/${fileId.toLowerCase()}`;
+}
+
+export async function opaqueHandlesForObjectKeys(objectKeys: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(objectKeys)].filter(Boolean).slice(0, 2_000);
+  if (!unique.length) return new Map();
+  const files = await prisma.fileObject.findMany({
+    where: { object_key: { in: unique }, status: "ready", deleted_at: null },
+    select: { id: true, object_key: true },
+  });
+  return new Map(files.map((file) => [file.object_key, opaqueObjectHandle(file.id)]));
+}
+
+async function resolveObjectReference(bucket: string, value: string): Promise<{ objectPath: string; signedPath: string }> {
+  const signedPath = safeObjectPath(value);
+  if (!signedPath.startsWith("opaque/")) return { objectPath: signedPath, signedPath };
+  const match = signedPath.match(opaqueHandlePattern);
+  if (!match) throw new ApiError(404, "object_not_found", "Object not found");
+  const file = await prisma.fileObject.findUnique({ where: { id: match[1]!.toLowerCase() } });
+  const prefix = `${bucket}/`;
+  if (!file || file.bucket !== bucket || file.deleted_at || file.status !== "ready" || !file.object_key.startsWith(prefix)) {
+    throw new ApiError(404, "object_not_found", "Object not found");
+  }
+  return { objectPath: safeObjectPath(file.object_key.slice(prefix.length)), signedPath };
+}
+
 function ownsPath(ctx: RequestContext, bucket: string, objectPath: string): boolean {
   if (admin(ctx)) return true;
   if (["nav-icons", "institute-logos"].includes(bucket)) return false;
@@ -72,7 +104,21 @@ export function assertUploadOverwriteAllowed(bucket: string, upsert: boolean): v
   }
 }
 
-export async function assertOwnedReadyObject(bucket: string, objectPathValue: unknown, userId: string): Promise<string> {
+const referencedContentBuckets = new Set(["stories", "post-images", "forum-files", "voice-notes", "chat-media", "entity-logos"]);
+
+export function verificationEvidenceIsLocked(row: Record<string, unknown>, objectPath: string): boolean {
+  if (row.document_path !== objectPath) return false;
+  return !new Set(["rejected", "withdrawn"]).has(String(row.status ?? "pending").toLowerCase());
+}
+
+export function publicStorageObjectUrl(bucket: string, objectPath: string): string {
+  return new URL(
+    `/api/storage/public/${encodeURIComponent(bucket)}/${objectPath.split("/").map(encodeURIComponent).join("/")}`,
+    config.APP_BASE_URL,
+  ).toString();
+}
+
+export async function assertOwnedReadyObject(bucket: string, objectPathValue: unknown, userId: string, expectedMime?: RegExp): Promise<string> {
   if (typeof objectPathValue !== "string" || !objectPathValue) throw new ApiError(400, "invalid_media_path", "A valid uploaded object path is required");
   const objectPath = safeObjectPath(objectPathValue);
   policy(bucket);
@@ -80,30 +126,64 @@ export async function assertOwnedReadyObject(bucket: string, objectPathValue: un
   if (!isOwnedReadyFile(file, userId)) {
     throw new ApiError(400, "invalid_media_reference", "Media must reference a ready upload owned by the current user");
   }
+  if (expectedMime && file && !expectedMime.test(file.mime_type)) {
+    throw new ApiError(400, "invalid_media_type", "Uploaded media does not match the message type");
+  }
   return objectPath;
 }
 
 export async function storeUpload(bucket: string, objectPathValue: string, file: Express.Multer.File, optionsValue: unknown, ctx: RequestContext) {
   const objectPath = safeObjectPath(objectPathValue);
   const rules = policy(bucket);
+  if (new Set(["stories", "post-images", "forum-files", "voice-notes", "chat-media"]).has(bucket)
+    && !ctx.auth.is_verified && !admin(ctx)) {
+    throw new ApiError(403, "verification_required", "Verified membership is required to upload community content");
+  }
   if (rules.admin && !admin(ctx)) throw new ApiError(403, "admin_required", "Administrator access is required for this bucket");
   if (!ownsPath(ctx, bucket, objectPath)) throw new ApiError(403, "invalid_storage_prefix", "Uploads must use your user ID as the first path segment");
   if (!rules.mime.test(file.mimetype) || file.size > Math.min(rules.max, config.MAX_UPLOAD_BYTES)) throw new ApiError(415, "file_not_allowed", "File type or size is not allowed for this bucket");
   const options = optionsValue && typeof optionsValue === "object" ? optionsValue as Record<string, unknown> : {};
   assertUploadOverwriteAllowed(bucket, options.upsert === true);
+  const objectKey = `${bucket}/${objectPath}`;
+  const digest = sha256(file.buffer.toString("base64"));
+  if (options.upsert === true) {
+    const existing = await prisma.fileObject.findUnique({ where: { object_key: objectKey } });
+    // Retried outbox uploads are idempotent. Never rewrite bytes that have
+    // already been attached to durable content, even when the caller owns them.
+    if (existing?.status === "ready" && existing.deleted_at === null && existing.uploaded_by === ctx.auth.id && existing.sha256 === digest) {
+      return { path: objectPath, fullPath: objectKey };
+    }
+    if (existing) throw new ApiError(409, "object_immutable", "An uploaded object cannot be replaced; upload to a new path instead");
+  }
   const target = diskPath(bucket, objectPath);
   await mkdir(path.dirname(target), { recursive: true, mode: 0o750 });
-  try { await writeFile(target, file.buffer, { flag: options.upsert === true ? "w" : "wx", mode: 0o640 }); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new ApiError(409, "object_exists", "An object already exists at this path");
-    throw error;
-  }
-  const objectKey = `${bucket}/${objectPath}`;
-  const metadata = await prisma.fileObject.upsert({
-    where: { object_key: objectKey },
-    create: { uploaded_by: ctx.auth.id, bucket, object_key: objectKey, original_name: file.originalname.slice(0, 255), mime_type: file.mimetype, size_bytes: file.size, visibility: rules.visibility, sha256: sha256(file.buffer.toString("base64")) },
-    update: { uploaded_by: ctx.auth.id, original_name: file.originalname.slice(0, 255), mime_type: file.mimetype, size_bytes: file.size, visibility: rules.visibility, sha256: sha256(file.buffer.toString("base64")), status: "ready", deleted_at: null },
-  });
+  const metadata = await prisma.$transaction(async (tx) => {
+    // Hold a shared lock on the active uploader through both the byte write and
+    // metadata insert. Account deletion takes the corresponding FOR UPDATE
+    // lock first, so an in-flight upload is either included in its cleanup
+    // snapshot or rejected before bytes are written.
+    const active = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM users WHERE id = ${ctx.auth.id} AND status = 'active' LIMIT 1 FOR SHARE
+    `;
+    if (active.length !== 1) throw new ApiError(401, "account_unavailable", "This account is unavailable");
+    try { await writeFile(target, file.buffer, { flag: "wx", mode: 0o640 }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new ApiError(409, "object_exists", "An object already exists at this path");
+      throw error;
+    }
+    try {
+      return await tx.fileObject.upsert({
+        where: { object_key: objectKey },
+        create: { uploaded_by: ctx.auth.id, bucket, object_key: objectKey, original_name: file.originalname.slice(0, 255), mime_type: file.mimetype, size_bytes: file.size, visibility: rules.visibility, sha256: digest },
+        update: { uploaded_by: ctx.auth.id, original_name: file.originalname.slice(0, 255), mime_type: file.mimetype, size_bytes: file.size, visibility: rules.visibility, sha256: digest, status: "ready", deleted_at: null },
+      });
+    } catch (error) {
+      // A brand-new path has no prior bytes to preserve. Avoid leaving an
+      // untracked object behind if metadata persistence fails.
+      await unlink(target).catch(() => undefined);
+      throw error;
+    }
+  }, { timeout: 15_000 });
   await writeAudit({ actor_id: ctx.auth.id, action: "storage.upload", resource_type: "file", resource_id: metadata.id, ip: ctx.ip, metadata: { bucket, path: objectPath, size: file.size, mime: file.mimetype } });
   return { path: objectPath, fullPath: objectKey };
 }
@@ -142,6 +222,53 @@ export function messageReferencesObject(row: Record<string, unknown>, bucket: st
   return (row.media_path === objectPath && row.media_bucket !== "post-images")
     || row.file_path === objectPath
     || row.image_path === objectPath;
+}
+
+export async function objectHasActiveReference(bucket: string, objectPath: string): Promise<boolean> {
+  if (!referencedContentBuckets.has(bucket)) return false;
+  if (bucket === "entity-logos") {
+    const logoUrl = publicStorageObjectUrl(bucket, objectPath);
+    const records = await prisma.legacyRecord.findMany({
+      where: {
+        table_name: { in: ["custom_options", "professional_experience"] },
+        data: { path: "$.logo_url", equals: logoUrl },
+      },
+      select: { table_name: true, data: true },
+    });
+    return records.some((record) => {
+      const row = record.data as Record<string, unknown>;
+      if (record.table_name === "custom_options") return !new Set(["rejected", "withdrawn"]).has(String(row.status ?? "pending").toLowerCase());
+      return !new Set(["rejected", "deleted"]).has(String(row.approval_status ?? "approved").toLowerCase()) && row.deleted_at == null;
+    });
+  }
+  if (bucket === "stories") {
+    return (await storyRecords(objectPath)).some((record) => storyIsActive(record.data as Record<string, unknown>));
+  }
+
+  const postWhere = bucket === "post-images"
+    ? { OR: [{ image_path: objectPath }, { media_path: objectPath }], deleted_at: null, is_deleted_for_everyone: false }
+    : bucket === "forum-files"
+      ? { file_path: objectPath, deleted_at: null, is_deleted_for_everyone: false }
+      : bucket === "voice-notes"
+        ? { voice_path: objectPath, deleted_at: null, is_deleted_for_everyone: false }
+        : undefined;
+  const messageFields = bucket === "voice-notes" ? ["voice_path"]
+    : bucket === "post-images" ? ["media_path"]
+      : bucket === "chat-media" ? ["media_path", "file_path", "image_path"] : [];
+  const [post, messages] = await Promise.all([
+    postWhere ? prisma.post.findFirst({ where: postWhere, select: { id: true } }) : Promise.resolve(null),
+    messageFields.length ? prisma.legacyRecord.findMany({
+      where: {
+        table_name: "messages",
+        OR: messageFields.map((field) => ({ data: { path: `$.${field}`, equals: objectPath } })),
+      },
+      select: { data: true },
+    }) : Promise.resolve([]),
+  ]);
+  return !!post || messages.some((record) => {
+    const row = record.data as Record<string, unknown>;
+    return messageReferencesObject(row, bucket, objectPath) && !isDeletedForEveryone(row);
+  });
 }
 
 async function canReadStoryObject(objectPath: string, ctx: RequestContext): Promise<boolean> {
@@ -222,29 +349,33 @@ async function canReadPrivate(bucket: string, objectPath: string, ctx: RequestCo
 }
 
 export async function createSignedUrl(bucket: string, objectPathValue: string, expiresIn: number, ctx: RequestContext): Promise<string> {
-  const objectPath = safeObjectPath(objectPathValue);
   const rules = policy(bucket);
+  const reference = await resolveObjectReference(bucket, objectPathValue);
+  const objectPath = reference.objectPath;
+  if (rules.visibility === "private" && bucket !== "verification-documents" && !ctx.auth.is_verified && !admin(ctx)) {
+    throw new ApiError(403, "verification_required", "Verified membership is required to access community files");
+  }
   if (rules.visibility === "public") return new URL(`/api/storage/public/${encodeURIComponent(bucket)}/${objectPath.split("/").map(encodeURIComponent).join("/")}`, config.APP_BASE_URL).toString();
   if (!(await canReadPrivate(bucket, objectPath, ctx))) throw new ApiError(403, "file_access_denied", "You cannot access this file");
   const ttl = Math.max(30, Math.min(expiresIn, 3600));
   const expires = Math.floor(Date.now() / 1000) + ttl;
-  const url = new URL(`/api/storage/private/${encodeURIComponent(bucket)}/${objectPath.split("/").map(encodeURIComponent).join("/")}`, config.APP_BASE_URL);
+  const url = new URL(`/api/storage/private/${encodeURIComponent(bucket)}/${reference.signedPath.split("/").map(encodeURIComponent).join("/")}`, config.APP_BASE_URL);
   url.searchParams.set("expires", String(expires));
-  url.searchParams.set("sig", signature(bucket, objectPath, expires));
+  url.searchParams.set("sig", signature(bucket, reference.signedPath, expires));
   return url.toString();
 }
 
-export function verifySignedUrl(bucket: string, objectPathValue: string, expiresValue: unknown, signatureValue: unknown): string {
-  const objectPath = safeObjectPath(objectPathValue);
+export async function verifySignedUrl(bucket: string, objectPathValue: string, expiresValue: unknown, signatureValue: unknown): Promise<string> {
+  const signedPath = safeObjectPath(objectPathValue);
   policy(bucket);
   const expires = Number(expiresValue);
   const supplied = typeof signatureValue === "string" ? signatureValue : "";
   if (!Number.isInteger(expires) || expires < Math.floor(Date.now() / 1000) || expires > Math.floor(Date.now() / 1000) + 3700) throw new ApiError(403, "signed_url_expired", "Signed URL is expired or invalid");
-  const expected = signature(bucket, objectPath, expires);
+  const expected = signature(bucket, signedPath, expires);
   const left = Buffer.from(supplied);
   const right = Buffer.from(expected);
   if (left.length !== right.length || !timingSafeEqual(left, right)) throw new ApiError(403, "invalid_signature", "Signed URL is invalid");
-  return objectPath;
+  return (await resolveObjectReference(bucket, signedPath)).objectPath;
 }
 
 export async function loadObject(bucket: string, objectPathValue: string, requirePublic: boolean): Promise<{ bytes: Buffer; mime: string; name: string }> {
@@ -270,9 +401,17 @@ export async function removeObjects(bucket: string, paths: string[], ctx: Reques
     const metadata = await prisma.fileObject.findUnique({ where: { object_key: `${bucket}/${objectPath}` } });
     if (!metadata || metadata.deleted_at) continue;
     if (metadata.uploaded_by !== ctx.auth.id && !admin(ctx)) throw new ApiError(403, "file_access_denied", "You cannot remove this file");
+    if (await objectHasActiveReference(bucket, objectPath)) {
+      throw new ApiError(409, "object_in_use", "Attached content cannot be deleted; delete the content first");
+    }
     if (bucket === "verification-documents") {
-      const submissions = await prisma.legacyRecord.findMany({ where: { table_name: "document_verifications", owner_id: metadata.uploaded_by }, take: 100 });
-      if (submissions.some((record) => { const row = record.data as Record<string, unknown>; return row.document_path === objectPath && row.status === "approved"; })) throw new ApiError(409, "verification_evidence_locked", "Approved verification evidence cannot be deleted");
+      const submissions = await prisma.legacyRecord.findMany({ where: {
+        table_name: "document_verifications",
+        data: { path: "$.document_path", equals: objectPath },
+      }, select: { data: true } });
+      if (submissions.some((record) => verificationEvidenceIsLocked(record.data as Record<string, unknown>, objectPath))) {
+        throw new ApiError(409, "verification_evidence_locked", "Verification evidence under review or already approved cannot be deleted");
+      }
     }
     try { await unlink(diskPath(bucket, objectPath)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     await prisma.fileObject.update({ where: { id: metadata.id }, data: { status: "deleted", deleted_at: new Date() } });

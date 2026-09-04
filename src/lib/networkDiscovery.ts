@@ -33,7 +33,7 @@ export const resolveNetworkTab = (pathname: string, requestedTab: string | null)
 };
 
 export const networkSearchTerms = (search: string): string[] =>
-  search.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  search.normalize("NFKC").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(/\s+/).filter(Boolean);
 
 const searchableValues = (member: NetworkMember): unknown[] => [
   member.name,

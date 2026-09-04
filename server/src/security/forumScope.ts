@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 
 export interface ForumScope { scope_type: string; scope_key: string }
@@ -24,13 +25,21 @@ export function trustedForumIdentity(profile: Row | null, affiliation: Row | und
   };
 }
 
-export async function allowedForumScopes(userId: string, verified: boolean, role: string): Promise<ForumScope[]> {
+type ForumScopeClient = Pick<Prisma.TransactionClient, "profile" | "legacyRecord">;
+
+export async function allowedForumScopes(
+  userId: string,
+  verified: boolean,
+  role: string,
+  client: ForumScopeClient = prisma,
+): Promise<ForumScope[]> {
   if (!verified && role !== "admin" && role !== "owner") return [];
   const [profile, affiliations, educationRecords] = await Promise.all([
-    prisma.profile.findUnique({ where: { user_id: userId } }),
-    prisma.legacyRecord.findMany({ where: { table_name: "verified_academic_affiliations", owner_id: userId }, take: 20 }),
-    prisma.legacyRecord.findMany({ where: { table_name: "education", owner_id: userId }, orderBy: { created_at: "desc" }, take: 20 }),
+    client.profile.findUnique({ where: { user_id: userId } }),
+    client.legacyRecord.findMany({ where: { table_name: "verified_academic_affiliations", owner_id: userId }, take: 20 }),
+    client.legacyRecord.findMany({ where: { table_name: "education", owner_id: userId }, orderBy: { created_at: "desc" }, take: 20 }),
   ]);
+  if (role !== "admin" && role !== "owner" && !profile?.is_verified) return [];
   const affiliation = affiliations.map((record) => record.data as Row).find((row) => row.verification_status === "VERIFIED");
   const identity = trustedForumIdentity(profile as unknown as Row | null, affiliation, educationRecords.map((record) => record.data as Row));
   const { network, institute, degree, specialisation, year } = identity;
@@ -53,8 +62,15 @@ export async function allowedForumScopes(userId: string, verified: boolean, role
   return result;
 }
 
-export async function canUseForumScope(userId: string, verified: boolean, role: string, type: string, key: string): Promise<boolean> {
+export async function canUseForumScope(
+  userId: string,
+  verified: boolean,
+  role: string,
+  type: string,
+  key: string,
+  client: ForumScopeClient = prisma,
+): Promise<boolean> {
   if (role === "admin" || role === "owner") return /^[A-Z_]{2,40}$/.test(type) && key.length > 0 && key.length <= 255;
-  const scopes = await allowedForumScopes(userId, verified, role);
+  const scopes = await allowedForumScopes(userId, verified, role, client);
   return scopes.some((scope) => scope.scope_type === type.toUpperCase() && scope.scope_key === key);
 }

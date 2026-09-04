@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, CalendarDays, Check, ExternalLink, Globe2, Loader2, Pencil, Plus, Radar, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -165,15 +165,27 @@ const AdminEvents = () => {
       const { data, error } = await supabase.functions.invoke("scan-events", { body: { action: "status" } });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
-      return data as { configured_providers?: Array<keyof typeof MODEL_DEFAULTS>; openai_web_discovery?: boolean };
+      return data as {
+        configured_providers?: Array<keyof typeof MODEL_DEFAULTS>;
+        default_models?: Partial<Record<keyof typeof MODEL_DEFAULTS, string>>;
+        openai_web_discovery?: boolean;
+        openai_web_discovery_reason?: string | null;
+      };
     },
     enabled: !!user,
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
-  const configuredProviders = scannerStatus?.configured_providers || [];
+  const configuredProviders = useMemo(() => scannerStatus?.configured_providers || [], [scannerStatus?.configured_providers]);
   const scannerReady = configuredProviders.length > 0;
   const selectedProviderReady = configuredProviders.includes(provider);
+
+  useEffect(() => {
+    if (!scannerReady || selectedProviderReady) return;
+    const next = configuredProviders[0];
+    setProvider(next);
+    setModel(scannerStatus?.default_models?.[next] || MODEL_DEFAULTS[next]);
+  }, [configuredProviders, scannerReady, scannerStatus?.default_models, selectedProviderReady]);
 
   const saveEvent = useMutation({
     mutationFn: async (publish: boolean) => {
@@ -245,20 +257,24 @@ const AdminEvents = () => {
     mutationFn: async () => {
       let imported = 0;
       const failures: string[] = [];
-      for (const iit of IIT_LIST) {
-        const { data, error } = await supabase.functions.invoke("scan-events", {
-          body: {
-            action: "discover",
-            model: MODEL_DEFAULTS.openai,
-            source_iit: iit.name,
-            publish_mode: "draft",
-            audience: emptyAudience(),
-            instructions: "Keep only important future institute events with a confirmed date and official source page.",
-          },
-        });
-        if (error || data?.error) failures.push(iit.name);
-        else imported += Number(data.imported || 0);
-      }
+      if (!scannerStatus?.openai_web_discovery) throw new Error(scannerStatus?.openai_web_discovery_reason || "Grounded OpenAI discovery is not configured.");
+      let cursor = 0;
+      await Promise.all(Array.from({ length: 3 }, async () => {
+        while (cursor < IIT_LIST.length) {
+          const iit = IIT_LIST[cursor++];
+          const { data, error } = await supabase.functions.invoke("scan-events", {
+            body: {
+              action: "discover",
+              source_iit: iit.name,
+              publish_mode: "draft",
+              audience: emptyAudience(),
+              instructions: "Keep only important future institute events with a confirmed date and an official cited source page.",
+            },
+          });
+          if (error || data?.error) failures.push(iit.name);
+          else imported += Number(data.imported || 0);
+        }
+      }));
       return { imported, failures };
     },
     onSuccess: ({ imported, failures }) => {
@@ -314,12 +330,13 @@ const AdminEvents = () => {
             <p className="text-xs text-muted-foreground mt-1">Find high-value IIT events, create reviewable drafts, and publish with institute-aware ranking.</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" className="flex-1 sm:flex-none rounded-xl" onClick={() => setShowScanner(true)}><Bot className="w-4 h-4" /> AI Generate</Button>
+            <Button variant="outline" className="flex-1 sm:flex-none rounded-xl" onClick={() => setShowScanner(true)}><Bot className="w-4 h-4" /> Extract URLs</Button>
             <Button variant="outline" className="flex-1 sm:flex-none rounded-xl" disabled={discoverAllIits.isPending || !scannerStatus?.openai_web_discovery} onClick={() => discoverAllIits.mutate()}>{discoverAllIits.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Radar className="w-4 h-4" />} Scan all 23 IITs</Button>
             <Button className="flex-1 sm:flex-none rounded-xl" onClick={() => { setForm(emptyEvent()); setShowEditor(true); }}><Plus className="w-4 h-4" /> Add manually</Button>
           </div>
         </div>
         {!isScannerStatusLoading && !scannerReady && <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-[11px] leading-relaxed text-amber-800 dark:text-amber-200"><span className="font-bold">Connect an AI provider once:</span> add its API key to the protected Node API environment and redeploy the API. OpenAI or Gemini then extracts listings from the trusted source URLs you provide; keys are never exposed to browsers.</div>}
+        {!isScannerStatusLoading && scannerReady && !scannerStatus?.openai_web_discovery && <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-[11px] leading-relaxed text-amber-800 dark:text-amber-200"><span className="font-bold">Explicit URL extraction is ready.</span> Scan-all discovery remains unavailable: {scannerStatus?.openai_web_discovery_reason || "a supported OpenAI web-search model is not configured"}.</div>}
         {scannerReady && <div className="mt-4 flex items-center gap-2 rounded-xl bg-emerald-500/10 px-3 py-2 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300"><ShieldCheck className="h-4 w-4" /> Connected: {configuredProviders.join(", ")}. AI imports drafts only; an admin remains the publishing gate.</div>}
         <div className="grid grid-cols-3 gap-2 mt-4">
           {["draft", "published", "archived"].map((status) => <div key={status} className="rounded-xl bg-secondary/55 p-3 text-center"><p className="text-lg font-bold">{events.filter((event) => event.status === status).length}</p><p className="text-[10px] uppercase tracking-wide text-muted-foreground">{status}</p></div>)}
@@ -337,7 +354,7 @@ const AdminEvents = () => {
               <div className="w-12 h-12 rounded-xl bg-primary/10 text-primary flex flex-col items-center justify-center shrink-0"><span className="text-[10px] font-bold uppercase">{format(new Date(event.start_time), "MMM")}</span><span className="text-lg font-black leading-none">{format(new Date(event.start_time), "d")}</span></div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2"><div><h4 className="text-sm font-bold text-foreground">{event.title}</h4><p className="text-[11px] text-muted-foreground mt-0.5">{format(new Date(event.start_time), "EEE, MMM d · h:mm a")}{event.location ? ` · ${event.location}` : ""}</p></div><span className={`text-[9px] uppercase tracking-wide px-2 py-1 rounded-full font-bold ${event.status === "published" ? "bg-emerald-500/10 text-emerald-600" : event.status === "draft" ? "bg-amber-500/10 text-amber-600" : "bg-muted text-muted-foreground"}`}>{event.status}</span></div>
-                <div className="mt-2 flex flex-wrap items-center gap-2">{event.source_iit && <span className="text-[9px] rounded-full bg-primary/10 text-primary px-2 py-0.5 font-bold">{event.source_iit}</span>}<AudienceSummary event={event} />{event.source_type === "scan" && <span className="text-[9px] rounded-full bg-violet-500/10 text-violet-600 px-2 py-0.5 font-bold">AI draft</span>}</div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">{event.source_iit && <span className="text-[9px] rounded-full bg-primary/10 text-primary px-2 py-0.5 font-bold">{event.source_iit}</span>}<AudienceSummary event={event} />{["scan", "ai_scan"].includes(event.source_type || "") && <span className="text-[9px] rounded-full bg-violet-500/10 text-violet-600 px-2 py-0.5 font-bold">AI draft</span>}</div>
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-border/60">
@@ -366,14 +383,14 @@ const AdminEvents = () => {
       </div></div></div>}
 
       {showScanner && <div className="fixed inset-0 z-[80] bg-background/80 backdrop-blur-sm flex items-end sm:items-center justify-center"><div className="bg-card w-full max-w-xl rounded-t-3xl sm:rounded-3xl border border-border max-h-[92dvh] overflow-y-auto shadow-2xl"><div className="sticky top-0 bg-card/95 backdrop-blur-xl border-b border-border px-5 py-4 flex items-center justify-between z-10"><div><h3 className="font-bold flex items-center gap-2"><Sparkles className="w-5 h-5 text-primary" /> AI Event Studio</h3><p className="text-[11px] text-muted-foreground">Scan official sources. AI creates drafts; you decide what goes live.</p></div><button onClick={() => setShowScanner(false)} className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center"><X className="w-4 h-4" /></button></div><div className="p-5 space-y-4">
-        <div className="grid grid-cols-2 gap-3"><div><Label>Provider</Label><select value={provider} onChange={(event) => { const next = event.target.value as keyof typeof MODEL_DEFAULTS; setProvider(next); setModel(MODEL_DEFAULTS[next]); }} className="mt-1 w-full h-11 rounded-xl border border-border bg-background px-3 text-sm"><option value="gemini">Gemini</option><option value="openai">OpenAI</option></select></div><div><Label>Model</Label><Input value={model} onChange={(event) => setModel(event.target.value)} className="mt-1 h-11 rounded-xl" /></div></div>
+        <div className="grid grid-cols-2 gap-3"><div><Label>Provider</Label><select value={provider} disabled={!scannerReady} onChange={(event) => { const next = event.target.value as keyof typeof MODEL_DEFAULTS; setProvider(next); setModel(scannerStatus?.default_models?.[next] || MODEL_DEFAULTS[next]); }} className="mt-1 w-full h-11 rounded-xl border border-border bg-background px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60">{scannerReady ? configuredProviders.map((item) => <option key={item} value={item}>{item === "gemini" ? "Gemini" : "OpenAI"}</option>) : <option value={provider}>No provider configured</option>}</select></div><div><Label>Model</Label><Input value={model} onChange={(event) => setModel(event.target.value)} disabled={!scannerReady} className="mt-1 h-11 rounded-xl" /></div></div>
         <div><Label>Source institute</Label><select value={sourceIit} onChange={(event) => setSourceIit(event.target.value)} className="mt-1 w-full h-11 rounded-xl border border-border bg-background px-3 text-sm"><option value="">Multiple IITs / national source</option>{IIT_LIST.map((iit) => <option key={iit.name} value={iit.name}>{iit.name}</option>)}</select><p className="text-[10px] text-muted-foreground mt-1">Choose the IIT whose official pages you are scanning. Its events stay together and rank first for that IIT’s members.</p></div>
         <div><Label>Source URLs *</Label><Textarea rows={5} value={sourceUrls} onChange={(event) => setSourceUrls(event.target.value)} placeholder={"https://home.iitd.ac.in/events\nhttps://ecell.example.org/calendar"} className="mt-1 rounded-xl font-mono text-xs" /><p className="text-[10px] text-muted-foreground mt-1">One public HTTPS page or JSON feed per line. Maximum 10 sources per scan.</p></div>
         <div><div className="flex items-center justify-between gap-2"><Label>Editorial focus</Label><span className="text-[10px] text-muted-foreground">Tap to add</span></div><div className="flex gap-1.5 overflow-x-auto py-2">{EVENT_CRITERIA_PRESETS.map(([label, value]) => <button key={label} type="button" onClick={() => setInstructions((current) => current.includes(value) ? current : `${current}${current ? "\n" : ""}${value}`)} className="shrink-0 rounded-full border border-border bg-background px-3 py-1.5 text-[10px] font-semibold text-muted-foreground hover:border-primary hover:text-primary">{label}</button>)}</div><Textarea rows={3} maxLength={2000} value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="Example: include only entrepreneurship events with open registrations" className="rounded-xl" /></div>
         <AudiencePicker value={scanAudience} onChange={setScanAudience} />
         <div className="rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-300 p-3 text-[11px] leading-relaxed">Scanned results are never published automatically. Dates, links and audience must be reviewed by an admin first.</div>
         {!selectedProviderReady && <p className="rounded-xl bg-amber-500/10 p-3 text-[11px] text-amber-800 dark:text-amber-200">{provider === "gemini" ? "Add GEMINI_API_KEY to the protected Node API environment to enable Gemini." : `${provider} is not configured in the Node API environment.`}</p>}
-        <Button className="w-full h-12 rounded-xl" disabled={scanEvents.isPending || !model.trim() || !sourceUrls.trim() || !selectedProviderReady} onClick={() => scanEvents.mutate()}>{scanEvents.isPending ? <><Loader2 className="w-4 h-4 animate-spin" /> Reading and extracting events…</> : <><Sparkles className="w-4 h-4" /> Search, extract and import drafts</>}</Button>
+        <Button className="w-full h-12 rounded-xl" disabled={scanEvents.isPending || !model.trim() || !sourceUrls.trim() || !selectedProviderReady} onClick={() => scanEvents.mutate()}>{scanEvents.isPending ? <><Loader2 className="w-4 h-4 animate-spin" /> Reading and extracting events…</> : <><Sparkles className="w-4 h-4" /> Read, extract and import drafts</>}</Button>
       </div></div></div>}
     </div>
   );

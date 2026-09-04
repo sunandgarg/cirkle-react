@@ -115,6 +115,14 @@ describe("forum burst and isolation simulation", () => {
     expect(next[0].myReactions).toEqual(["👍"]);
   });
 
+  it("does not create a partial ghost post when a reaction update races initial history", () => {
+    const scope = { type: "GLOBAL", key: "IIT_ALL" };
+    expect(applyForumRealtimeBatch([], [{
+      eventType: "UPDATE",
+      new: { id: "not-loaded", scope_type: scope.type, scope_key: scope.key, reactions: { "👍": 2 } },
+    }], scope)).toEqual([]);
+  });
+
   it("keeps a 1,500-message IIT Delhi MBA General 2026 conversation ordered and threads isolated", () => {
     const scope = { type: "COHORT", key: "IIT_DELHI|MBA|GENERAL|2026" };
     const rootEvents = Array.from({ length: 1_200 }, (_, sequence) => ({

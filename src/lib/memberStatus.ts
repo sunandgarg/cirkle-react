@@ -6,12 +6,13 @@ export const graduationYear = (value?: string | number | null) => {
 export const shouldBeAlumni = (passingYear?: string | number | null, asOf = new Date()) => {
   const year = graduationYear(passingYear);
   if (!year) return false;
-  const transition = new Date(year, 6, 1);
-  transition.setHours(0, 0, 0, 0);
-  return asOf.getTime() >= transition.getTime();
+  // Membership follows the Cirkle community calendar, not the browser's
+  // local timezone. India midnight on 1 July is 18:30 UTC on 30 June.
+  const ist = new Date(asOf.getTime() + 5.5 * 60 * 60_000);
+  const cutoffYear = ist.getUTCMonth() >= 6 ? ist.getUTCFullYear() : ist.getUTCFullYear() - 1;
+  return year <= cutoffYear;
 };
 
 export const effectiveMemberStatus = (status?: string | null, passingYear?: string | number | null, asOf = new Date()) => (
   status === "current_student" && shouldBeAlumni(passingYear, asOf) ? "alumni" : status
 );
-

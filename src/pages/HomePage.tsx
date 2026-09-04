@@ -405,7 +405,7 @@ const HomePage = () => {
         .eq("post_id", expandedComments)
         .order("created_at", { ascending: true });
       if (!data?.length) return [];
-      const authorIds = [...new Set(data.map((c) => c.author_id))];
+      const authorIds = [...new Set(data.flatMap((c) => typeof c.author_id === "string" ? [c.author_id] : []))];
       const { data: profiles } = await supabase
         .from("profiles")
         .select("user_id, name, avatar_url, slug")
@@ -1491,7 +1491,10 @@ const CommentBubble = ({ comment, onReply }: { comment: any; onReply: () => void
   return (
     <div className="flex gap-2">
       <button
-        onClick={() => navigate(comment.profile?.slug ? `/u/${comment.profile.slug}` : `/profile/${comment.author_id}`)}
+        onClick={() => {
+          if (comment.author_id) navigate(comment.profile?.slug ? `/u/${comment.profile.slug}` : `/profile/${comment.author_id}`);
+        }}
+        disabled={!comment.author_id}
         className="flex-shrink-0"
       >
         {comment.profile?.avatar_url ? (
@@ -1504,8 +1507,8 @@ const CommentBubble = ({ comment, onReply }: { comment: any; onReply: () => void
       </button>
       <div className="flex-1">
         <div className="bg-secondary rounded-xl px-3 py-2">
-          <p className="text-xs font-semibold text-foreground">{comment.profile?.name || "User"}</p>
-          <p className="text-xs text-foreground/80 mt-0.5">{comment.content}</p>
+          <p className="text-xs font-semibold text-foreground">{comment.author_id ? (comment.profile?.name || "User") : "Deleted member"}</p>
+          <p className="text-xs text-foreground/80 mt-0.5">{comment.content || "Comment deleted"}</p>
         </div>
         <div className="flex gap-3 mt-0.5 px-1">
           <span className="text-[10px] text-muted-foreground">

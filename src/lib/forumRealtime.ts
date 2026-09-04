@@ -111,6 +111,7 @@ export const applyForumRealtimeBatch = <T extends Record<string, any>>(
     }
 
     const existing = postsById.get(row.id);
+    if (event.eventType === "UPDATE" && !existing) continue;
     postsById.set(row.id, existing ? { ...existing, ...row } : row);
   }
 

@@ -29,6 +29,7 @@ const Admin = lazy(() => import("@/pages/Admin"));
 const Blogs = lazy(() => import("@/pages/Blogs"));
 const BlogAuthor = lazy(() => import("@/pages/BlogAuthor"));
 const NotFound = lazy(() => import("@/pages/NotFound"));
+const Notifications = lazy(() => import("@/pages/Notifications"));
 
 // ─── Loading fallback ───
 const PageLoader = () => (
@@ -119,6 +120,7 @@ const App = () => (
                   <Route path="/blogs" element={<Blogs />} />
                   <Route path="/blogs/author/:authorId" element={<BlogAuthor />} />
                   <Route path="/blogs/:slug" element={<Blogs />} />
+                  <Route path="/notifications" element={<Notifications />} />
 
                 </Route>
 

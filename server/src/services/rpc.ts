@@ -7,17 +7,29 @@ import { keyedHash, newId } from "../security/crypto.js";
 import { emitDbChange } from "../realtime/events.js";
 import { writeAudit } from "./audit.js";
 import { allowedForumScopes, canUseForumScope, forumSegment } from "../security/forumScope.js";
-import { enrichForumPosts, hiddenForumPostIds } from "./forum.js";
+import { enrichForumPosts, forumPostMediaHandles, hiddenForumPostIds, redactAnonymousPostForViewer } from "./forum.js";
 import { contentTombstone } from "../security/tombstone.js";
 import { normalizeHttpUrl, normalizeSocialLinks, serializeProfile } from "./profile.js";
 import { instituteDomains } from "./functions.js";
 import { assertOwnedReadyObject } from "./storage.js";
 import { applyProfileEntryModeration, moderationReferenceDefinitions, type CatalogOption, type ModeratedProfileTable } from "./moderation.js";
+import { forumAppSyncChannels, isCanonicalRealtimeRecordId } from "../realtime/appsyncChannels.js";
+import { createForumPostsWithSlowMode } from "./forumSlowMode.js";
+import { activeDailyRoomNamesForUser, closeDailySessionsForRooms, revokeDailyUserRooms, type ClosedDailySessions } from "./daily.js";
 
 type Args = Record<string, unknown>;
 type Row = Record<string, unknown>;
 const nowIso = (): string => new Date().toISOString();
 const isAdmin = (ctx: RequestContext): boolean => ctx.auth.role === "admin" || ctx.auth.role === "owner";
+
+function emitClosedDailySessions(closed: ClosedDailySessions, actorId: string): void {
+  for (const row of closed.participants) {
+    emitDbChange({ table: "call_participants", event: "UPDATE", row, actor_id: actorId, room: `room-${String(row.room_id ?? "")}` });
+  }
+  for (const row of closed.sessions) {
+    emitDbChange({ table: "call_sessions", event: "UPDATE", row, actor_id: actorId, room: `room-${String(row.room_id ?? "")}` });
+  }
+}
 
 interface VerifiedAffiliationInput {
   userId: string;
@@ -74,6 +86,20 @@ async function legacyRows(table: string, limit = 2000): Promise<Array<Row & { __
   return records.map((record) => ({ ...(record.data as Row), __legacy_id: record.id }));
 }
 
+async function legacyRowsForUser(table: string, userId: string): Promise<Array<Row & { __legacy_id: string }>> {
+  const records = await prisma.legacyRecord.findMany({
+    where: {
+      table_name: table,
+      OR: [
+        { owner_id: userId },
+        { data: { path: "$.user_id", equals: userId } },
+      ],
+    },
+    orderBy: { created_at: "desc" },
+  });
+  return records.map((record) => ({ ...(record.data as Row), __legacy_id: record.id }));
+}
+
 async function legacyRowsByJsonValues(table: string, column: string, values: string[]): Promise<Array<Row & { __legacy_id: string }>> {
   const unique = [...new Set(values.filter(Boolean))];
   if (!unique.length) return [];
@@ -106,8 +132,28 @@ async function replaceLegacy(table: string, legacyId: string, row: Row, actorId?
   return output;
 }
 
-async function notify(userId: string, title: string, message: string, type: string, link?: string): Promise<void> {
-  await createLegacy("notifications", { user_id: userId, title, message, type, link: link ?? null, is_read: false }, userId);
+function notificationRecord(userId: string, title: string, message: string, type: string, link?: string, extra: Row = {}) {
+  const row: Row = {
+    id: newId(), user_id: userId, title, message, type, link: link ?? null, is_read: false,
+    ...extra, created_at: nowIso(), updated_at: nowIso(),
+  };
+  return {
+    row,
+    data: {
+      table_name: "notifications", record_id: String(row.id), owner_id: userId,
+      data: row as Prisma.InputJsonValue,
+    },
+  };
+}
+
+function emitNotification(row: Row, actorId?: string): void {
+  emitDbChange({ table: "notifications", event: "INSERT", row, actor_id: actorId, audience_ids: [String(row.user_id)] });
+}
+
+async function notify(userId: string, title: string, message: string, type: string, link?: string, extra: Row = {}): Promise<void> {
+  const notification = notificationRecord(userId, title, message, type, link, extra);
+  await prisma.legacyRecord.create({ data: notification.data });
+  emitNotification(notification.row);
 }
 
 async function profileFor(userId: string) {
@@ -127,7 +173,7 @@ async function profileState(ctx: RequestContext): Promise<Row | null> {
 }
 
 async function academicIdentity(ctx: RequestContext): Promise<Row | null> {
-  const affiliations = await legacyRows("verified_academic_affiliations");
+  const affiliations = await legacyRowsForUser("verified_academic_affiliations", ctx.auth.id);
   return affiliations.find((row) => row.user_id === ctx.auth.id && row.verification_status === "VERIFIED") ?? null;
 }
 
@@ -165,10 +211,18 @@ async function completeOnboarding(args: Args, ctx: RequestContext): Promise<stri
   if (suppliedPhone && !/^\+[0-9]{1,4}$/.test(suppliedCountry)) throw new ApiError(400, "invalid_country_code", "Choose a valid country code");
   try {
     return await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM users WHERE id = ${ctx.auth.id} LIMIT 1 FOR UPDATE`);
+      await tx.$queryRaw(Prisma.sql`SELECT user_id FROM profiles WHERE user_id = ${ctx.auth.id} LIMIT 1 FOR UPDATE`);
       const profile = await tx.profile.findUnique({ where: { user_id: ctx.auth.id } });
       if (!profile?.is_verified || profile.iit_name?.trim().toLowerCase() !== iit.toLowerCase()
         || !new Set(["current_student", "alumni"]).has(profile.student_status ?? "")) {
         throw new ApiError(403, "verified_identity_required", "Verified institute identity required");
+      }
+      if (profile.verification_revoked_at) {
+        throw new ApiError(403, "verification_revoked", "Your institute verification was revoked by an administrator");
+      }
+      if (profile.onboarding_completed) {
+        throw new ApiError(409, "onboarding_already_completed", "Verified academic onboarding can only be completed once");
       }
       const phoneDigits = suppliedPhone || profile.phone_number || "";
       const country = suppliedCountry || profile.phone_country_code || "";
@@ -176,6 +230,17 @@ async function completeOnboarding(args: Args, ctx: RequestContext): Promise<stri
       const phone = `${country}${phoneDigits}`;
 
       const educationRecords = await tx.legacyRecord.findMany({ where: { table_name: "education", owner_id: ctx.auth.id }, orderBy: { created_at: "desc" }, take: 100 });
+      const trustedEducation = educationRecords.map((record) => record.data as Row).find((row) => row.is_verified === true
+        && (row.approval_status === "approved" || row.approval_status == null));
+      if (trustedEducation) {
+        const matchesTrusted = String(trustedEducation.institution ?? "").trim().toLowerCase() === iit.toLowerCase()
+          && String(trustedEducation.degree ?? "").trim().toLowerCase() === degree.toLowerCase()
+          && String(trustedEducation.branch_area ?? "").trim().toLowerCase() === specialisation.toLowerCase()
+          && String(trustedEducation.passing_year ?? "").trim() === year;
+        if (!matchesTrusted) {
+          throw new ApiError(409, "verified_academic_identity_conflict", "Existing verified academic details require administrator review before they can be changed");
+        }
+      }
       const existingEducation = educationRecords.find((record) => String((record.data as Row).institution ?? "").trim().toLowerCase() === iit.toLowerCase());
       const educationId = existingEducation ? String((existingEducation.data as Row).id) : newId();
       const education: Row = {
@@ -235,6 +300,36 @@ async function completeOnboarding(args: Args, ctx: RequestContext): Promise<stri
 
 const pairKey = (a: string, b: string): string => [a, b].sort().join(":");
 
+export const CONNECTION_WEEKLY_LIMIT = 50;
+export const CONNECTION_PENDING_LIMIT = 100;
+export const CONNECTION_RETRY_COOLDOWN_MS = 21 * 24 * 60 * 60_000;
+
+export function assertConnectionRequestPolicy(input: {
+  recentInvitationCount: number;
+  pendingInvitationCount: number;
+  existing?: { status: string; created_at: Date } | null;
+  now?: Date;
+}): void {
+  if (input.recentInvitationCount >= CONNECTION_WEEKLY_LIMIT) {
+    throw new ApiError(429, "connection_weekly_limit", "Weekly invitation limit reached. Try again later");
+  }
+  if (input.pendingInvitationCount >= CONNECTION_PENDING_LIMIT) {
+    throw new ApiError(429, "connection_pending_limit", "Resolve outstanding invitations before sending more");
+  }
+  if (input.existing?.status === "accepted") throw new ApiError(409, "connection_exists", "You are already connected");
+  if (input.existing?.status === "pending") throw new ApiError(409, "connection_exists", "A connection request is already pending");
+  if (input.existing) {
+    const now = input.now ?? new Date();
+    const retryAt = new Date(input.existing.created_at.getTime() + CONNECTION_RETRY_COOLDOWN_MS);
+    if (retryAt > now) {
+      throw new ApiError(429, "connection_retry_cooldown", "Wait 21 days before inviting this member again", {
+        retry_after_seconds: Math.ceil((retryAt.getTime() - now.getTime()) / 1000),
+        retry_after_at: retryAt.toISOString(),
+      });
+    }
+  }
+}
+
 async function sendConnection(args: Args, ctx: RequestContext) {
   await requireVerified(ctx);
   const peerId = text(args, "p_receiver_id", { required: true });
@@ -242,45 +337,123 @@ async function sendConnection(args: Args, ctx: RequestContext) {
   const peer = await prisma.profile.findUnique({ where: { user_id: peerId } });
   if (!peer?.is_verified || peer.community_id !== ctx.auth.community_id) throw new ApiError(404, "member_not_found", "The member is unavailable");
   const key = pairKey(ctx.auth.id, peerId);
-  const existing = await prisma.connection.findUnique({ where: { pair_key: key } });
-  if (existing?.status === "pending" || existing?.status === "accepted") throw new ApiError(409, "connection_exists", "A connection already exists");
-  const connection = existing
-    ? await prisma.connection.update({ where: { id: existing.id }, data: { requester_id: ctx.auth.id, receiver_id: peerId, status: "pending", note: text(args, "p_note", { max: 200 }) || null, responded_at: null } })
-    : await prisma.connection.create({ data: { requester_id: ctx.auth.id, receiver_id: peerId, pair_key: key, note: text(args, "p_note", { max: 200 }) || null } });
-  await notify(peerId, "New connection request", "A community member sent you a connection request.", "connection", "/network");
-  emitDbChange({ table: "connections", event: existing ? "UPDATE" : "INSERT", row: connection as unknown as Row, actor_id: ctx.auth.id });
-  return connection;
+  const note = text(args, "p_note", { max: 200 }) || null;
+  const sender = await profileFor(ctx.auth.id);
+  const result = await prisma.$transaction(async (tx) => {
+    const [firstUserId, secondUserId] = [ctx.auth.id, peerId].sort();
+    await tx.$queryRaw(Prisma.sql`SELECT id FROM users WHERE id = ${firstUserId} FOR UPDATE`);
+    await tx.$queryRaw(Prisma.sql`SELECT id FROM users WHERE id = ${secondUserId} FOR UPDATE`);
+    const now = new Date();
+    const [recentInvitationCount, pendingInvitationCount, existing] = await Promise.all([
+      tx.connection.count({ where: { requester_id: ctx.auth.id, created_at: { gt: new Date(now.getTime() - 7 * 24 * 60 * 60_000) } } }),
+      tx.connection.count({ where: { requester_id: ctx.auth.id, status: "pending" } }),
+      tx.connection.findUnique({ where: { pair_key: key } }),
+    ]);
+    assertConnectionRequestPolicy({ recentInvitationCount, pendingInvitationCount, existing, now });
+    const connection = existing
+      ? await tx.connection.update({ where: { id: existing.id }, data: {
+        requester_id: ctx.auth.id, receiver_id: peerId, status: "pending", note, responded_at: null, created_at: now,
+      } })
+      : await tx.connection.create({ data: { requester_id: ctx.auth.id, receiver_id: peerId, pair_key: key, note, created_at: now } });
+    const notification = notificationRecord(
+      peerId,
+      "New connection request",
+      `${sender?.name?.trim() || "A Cirkle member"} would like to connect with you.`,
+      "connection_request",
+      "/network?tab=pending",
+      { entity_id: connection.id },
+    );
+    await tx.legacyRecord.create({ data: notification.data });
+    return { connection, notification: notification.row, event: existing ? "UPDATE" as const : "INSERT" as const };
+  });
+  emitNotification(result.notification, ctx.auth.id);
+  emitDbChange({ table: "connections", event: result.event, row: result.connection as unknown as Row, actor_id: ctx.auth.id });
+  return result.connection;
 }
 
 async function respondConnection(args: Args, ctx: RequestContext) {
+  await requireVerified(ctx);
   const id = text(args, "p_connection_id") || text(args, "p_request_id", { required: true });
   const action = args.p_accept === true ? "accept" : args.p_accept === false ? "decline" : text(args, "p_action", { required: true }).toLowerCase();
   const status = action === "accept" || action === "accepted" ? "accepted" : action === "decline" || action === "declined" || action === "reject" ? "declined" : "";
   if (!status) throw new ApiError(400, "invalid_connection_action", "Action must be accept or decline");
-  const row = await prisma.connection.findUnique({ where: { id } });
-  if (!row || row.receiver_id !== ctx.auth.id || row.status !== "pending") throw new ApiError(404, "connection_not_pending", "Pending connection not found");
-  const updated = await prisma.connection.update({ where: { id }, data: { status, responded_at: new Date() } });
-  if (status === "accepted") await notify(row.requester_id, "Connection accepted", "Your connection request was accepted.", "connection", "/network");
-  emitDbChange({ table: "connections", event: "UPDATE", row: updated as unknown as Row, actor_id: ctx.auth.id });
-  return updated;
+  const receiver = await profileFor(ctx.auth.id);
+  const result = await prisma.$transaction(async (tx) => {
+    const changed = await tx.connection.updateMany({
+      where: { id, receiver_id: ctx.auth.id, status: "pending" },
+      data: { status, responded_at: new Date() },
+    });
+    if (changed.count !== 1) throw new ApiError(404, "connection_not_pending", "Pending connection not found");
+    const updated = await tx.connection.findUnique({ where: { id } });
+    if (!updated) throw new ApiError(404, "connection_not_pending", "Pending connection not found");
+    const accepted = status === "accepted";
+    const notification = notificationRecord(
+      updated.requester_id,
+      accepted ? "Connection request accepted" : "Connection request declined",
+      `${receiver?.name?.trim() || "A Cirkle member"} ${accepted ? "accepted" : "declined"} your connection request.`,
+      "connection_response",
+      accepted ? "/network?tab=connected" : "/network?tab=pending",
+      { entity_id: updated.id, connection_status: status },
+    );
+    await tx.legacyRecord.create({ data: notification.data });
+    return { updated, notification: notification.row };
+  });
+  emitNotification(result.notification, ctx.auth.id);
+  emitDbChange({ table: "connections", event: "UPDATE", row: result.updated as unknown as Row, actor_id: ctx.auth.id });
+  return result.updated;
 }
 
 async function withdrawConnection(args: Args, ctx: RequestContext) {
+  await requireVerified(ctx);
   const id = text(args, "p_connection_id") || text(args, "p_request_id", { required: true });
-  const row = await prisma.connection.findUnique({ where: { id } });
-  if (!row || row.requester_id !== ctx.auth.id || row.status !== "pending") throw new ApiError(404, "connection_not_pending", "Pending connection not found");
-  const updated = await prisma.connection.update({ where: { id }, data: { status: "withdrawn", responded_at: new Date() } });
-  emitDbChange({ table: "connections", event: "UPDATE", row: updated as unknown as Row, actor_id: ctx.auth.id });
-  return updated;
+  const result = await prisma.$transaction(async (tx) => {
+    const changed = await tx.connection.updateMany({
+      where: { id, requester_id: ctx.auth.id, status: "pending" },
+      data: { status: "withdrawn", responded_at: new Date() },
+    });
+    if (changed.count !== 1) throw new ApiError(404, "connection_not_pending", "Pending connection not found");
+    const updated = await tx.connection.findUnique({ where: { id } });
+    if (!updated) throw new ApiError(404, "connection_not_pending", "Pending connection not found");
+    const candidates = await tx.legacyRecord.findMany({ where: {
+      table_name: "notifications", owner_id: updated.receiver_id,
+      data: { path: "$.entity_id", equals: id },
+    } });
+    const removed = candidates.filter((record) => {
+      const row = record.data as Row;
+      return row.type === "connection_request" && row.is_read !== true;
+    });
+    if (removed.length) await tx.legacyRecord.deleteMany({ where: { id: { in: removed.map((record) => record.id) } } });
+    return { updated, removed: removed.map((record) => record.data as Row) };
+  });
+  for (const notification of result.removed) {
+    emitDbChange({ table: "notifications", event: "DELETE", row: notification, actor_id: ctx.auth.id, audience_ids: [String(notification.user_id)] });
+  }
+  emitDbChange({ table: "connections", event: "UPDATE", row: result.updated as unknown as Row, actor_id: ctx.auth.id });
+  return result.updated;
 }
 
 async function searchConnections(args: Args, ctx: RequestContext): Promise<Row[]> {
+  await requireVerified(ctx);
   const query = text(args, "p_query", { max: 160 }).toLowerCase();
   const limit = integer(args, "p_limit", 20, 50);
   const connections = await prisma.connection.findMany({ where: { status: "accepted", OR: [{ requester_id: ctx.auth.id }, { receiver_id: ctx.auth.id }] }, take: 500 });
   const peerIds = connections.map((row) => row.requester_id === ctx.auth.id ? row.receiver_id : row.requester_id);
-  const profiles = await prisma.profile.findMany({ where: { user_id: { in: peerIds }, ...(query ? { OR: [{ name: { contains: query } }, { headline: { contains: query } }] } : {}) }, take: limit });
-  return profiles.map((profile) => ({ ...serializeProfile(profile as unknown as Row), peer_id: profile.user_id, connection_id: connections.find((row) => row.requester_id === profile.user_id || row.receiver_id === profile.user_id)?.id }));
+  const profiles = await prisma.profile.findMany({
+    where: { user_id: { in: peerIds }, ...(query ? { OR: [{ name: { contains: query } }, { headline: { contains: query } }] } : {}) },
+    select: { user_id: true, name: true, slug: true, avatar_url: true, headline: true, location: true, iit_name: true },
+    take: limit,
+  });
+  return profiles.map((profile) => ({
+    user_id: profile.user_id,
+    peer_id: profile.user_id,
+    name: profile.name,
+    slug: profile.slug,
+    avatar_url: profile.avatar_url,
+    headline: profile.headline,
+    location: profile.location,
+    iit_name: profile.iit_name,
+    connection_id: connections.find((row) => row.requester_id === profile.user_id || row.receiver_id === profile.user_id)?.id,
+  }));
 }
 
 async function createForumPost(args: Args, ctx: RequestContext) {
@@ -289,7 +462,11 @@ async function createForumPost(args: Args, ctx: RequestContext) {
   const scopeKey = text(args, "p_scope_key", { max: 255 }) || text(args, "p_scope_id", { required: true, max: 255 });
   if (!(await canAccessScope(ctx, scopeType, scopeKey))) throw new ApiError(403, "forum_scope_denied", "Forum community access denied");
   const content = text(args, "p_content", { max: 20_000 });
-  const requestedId = text(args, "p_id");
+  const requestedIdInput = text(args, "p_id");
+  if (requestedIdInput && !isCanonicalRealtimeRecordId(requestedIdInput.toLowerCase())) {
+    throw new ApiError(400, "invalid_post_id", "Forum post IDs must use canonical UUID format");
+  }
+  const requestedId = requestedIdInput ? requestedIdInput.toLowerCase() : "";
   const clientId = text(args, "p_client_id", { max: 100 }) || requestedId || undefined;
   if (clientId || requestedId) {
     const existing = requestedId ? await prisma.post.findUnique({ where: { id: requestedId } }) : await prisma.post.findFirst({ where: { author_id: ctx.auth.id, client_id: clientId } });
@@ -325,7 +502,7 @@ async function createForumPost(args: Args, ctx: RequestContext) {
       throw new ApiError(400, "invalid_reply_target", "Reply target must be a visible top-level post in the same forum scope");
     }
   }
-  const post = await prisma.post.create({ data: {
+  const postData: Prisma.PostUncheckedCreateInput = {
     ...(requestedId ? { id: requestedId } : {}), author_id: ctx.auth.id, content, community_id: ctx.auth.community_id, scope_type: scopeType, scope_key: scopeKey,
     channel: text(args, "p_channel", { max: 40 }) || null, is_anonymous: args.p_is_anonymous === true,
     reply_to_id: replyToId, client_id: clientId,
@@ -336,9 +513,11 @@ async function createForumPost(args: Args, ctx: RequestContext) {
     file_size: args.p_file_size == null ? null : BigInt(integer(args, "p_file_size", 0, 20 * 1024 * 1024)),
     file_type: text(args, "p_file_type", { max: 160 }) || null, voice_url: voiceUrl,
     voice_path: voicePath, voice_duration: args.p_voice_duration == null ? null : integer(args, "p_voice_duration", 0, 60 * 60),
-  } });
+  };
+  const [post] = await createForumPostsWithSlowMode([postData], ctx.auth);
+  if (!post) throw new ApiError(500, "post_create_failed", "The forum post could not be created");
   const output = (await enrichForumPosts([post], ctx))[0]!;
-  const realtime = { ...output, ...(post.is_anonymous ? { author_id: null, viewer_is_author: false, profile: null } : {}) };
+  const realtime = redactAnonymousPostForViewer(output, "", "member", await forumPostMediaHandles([post]));
   emitDbChange({ table: "posts", event: "INSERT", row: realtime, actor_id: ctx.auth.id, room: `forum:${scopeType}:${scopeKey}` });
   return output;
 }
@@ -413,7 +592,7 @@ async function searchForum(args: Args, ctx: RequestContext): Promise<Row[]> {
     : { OR: [...scopes, { author_id: ctx.auth.id }] };
   const hidden = await hiddenForumPostIds(ctx.auth.id);
   const cursor = forumCursor(args, "before");
-  const pinnedIds = kind === "pins" ? (await legacyRows("user_pinned_messages", 5000)).flatMap((row) => row.user_id === ctx.auth.id && typeof row.message_id === "string" ? [row.message_id] : []) : [];
+  const pinnedIds = kind === "pins" ? (await legacyRowsForUser("user_pinned_messages", ctx.auth.id)).flatMap((row) => row.user_id === ctx.auth.id && typeof row.message_id === "string" ? [row.message_id] : []) : [];
   const kindFilter: Prisma.PostWhereInput = kind === "media"
     ? { OR: [{ image_path: { not: null } }, { image_url: { not: null } }, { voice_path: { not: null } }, { voice_url: { not: null } }] }
     : kind === "links" ? { OR: [{ content: { contains: "http://" } }, { content: { contains: "https://" } }] }
@@ -440,7 +619,7 @@ async function getRoomState(args: Args, ctx: RequestContext): Promise<Row[]> {
   const type = text(args, "p_scope_type", { required: true });
   const key = text(args, "p_scope_key", { required: true });
   if (!(await canAccessScope(ctx, type, key))) throw new ApiError(403, "forum_scope_denied", "Forum community access denied");
-  const rows = await legacyRows("forum_room_state");
+  const rows = await legacyRowsForUser("forum_room_state", ctx.auth.id);
   const row = rows.find((item) => item.user_id === ctx.auth.id && item.scope_type === type && item.scope_key === key);
   return row ? [{ draft: row.draft ?? "", scroll_offset: row.scroll_offset ?? 0, last_read_at: row.last_read_at ?? null, notification_level: row.notification_level ?? "all" }] : [];
 }
@@ -449,7 +628,7 @@ async function saveRoomState(args: Args, ctx: RequestContext, markRead = false):
   const type = text(args, "p_scope_type", { required: true });
   const key = text(args, "p_scope_key", { required: true });
   if (!(await canAccessScope(ctx, type, key))) throw new ApiError(403, "forum_scope_denied", "Forum community access denied");
-  const rows = await legacyRows("forum_room_state");
+  const rows = await legacyRowsForUser("forum_room_state", ctx.auth.id);
   const existing = rows.find((item) => item.user_id === ctx.auth.id && item.scope_type === type && item.scope_key === key);
   const next: Row = {
     ...(existing ?? {}), user_id: ctx.auth.id, scope_type: type, scope_key: key,
@@ -465,7 +644,7 @@ async function saveRoomState(args: Args, ctx: RequestContext, markRead = false):
 
 async function forumUnread(ctx: RequestContext): Promise<Row[]> {
   await requireVerified(ctx);
-  const states = (await legacyRows("forum_room_state")).filter((row) => row.user_id === ctx.auth.id);
+  const states = await legacyRowsForUser("forum_room_state", ctx.auth.id);
   const scopes = await allowedForumScopes(ctx.auth.id, ctx.auth.is_verified, ctx.auth.role);
   const output: Row[] = [];
   for (const scope of scopes) {
@@ -563,6 +742,7 @@ async function chatInboxMessageSummary(roomIds: string[], userId: string): Promi
 }
 
 async function chatInbox(ctx: RequestContext): Promise<Row[]> {
+  await requireVerified(ctx);
   const memberships = await chatMembership(ctx.auth.id);
   const roomIds = memberships.flatMap((membership) => typeof membership.room_id === "string" ? [membership.room_id] : []);
   const [rooms, summary] = await Promise.all([
@@ -582,16 +762,18 @@ async function directSidebar(ctx: RequestContext): Promise<Row[]> {
   const inbox = await chatInbox(ctx);
   const connections = await prisma.connection.findMany({ where: { status: "accepted", OR: [{ requester_id: ctx.auth.id }, { receiver_id: ctx.auth.id }] } });
   const profiles = await prisma.profile.findMany({ where: { user_id: { in: connections.map((row) => row.requester_id === ctx.auth.id ? row.receiver_id : row.requester_id) } } });
-  return connections.map((connection) => {
+  return connections.flatMap((connection) => {
     const peerId = connection.requester_id === ctx.auth.id ? connection.receiver_id : connection.requester_id;
     const profile = profiles.find((row) => row.user_id === peerId);
     const key = pairKey(ctx.auth.id, peerId);
     const room = inbox.find((row) => row.direct_key === key);
-    return { connection_id: connection.id, peer_id: peerId, room_id: room?.room_id ?? null, display_name: profile?.name ?? "Member", display_avatar: profile?.avatar_url ?? null, last_message: room?.last_message ?? null, unread_count: room?.unread_count ?? 0 };
+    if (!room?.room_id || !room.last_message) return [];
+    return [{ connection_id: connection.id, peer_id: peerId, room_id: room.room_id, display_name: profile?.name ?? "Member", display_avatar: profile?.avatar_url ?? null, last_message: room.last_message, unread_count: room.unread_count ?? 0 }];
   });
 }
 
 async function markChatRead(args: Args, ctx: RequestContext): Promise<null> {
+  await requireVerified(ctx);
   const roomId = text(args, "p_room_id", { required: true });
   const membershipRecord = await prisma.legacyRecord.findFirst({ where: {
     table_name: "chat_members", owner_id: ctx.auth.id,
@@ -845,7 +1027,7 @@ async function customOption(args: Args, ctx: RequestContext, fieldMode = false):
   if (!option) option = await createLegacy("custom_options", { category, value, logo_url: logoUrl, status: "pending", created_by: ctx.auth.id, submitted_by: ctx.auth.id }, ctx.auth.id, ctx.auth.community_id);
   if (!option) throw new ApiError(500, "option_create_failed", "Could not create the option");
   if (fieldMode) {
-    const pending = (await legacyRows("pending_profile_options")).find((row) => row.user_id === ctx.auth.id && (row.field === category || row.field_name === category));
+    const pending = (await legacyRowsForUser("pending_profile_options", ctx.auth.id)).find((row) => row.user_id === ctx.auth.id && (row.field === category || row.field_name === category));
     const pendingRow = { ...(pending ?? {}), user_id: ctx.auth.id, field: category, option_id: option.id, value, status: option.status };
     if (pending) await replaceLegacy("pending_profile_options", String(pending.__legacy_id), pendingRow, ctx.auth.id);
     else await createLegacy("pending_profile_options", pendingRow, ctx.auth.id, ctx.auth.community_id, `${ctx.auth.id}:${category}`);
@@ -989,6 +1171,7 @@ export function assertConsultationTransition(
 }
 
 async function changeConsultation(args: Args, ctx: RequestContext): Promise<Row> {
+  await requireVerified(ctx);
   const id = text(args, "p_consultation_id", { required: true });
   const status = text(args, "p_status", { required: true });
   const updated = await prisma.$transaction(async (tx) => {
@@ -1040,6 +1223,7 @@ async function reviewDocumentVerification(args: Args, ctx: RequestContext): Prom
   const updated: Row = { ...row, status: decision, reviewed_by: ctx.auth.id, reviewed_at: reviewedAt, review_notes: notes, updated_at: reviewedAt };
 
   await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw(Prisma.sql`SELECT id FROM users WHERE id = ${userId} LIMIT 1 FOR UPDATE`);
     const user = await tx.user.findUnique({ where: { id: userId }, select: { id: true } });
     if (!user) throw new ApiError(409, "invalid_verification_submission", "The submission member no longer exists");
     const claimed = await tx.legacyRecord.updateMany({
@@ -1051,7 +1235,7 @@ async function reviewDocumentVerification(args: Args, ctx: RequestContext): Prom
       await tx.profile.upsert({
         where: { user_id: userId },
         create: { user_id: userId, iit_name: iitName, student_status: studentStatus, is_verified: true, community_id: config.DEFAULT_COMMUNITY_ID },
-        update: { iit_name: iitName, student_status: studentStatus, is_verified: true, community_id: config.DEFAULT_COMMUNITY_ID },
+        update: { iit_name: iitName, student_status: studentStatus, is_verified: true, verification_revoked_at: null, community_id: config.DEFAULT_COMMUNITY_ID },
       });
       const affiliationRecord = await tx.legacyRecord.findUnique({
         where: { table_name_record_id: { table_name: "verified_academic_affiliations", record_id: userId } },
@@ -1075,6 +1259,13 @@ async function reviewDocumentVerification(args: Args, ctx: RequestContext): Prom
     } });
   });
   emitDbChange({ table: "document_verifications", event: "UPDATE", row: updated, actor_id: ctx.auth.id, audience_ids: [userId] });
+  if (decision === "approved") {
+    emitDbChange({
+      table: "profiles", event: "UPDATE",
+      row: { user_id: userId, iit_name: iitName, student_status: studentStatus, is_verified: true, force_reauthenticate: true },
+      actor_id: ctx.auth.id, audience_ids: [userId],
+    });
+  }
   return updated;
 }
 
@@ -1094,6 +1285,28 @@ async function reviewLegacy(name: string, args: Args, ctx: RequestContext): Prom
   if (!row) throw new ApiError(404, "submission_not_found", "Submission not found");
   if (target.table === "custom_options") return reviewCustomOption(args, ctx, row);
   return reviewCourseVerification(args, ctx, row);
+}
+
+async function withdrawVerification(table: "document_verifications" | "course_verification_requests", id: string, ctx: RequestContext): Promise<Row> {
+  const record = await prisma.legacyRecord.findFirst({ where: {
+    table_name: table,
+    owner_id: ctx.auth.id,
+    data: { path: "$.id", equals: id },
+  } });
+  const row = record?.data as Row | undefined;
+  if (!record || !row || row.user_id !== ctx.auth.id || row.status !== "pending") {
+    throw new ApiError(404, "submission_not_found", "Pending submission not found");
+  }
+  const withdrawn = { ...row, status: "withdrawn", updated_at: nowIso() };
+  const claimed = await prisma.legacyRecord.updateMany({
+    where: { id: record.id, owner_id: ctx.auth.id, data: { path: "$.status", equals: "pending" } },
+    data: { data: withdrawn as Prisma.InputJsonValue },
+  });
+  if (claimed.count !== 1) {
+    throw new ApiError(409, "submission_already_reviewed", "This submission was reviewed before it could be withdrawn");
+  }
+  emitDbChange({ table, event: "UPDATE", row: withdrawn, actor_id: ctx.auth.id, audience_ids: [ctx.auth.id] });
+  return withdrawn;
 }
 
 export async function callRpc(name: string, args: Args, ctx: RequestContext): Promise<unknown> {
@@ -1116,7 +1329,7 @@ export async function callRpc(name: string, args: Args, ctx: RequestContext): Pr
     case "get_forum_room_state": return getRoomState(args, ctx);
     case "save_forum_room_state": return saveRoomState(args, ctx);
     case "mark_forum_scope_read": return saveRoomState(args, ctx, true);
-    case "get_last_forum_room": return (await legacyRows("forum_room_state")).filter((row) => row.user_id === ctx.auth.id).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))[0] ?? null;
+    case "get_last_forum_room": return (await legacyRowsForUser("forum_room_state", ctx.auth.id)).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))[0] ?? null;
     case "get_my_forum_unread": return forumUnread(ctx);
     case "mark_forum_post_seen": return createLegacy("pinned_messages", { user_id: ctx.auth.id, message_id: text(args, "p_post_id", { required: true }), kind: "seen" }, ctx.auth.id, ctx.auth.community_id, `seen:${ctx.auth.id}:${text(args, "p_post_id")}`);
     case "get_or_create_direct_chat": return directChat(args, ctx);
@@ -1125,7 +1338,13 @@ export async function callRpc(name: string, args: Args, ctx: RequestContext): Pr
     case "mark_chat_read": return markChatRead(args, ctx);
     case "chat_broadcast_ready":
     case "forum_broadcast_ready": return true;
-    case "get_appsync_forum_channels": return (await allowedForumScopes(ctx.auth.id, ctx.auth.is_verified, ctx.auth.role)).map((scope) => `forum:${scope.scope_type}:${scope.scope_key}`);
+    case "get_appsync_forum_channels": {
+      await requireVerified(ctx);
+      const scopeType = text(args, "p_scope_type", { required: true, max: 40 }).toUpperCase();
+      const scopeKey = text(args, "p_scope_key", { required: true, max: 255 });
+      if (!(await canAccessScope(ctx, scopeType, scopeKey))) throw new ApiError(403, "forum_scope_denied", "Forum community access denied");
+      return forumAppSyncChannels(scopeType, scopeKey);
+    }
     case "is_platform_owner": return ctx.auth.role === "owner";
     case "get_admin_users_detailed": return getAdminUsers(args, ctx);
     case "get_admin_analytics": return adminAnalytics(args, ctx);
@@ -1134,19 +1353,95 @@ export async function callRpc(name: string, args: Args, ctx: RequestContext): Pr
     case "revoke_admin_role": {
       if (ctx.auth.role !== "owner") throw new ApiError(403, "owner_required", "Platform owner access is required");
       const userId = text(args, "p_target_user_id", { required: true });
-      if (userId === ctx.auth.id && name === "revoke_admin_role") throw new ApiError(400, "owner_role_immutable", "The owner role cannot be revoked here");
+      if (userId === ctx.auth.id) throw new ApiError(400, "owner_role_immutable", "The owner role cannot be changed here");
       const role = name === "grant_admin_role" ? "admin" : "member";
-      await prisma.$transaction([prisma.user.update({ where: { id: userId }, data: { role } }), prisma.profile.update({ where: { user_id: userId }, data: { role } })]);
-      await writeAudit({ actor_id: ctx.auth.id, action: `admin.${name}`, resource_type: "user", resource_id: userId, ip: ctx.ip });
-      return true;
+      const result = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw(Prisma.sql`SELECT id FROM users WHERE id = ${userId} LIMIT 1 FOR UPDATE`);
+        const [target, targetProfile] = await Promise.all([
+          tx.user.findUnique({ where: { id: userId }, select: { role: true } }),
+          tx.profile.findUnique({ where: { user_id: userId }, select: { is_verified: true } }),
+        ]);
+        if (!target) throw new ApiError(404, "member_not_found", "Member not found");
+        if (target.role === "owner") throw new ApiError(400, "owner_role_immutable", "An owner role cannot be changed here");
+        if (name === "revoke_admin_role" && target.role !== "admin") throw new ApiError(409, "role_changed", "The member is no longer an administrator");
+        await tx.user.update({ where: { id: userId }, data: { role } });
+        const profile = await tx.profile.updateMany({ where: { user_id: userId }, data: { role } });
+        if (profile.count !== 1) throw new ApiError(409, "profile_missing", "The member profile is unavailable");
+        const activeDailyRooms = name === "revoke_admin_role" && !targetProfile?.is_verified
+          ? await activeDailyRoomNamesForUser(tx, userId)
+          : [];
+        const closedDaily = await closeDailySessionsForRooms(tx, activeDailyRooms, "admin_role_revoked");
+        return { closedDaily };
+      }, { timeout: 60_000 });
+      emitDbChange({
+        table: "profiles", event: "UPDATE",
+        row: { user_id: userId, role, force_reauthenticate: true },
+        actor_id: ctx.auth.id, audience_ids: [userId],
+      });
+      emitClosedDailySessions(result.closedDaily, ctx.auth.id);
+      const dailyRevocation = await revokeDailyUserRooms(result.closedDaily.roomNames, userId, config.DAILY_API_KEY ?? "");
+      await writeAudit({
+        actor_id: ctx.auth.id, action: `admin.${name}`, resource_type: "user", resource_id: userId, ip: ctx.ip,
+        metadata: { daily_revocation_failures: dailyRevocation.failed },
+      });
+      return {
+        updated: true,
+        daily_ejection_pending: dailyRevocation.failed > 0,
+        daily_ejection_failures: dailyRevocation.failed,
+        daily_revocation_pending: dailyRevocation.failed > 0,
+        daily_revocation_failures: dailyRevocation.failed,
+      };
     }
     case "set_member_verification": {
       if (!isAdmin(ctx)) throw new ApiError(403, "admin_required", "Administrator access is required");
       const userId = text(args, "p_target_user_id") || text(args, "p_user_id", { required: true });
       const value = args.p_verified === true || args.p_is_verified === true;
-      await prisma.profile.update({ where: { user_id: userId }, data: { is_verified: value } });
-      await writeAudit({ actor_id: ctx.auth.id, action: "admin.set_member_verification", resource_type: "user", resource_id: userId, ip: ctx.ip, metadata: { is_verified: value } });
-      return true;
+      const changedAt = new Date();
+      const result = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw(Prisma.sql`SELECT id FROM users WHERE id = ${userId} LIMIT 1 FOR UPDATE`);
+        const target = await tx.user.findUnique({ where: { id: userId }, select: { role: true, status: true } });
+        if (!target) throw new ApiError(404, "member_not_found", "Member not found");
+        const profile = await tx.profile.update({
+          where: { user_id: userId },
+          data: { is_verified: value, verification_revoked_at: value ? null : changedAt },
+        });
+        const record = await tx.legacyRecord.findUnique({
+          where: { table_name_record_id: { table_name: "verified_academic_affiliations", record_id: userId } },
+        });
+        if (record) {
+          const affiliation = record.data as Row;
+          await tx.legacyRecord.update({ where: { id: record.id }, data: { data: {
+            ...affiliation,
+            verification_status: value ? "VERIFIED" : "REVOKED",
+            ...(value ? { verified_at: changedAt.toISOString(), revoked_at: null, revoked_by: null }
+              : { revoked_at: changedAt.toISOString(), revoked_by: ctx.auth.id }),
+            updated_at: changedAt.toISOString(),
+          } as Prisma.InputJsonValue } });
+        }
+        const remainsCallEligible = target.status === "active"
+          && (value || target.role === "admin" || target.role === "owner");
+        const activeDailyRooms = remainsCallEligible ? [] : await activeDailyRoomNamesForUser(tx, userId);
+        const closedDaily = await closeDailySessionsForRooms(tx, activeDailyRooms, "verification_revoked");
+        return { profile, closedDaily };
+      }, { timeout: 60_000 });
+      emitDbChange({
+        table: "profiles", event: "UPDATE",
+        row: { ...serializeProfile(result.profile as unknown as Row), force_reauthenticate: true },
+        actor_id: ctx.auth.id, audience_ids: [userId],
+      });
+      emitClosedDailySessions(result.closedDaily, ctx.auth.id);
+      const dailyRevocation = await revokeDailyUserRooms(result.closedDaily.roomNames, userId, config.DAILY_API_KEY ?? "");
+      await writeAudit({
+        actor_id: ctx.auth.id, action: "admin.set_member_verification", resource_type: "user", resource_id: userId, ip: ctx.ip,
+        metadata: { is_verified: value, daily_revocation_failures: dailyRevocation.failed },
+      });
+      return {
+        updated: true,
+        daily_ejection_pending: dailyRevocation.failed > 0,
+        daily_ejection_failures: dailyRevocation.failed,
+        daily_revocation_pending: dailyRevocation.failed > 0,
+        daily_revocation_failures: dailyRevocation.failed,
+      };
     }
     case "log_client_error": return logClientError(args, ctx);
     case "record_user_activity": return recordActivity(args, ctx);
@@ -1160,10 +1455,7 @@ export async function callRpc(name: string, args: Args, ctx: RequestContext): Pr
     case "withdraw_course_verification": {
       const table = name.includes("document") ? "document_verifications" : "course_verification_requests";
       const id = text(args, name.includes("document") ? "p_submission_id" : "p_request_id", { required: true });
-      const rows = await legacyRows(table);
-      const row = rows.find((item) => item.id === id && item.user_id === ctx.auth.id && item.status === "pending");
-      if (!row) throw new ApiError(404, "submission_not_found", "Pending submission not found");
-      return replaceLegacy(table, String(row.__legacy_id), { ...row, status: "withdrawn" }, ctx.auth.id);
+      return withdrawVerification(table, id, ctx);
     }
     case "request_consultation": return requestConsultation(args, ctx);
     case "change_consultation_status": return changeConsultation(args, ctx);

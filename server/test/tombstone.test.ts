@@ -52,7 +52,11 @@ describe("delete-for-everyone tombstones", () => {
 
   it("never exposes an anonymous author in a shared realtime event", () => {
     expect(realtimeSafeCoreRow("posts", {
-      id: "post-one", author_id: "owner-secret", is_anonymous: true, content: "hello",
-    })).toMatchObject({ author_id: null, viewer_is_author: false, profile: null });
+      id: "post-one", author_id: "owner-secret", deleted_by_user_id: "owner-secret", is_anonymous: true,
+      content: "hello", image_path: "owner-secret/private.webp", file_name: "Real Name.pdf",
+    })).toMatchObject({
+      author_id: null, deleted_by_user_id: null, viewer_is_author: false, profile: null,
+      image_path: null, file_name: null,
+    });
   });
 });

@@ -9,7 +9,6 @@ import {
   createSession,
   completeGoogleOAuth,
   completePasswordReset,
-  exchangePasswordReset,
   exchangeGoogleCode,
   issueEmailOtp,
   passwordLogin,
@@ -199,11 +198,6 @@ authRouter.put("/user", requireAuth, asyncHandler(async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.auth!.id }, include: { profile: true } });
   if (!user) throw new ApiError(404, "user_not_found", "User not found");
   res.json({ user: publicUser(user), profile: serializeProfile(user.profile) });
-}));
-
-authRouter.post("/recovery/verify", asyncHandler(async (req, res) => {
-  const body = z.object({ token: z.string().min(20) }).parse(req.body);
-  deliverSession(res, await exchangePasswordReset(body.token, meta(req)));
 }));
 
 authRouter.post("/dev/phone/request", asyncHandler(async (req, res) => {

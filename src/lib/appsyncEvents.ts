@@ -1,4 +1,5 @@
-import { supabase } from "@/integrations/supabase/client";
+import { apiRequest, refreshApiSession } from "@/integrations/api/http";
+import { isSessionExpiring, readSession, subscribeToAuthChanges } from "@/integrations/api/session";
 
 export type AppSyncStatus = "CONNECTING" | "SUBSCRIBED" | "CHANNEL_ERROR" | "CLOSED";
 export type AppSyncEvent = Record<string, unknown>;
@@ -15,12 +16,28 @@ const provider = import.meta.env.VITE_CHAT_REALTIME_PROVIDER;
 const realtimeEndpoint = import.meta.env.VITE_APPSYNC_REALTIME_ENDPOINT;
 const httpEndpoint = import.meta.env.VITE_APPSYNC_HTTP_ENDPOINT;
 const BACKGROUND_IDLE_MS = 30_000;
-const DISPATCH_RETRY_DELAYS_MS = [0, 750, 2_000, 5_000] as const;
+const DEFAULT_KEEP_ALIVE_TIMEOUT_MS = 300_000;
+const MAX_SUBSCRIPTIONS = 50;
+const MAX_SUBSCRIPTION_RETRIES = 6;
+const APP_SYNC_CHANNEL = /^\/(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,48}[A-Za-z0-9])?)(?:\/(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,48}[A-Za-z0-9])?)){0,4}$/;
 
 export const appSyncRealtimeEnabled = provider === "appsync" && Boolean(realtimeEndpoint && httpEndpoint);
 
-const base64Url = (value: string) => btoa(unescape(encodeURIComponent(value)))
-  .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+const base64Url = (value: string) => {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+};
+
+export const isValidClientAppSyncChannel = (channel: string): boolean => APP_SYNC_CHANNEL.test(channel);
+
+export const appSyncKeepAliveTimeout = (value: unknown): number => {
+  const timeout = Number(value);
+  return Number.isFinite(timeout) && timeout >= 10_000 && timeout <= 10 * 60_000
+    ? timeout
+    : DEFAULT_KEEP_ALIVE_TIMEOUT_MS;
+};
 
 export const buildAppSyncAuthorization = (endpoint: string, token: string) => ({
   Authorization: token,
@@ -35,6 +52,7 @@ export const getAppSyncEventFrames = (message: { event?: unknown; events?: unkno
 
 class AppSyncEventsClient {
   private socket: WebSocket | null = null;
+  private readySocket: WebSocket | null = null;
   private listeners = new Map<string, Listener>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private hiddenTimer: ReturnType<typeof setTimeout> | null = null;
@@ -42,6 +60,9 @@ class AppSyncEventsClient {
   private reconnectAttempt = 0;
   private connecting: Promise<void> | null = null;
   private intentionallyClosedSockets = new WeakSet<WebSocket>();
+  private tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private keepAliveTimer: ReturnType<typeof setTimeout> | null = null;
+  private keepAliveTimeoutMs = DEFAULT_KEEP_ALIVE_TIMEOUT_MS;
 
   constructor() {
     if (typeof document !== "undefined") {
@@ -56,18 +77,29 @@ class AppSyncEventsClient {
       document.addEventListener("freeze", () => this.closeSocket());
       window.addEventListener("pagehide", () => this.closeSocket());
       window.addEventListener("pageshow", () => this.resumeForeground());
-      window.addEventListener("online", () => { if (this.listeners.size) void this.connect(); });
+      window.addEventListener("online", () => { if (this.listeners.size) this.ensureConnection(); });
+      subscribeToAuthChanges((event) => {
+        this.closeSocket();
+        if (event !== "SIGNED_OUT" && this.listeners.size && !document.hidden) this.ensureConnection();
+      });
     }
   }
 
   subscribe(channel: string, onEvent: Listener["onEvent"], onStatus?: Listener["onStatus"]) {
+    if (!isValidClientAppSyncChannel(channel) || this.listeners.size >= MAX_SUBSCRIPTIONS) {
+      onStatus?.("CHANNEL_ERROR");
+      return () => undefined;
+    }
     const id = crypto.randomUUID();
     this.listeners.set(id, { id, channel, onEvent, onStatus, retryAttempt: 0 });
     onStatus?.("CONNECTING");
-    if (this.socket?.readyState === WebSocket.OPEN) void this.sendSubscription(id);
-    else void this.connect().catch(() => onStatus?.("CHANNEL_ERROR"));
+    if (this.readySocket?.readyState === WebSocket.OPEN) {
+      void this.sendSubscription(id).catch(() => this.scheduleSubscriptionRetry(id));
+    } else this.ensureConnection();
     return () => {
-      if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ id, type: "unsubscribe" }));
+      if (this.socket?.readyState === WebSocket.OPEN && this.readySocket === this.socket) {
+        this.socket.send(JSON.stringify({ id, type: "unsubscribe" }));
+      }
       const retryTimer = this.subscriptionRetryTimers.get(id);
       if (retryTimer) clearTimeout(retryTimer);
       this.subscriptionRetryTimers.delete(id);
@@ -76,26 +108,36 @@ class AppSyncEventsClient {
     };
   }
 
-  async publish(channel: string, event: AppSyncEvent) {
-    const token = await this.accessToken();
-    const response = await fetch(httpEndpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json", Authorization: token },
-      body: JSON.stringify({ channel, events: [JSON.stringify(event)] }),
-    });
-    if (!response.ok) throw new Error(`Live update failed (${response.status})`);
+  private async accessToken() {
+    let session = readSession();
+    if (session && isSessionExpiring(session, 45)) session = await refreshApiSession();
+    if (!session?.access_token) throw new Error("Your session has expired");
+    return session.access_token;
   }
 
-  private async accessToken() {
-    const { data, error } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (error || !token) throw error || new Error("Your session has expired");
-    return token;
+  private scheduleTokenRefresh() {
+    if (this.tokenRefreshTimer) clearTimeout(this.tokenRefreshTimer);
+    this.tokenRefreshTimer = null;
+    const session = readSession();
+    if (!session?.expires_at) return;
+    const delay = Math.max(1_000, session.expires_at * 1000 - Date.now() - 30_000);
+    this.tokenRefreshTimer = setTimeout(() => {
+      this.tokenRefreshTimer = null;
+      void refreshApiSession().then((next) => {
+        // A successful refresh emits TOKEN_REFRESHED and the auth listener
+        // reconnects with the new JWT. On failure, stop using the old socket
+        // before its token expires and let durable recovery take over.
+        if (next) return;
+        this.closeSocket();
+        this.listeners.forEach((listener) => listener.onStatus?.("CHANNEL_ERROR"));
+        this.scheduleReconnect();
+      });
+    }, delay);
   }
 
   private async connect() {
     if (!appSyncRealtimeEnabled || typeof WebSocket === "undefined") throw new Error("AppSync is not configured");
-    if (this.socket?.readyState === WebSocket.OPEN) return;
+    if (this.readySocket?.readyState === WebSocket.OPEN) return;
     if (this.connecting) return this.connecting;
     this.connecting = (async () => {
       const token = await this.accessToken();
@@ -120,11 +162,19 @@ class AppSyncEventsClient {
                 : new TextDecoder().decode(message.data as ArrayBuffer);
             payload = JSON.parse(raw);
           } catch { return; }
+          if (this.socket !== socket) return;
           if (payload.type === "connection_ack") {
             clearTimeout(timeout);
             acknowledged = true;
+            this.readySocket = socket;
+            this.keepAliveTimeoutMs = appSyncKeepAliveTimeout(payload.connectionTimeoutMs);
+            this.resetKeepAliveTimer(socket);
             this.reconnectAttempt = 0;
             resolve();
+            return;
+          }
+          if (payload.type === "ka") {
+            if (acknowledged) this.resetKeepAliveTimer(socket);
             return;
           }
           if (!acknowledged && (payload.type === "connection_error" || payload.type === "error")) {
@@ -138,30 +188,45 @@ class AppSyncEventsClient {
         socket.onerror = () => { clearTimeout(timeout); reject(new Error("Realtime connection failed")); };
         socket.onclose = () => {
           clearTimeout(timeout);
-          if (this.socket === socket) this.socket = null;
+          if (this.socket === socket) {
+            this.socket = null;
+            this.readySocket = null;
+            this.clearKeepAliveTimer();
+          }
           const intentionallyClosed = this.intentionallyClosedSockets.delete(socket);
           if (!acknowledged) {
             if (intentionallyClosed) resolve();
             else reject(new Error("Realtime connection closed"));
           }
           // An intentional background/unmount close must not start the
-          // Supabase realtime fallback; foreground recovery queries the DB.
+          // compatibility fallback; foreground recovery queries the DB.
           if (!intentionallyClosed) {
             this.listeners.forEach((listener) => listener.onStatus?.("CLOSED"));
             if (this.listeners.size && (typeof document === "undefined" || !document.hidden)) this.scheduleReconnect();
           }
         };
       });
+      if (this.readySocket?.readyState !== WebSocket.OPEN) {
+        if (this.listeners.size && (typeof document === "undefined" || !document.hidden)) {
+          throw new Error("Realtime connection closed before it became ready");
+        }
+        return;
+      }
       await Promise.all([...this.listeners.keys()].map((id) => this.sendSubscription(id)));
+      this.scheduleTokenRefresh();
     })().finally(() => { this.connecting = null; });
     return this.connecting;
   }
 
   private async sendSubscription(id: string) {
     const listener = this.listeners.get(id);
-    if (!listener || this.socket?.readyState !== WebSocket.OPEN) return;
+    if (!listener || !this.socket || this.readySocket !== this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    const socket = this.socket;
     const token = await this.accessToken();
-    this.socket.send(JSON.stringify({
+    // Refreshing an expiring JWT emits TOKEN_REFRESHED and intentionally
+    // replaces the socket. Never send on the stale instance after the await.
+    if (this.socket !== socket || this.readySocket !== socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({
       id,
       type: "subscribe",
       channel: listener.channel,
@@ -178,9 +243,14 @@ class AppSyncEventsClient {
       this.subscriptionRetryTimers.delete(listener.id);
       listener.onStatus?.("SUBSCRIBED");
     }
+    if (message.type === "broadcast_error" && listener) {
+      // The subscription remains registered after a single broadcast failure;
+      // trigger durable recovery without sending a duplicate subscribe ID.
+      listener.onStatus?.("CHANNEL_ERROR");
+    }
     if ((message.type === "subscribe_error" || message.type === "error") && listener) {
       listener.onStatus?.("CHANNEL_ERROR");
-      this.scheduleSubscriptionRetry(listener.id);
+      if (!this.isAuthorizationError(message)) this.scheduleSubscriptionRetry(listener.id);
     }
     if (message.type !== "data" || !listener) return;
     // HTTP-published AppSync Events currently arrive as one string in `event`,
@@ -195,11 +265,12 @@ class AppSyncEventsClient {
   private scheduleSubscriptionRetry(id: string) {
     const listener = this.listeners.get(id);
     if (!listener || this.subscriptionRetryTimers.has(id)) return;
+    if (listener.retryAttempt >= MAX_SUBSCRIPTION_RETRIES) return;
     const delay = Math.min(15_000, 500 * 2 ** Math.min(listener.retryAttempt++, 5)) + Math.random() * 750;
     const timer = setTimeout(() => {
       this.subscriptionRetryTimers.delete(id);
       if (!this.listeners.has(id) || (typeof document !== "undefined" && document.hidden)) return;
-      if (this.socket?.readyState === WebSocket.OPEN) {
+      if (this.socket?.readyState === WebSocket.OPEN && this.readySocket === this.socket) {
         void this.sendSubscription(id).catch(() => this.scheduleSubscriptionRetry(id));
       } else {
         void this.connect().catch(() => this.scheduleReconnect());
@@ -209,12 +280,40 @@ class AppSyncEventsClient {
   }
 
   private scheduleReconnect() {
-    if (this.reconnectTimer) return;
+    if (this.reconnectTimer || !this.listeners.size || !readSession()) return;
     const delay = Math.min(30_000, 500 * 2 ** this.reconnectAttempt++) + Math.random() * 500;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      void this.connect().catch(() => this.scheduleReconnect());
+      this.ensureConnection();
     }, delay);
+  }
+
+  private ensureConnection() {
+    void this.connect().catch(() => {
+      this.listeners.forEach((listener) => listener.onStatus?.("CHANNEL_ERROR"));
+      this.scheduleReconnect();
+    });
+  }
+
+  private isAuthorizationError(message: any): boolean {
+    const errors = Array.isArray(message?.errors) ? message.errors : [];
+    return errors.some((error: unknown) => {
+      const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
+      return /unauthori[sz]|access.?denied|forbidden/i.test(`${String(record.errorType || "")} ${String(record.message || "")}`);
+    });
+  }
+
+  private clearKeepAliveTimer() {
+    if (this.keepAliveTimer) clearTimeout(this.keepAliveTimer);
+    this.keepAliveTimer = null;
+  }
+
+  private resetKeepAliveTimer(socket: WebSocket) {
+    this.clearKeepAliveTimer();
+    this.keepAliveTimer = setTimeout(() => {
+      this.keepAliveTimer = null;
+      if (this.socket === socket && this.readySocket === socket) socket.close(4000, "keep-alive timeout");
+    }, this.keepAliveTimeoutMs);
   }
 
   private closeSocket() {
@@ -222,12 +321,16 @@ class AppSyncEventsClient {
     this.reconnectTimer = null;
     this.subscriptionRetryTimers.forEach((timer) => clearTimeout(timer));
     this.subscriptionRetryTimers.clear();
+    if (this.tokenRefreshTimer) clearTimeout(this.tokenRefreshTimer);
+    this.tokenRefreshTimer = null;
+    this.clearKeepAliveTimer();
     const socket = this.socket;
     if (socket) {
       this.intentionallyClosedSockets.add(socket);
       socket.close(1000, "idle");
     }
     this.socket = null;
+    this.readySocket = null;
   }
 
   private scheduleBackgroundClose() {
@@ -241,7 +344,7 @@ class AppSyncEventsClient {
   private resumeForeground() {
     if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
     this.hiddenTimer = null;
-    if (this.listeners.size) void this.connect();
+    if (this.listeners.size) this.ensureConnection();
   }
 }
 
@@ -250,61 +353,24 @@ const client = new AppSyncEventsClient();
 export const subscribeAppSync = (channel: string, onEvent: Listener["onEvent"], onStatus?: Listener["onStatus"]) =>
   client.subscribe(channel, onEvent, onStatus);
 
-export const publishAppSync = (channel: string, event: AppSyncEvent) => client.publish(channel, event);
-
 export const getForumAppSyncChannels = async (scopeType: string, scopeKey: string) => {
-  const { data, error } = await (supabase as any).rpc("get_appsync_forum_channels", {
+  const { data, error } = await apiRequest<{ message_channel: string }>("rpc/get_appsync_forum_channels", {
+    method: "POST",
+    body: {
     p_scope_type: scopeType,
     p_scope_key: scopeKey,
+    },
   });
   if (error) throw error;
-  return (Array.isArray(data) ? data[0] : data) as { message_channel: string; typing_channel: string; presence_channel: string };
+  if (!data) throw new Error("AppSync forum channels are unavailable");
+  return data;
 };
 
 export const chatAppSyncChannels = (roomId: string) => ({
   message_channel: `/chat/${roomId}`,
-  typing_channel: `/chat-typing/${roomId}`,
-  presence_channel: `/chat-presence/${roomId}`,
 });
 
-type DispatchResult = { error: unknown };
-type DispatchInvoke = () => Promise<DispatchResult>;
-type DispatchWait = (delayMs: number) => Promise<void>;
-
-const waitForDispatchRetry: DispatchWait = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs));
-
-export const dispatchRealtimeOutboxWithRetry = async (
-  invoke: DispatchInvoke,
-  wait: DispatchWait = waitForDispatchRetry,
-  retryDelays: readonly number[] = DISPATCH_RETRY_DELAYS_MS,
-) => {
-  for (const delayMs of retryDelays) {
-    if (delayMs) await wait(delayMs);
-    try {
-      const { error } = await invoke();
-      if (!error) return true;
-    } catch {
-      // A later bounded attempt handles transient network and edge failures.
-    }
-  }
-  return false;
-};
-
-let dispatchInFlight: Promise<void> | null = null;
-let dispatchRequested = false;
-
-export const requestRealtimeDispatch = () => {
-  if (!appSyncRealtimeEnabled) return;
-  dispatchRequested = true;
-  if (dispatchInFlight) return;
-  dispatchInFlight = (async () => {
-    do {
-      dispatchRequested = false;
-      await dispatchRealtimeOutboxWithRetry(
-        () => supabase.functions.invoke("dispatch-realtime-outbox", { body: {} }),
-      );
-      // A message persisted while a dispatch was already running needs one
-      // additional drain. Coalescing avoids a request storm during bursts.
-    } while (dispatchRequested);
-  })().finally(() => { dispatchInFlight = null; });
-};
+// Existing mutation call sites keep this hook, but outbox dispatch is owned by
+// the Node process (enqueue, immediate drain and a 15-second retry loop).
+// Browsers intentionally have no endpoint for forcing a drain.
+export const requestRealtimeDispatch = (): void => undefined;

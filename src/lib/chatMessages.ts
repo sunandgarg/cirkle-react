@@ -5,6 +5,11 @@ export type ChatTimelineMessage = {
   room_id: string;
 };
 
+export const isChatMessageRealtimeEvent = (event: unknown): boolean => {
+  if (!event || typeof event !== "object" || Array.isArray(event)) return false;
+  return (event as Record<string, unknown>).table === "messages";
+};
+
 export const uniqueChatMessages = <T extends ChatTimelineMessage>(items: T[]): T[] => {
   const byKey = new Map<string, T>();
   for (const message of items) {

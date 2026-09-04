@@ -24,20 +24,77 @@ type Stage =
   | { kind: "reconnecting" }
   | { kind: "error"; message: string };
 
+const PARTICIPANT_LEASE_INTERVAL_MS = 30_000;
+
 const CallModal = ({ roomId, mode, sessionId, onClose }: CallModalProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const callRef = useRef<DailyCall | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const participantRowRef = useRef<string | null>(null);
+  const participantLeaseTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const participantLeaseRefreshInFlightRef = useRef(false);
+  const teardownPromiseRef = useRef<Promise<void> | null>(null);
+  const teardownCompleteRef = useRef(false);
+  const teardownStartedRef = useRef(false);
   const [stage, setStage] = useState<Stage>({ kind: "permission" });
   const { user } = useAuth();
 
+  const stopParticipantLeaseHeartbeat = () => {
+    if (participantLeaseTimerRef.current !== null) {
+      clearInterval(participantLeaseTimerRef.current);
+      participantLeaseTimerRef.current = null;
+    }
+  };
+
+  const refreshParticipantLease = async () => {
+    const participantId = participantRowRef.current;
+    if (!participantId || teardownStartedRef.current || participantLeaseRefreshInFlightRef.current) return;
+    participantLeaseRefreshInFlightRef.current = true;
+    try {
+      const { error } = await supabase.from("call_participants")
+        .update({ lease_refreshed_at: new Date().toISOString() })
+        .eq("id", participantId);
+      if (error) throw new Error(error.message || "Could not refresh the call participant lease");
+    } finally {
+      participantLeaseRefreshInFlightRef.current = false;
+    }
+  };
+
+  const startParticipantLeaseHeartbeat = () => {
+    stopParticipantLeaseHeartbeat();
+    if (!participantRowRef.current || teardownStartedRef.current) return;
+    const refreshOrEndCall = () => {
+      void refreshParticipantLease().catch(async (error) => {
+        if (teardownStartedRef.current) return;
+        stopParticipantLeaseHeartbeat();
+        const detail = error instanceof Error ? error.message : "The participant lease could not be refreshed";
+        const message = `${detail}. This call was ended to keep its participant state accurate. Close and rejoin the call.`;
+        try {
+          await teardown("participant_lease_failed");
+        } catch (cleanupError) {
+          console.error("Call cleanup after lease failure failed", cleanupError);
+        }
+        toast.error(message);
+        setStage({ kind: "error", message });
+      });
+    };
+    // Refresh immediately on reconnection so an already-expired lease cannot
+    // be silently revived or remain ambiguous for another interval.
+    refreshOrEndCall();
+    participantLeaseTimerRef.current = setInterval(refreshOrEndCall, PARTICIPANT_LEASE_INTERVAL_MS);
+  };
+
   // ── Cleanup helpers ────────────────────────────────────────────────────
   const recordParticipantLeave = async () => {
-    if (participantRowRef.current) {
-      await supabase.from("call_participants")
+    stopParticipantLeaseHeartbeat();
+    const participantId = participantRowRef.current;
+    if (participantId) {
+      const { error } = await supabase.from("call_participants")
         .update({ left_at: new Date().toISOString() })
-        .eq("id", participantRowRef.current);
+        .eq("id", participantId);
+      if (error) throw new Error(error.message || "Could not record that you left the call");
       participantRowRef.current = null;
     }
   };
@@ -45,34 +102,51 @@ const CallModal = ({ roomId, mode, sessionId, onClose }: CallModalProps) => {
   const finalizeSession = async (failureReason?: string) => {
     if (!sessionIdRef.current) return;
     // If I'm the last participant, mark session ended.
-    const { count } = await supabase.from("call_participants")
+    const { count, error: countError } = await supabase.from("call_participants")
       .select("id", { count: "exact", head: true })
       .eq("session_id", sessionIdRef.current)
       .is("left_at", null);
+    if (countError) throw new Error(countError.message || "Could not check the active call participants");
     if ((count ?? 0) === 0) {
-      const { data: sess } = await supabase.from("call_sessions")
-        .select("started_at, participant_count")
-        .eq("id", sessionIdRef.current).single();
-      const startedAt = sess?.started_at ? new Date(sess.started_at).getTime() : Date.now();
-      const dur = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-      await supabase.from("call_sessions").update({
+      const { error } = await supabase.from("call_sessions").update({
         ended_at: new Date().toISOString(),
-        duration_seconds: dur,
         failure_reason: failureReason ?? null,
       }).eq("id", sessionIdRef.current);
+      if (error && error.code !== "call_still_active") throw new Error(error.message || "Could not finalize the call session");
     }
   };
 
   const teardown = async (failureReason?: string) => {
-    try {
-      await callRef.current?.leave();
-    } catch {}
-    try {
-      callRef.current?.destroy();
-    } catch {}
+    teardownStartedRef.current = true;
+    stopParticipantLeaseHeartbeat();
+    if (teardownCompleteRef.current) return;
+    if (teardownPromiseRef.current) return teardownPromiseRef.current;
+    const call = callRef.current;
     callRef.current = null;
-    await recordParticipantLeave();
-    await finalizeSession(failureReason);
+    const operation = Promise.resolve().then(async () => {
+      try { await call?.leave(); } catch { /* Daily may already have left. */ }
+      try { call?.destroy(); } catch { /* Frame cleanup is best-effort. */ }
+      await recordParticipantLeave();
+      await finalizeSession(failureReason);
+      teardownCompleteRef.current = true;
+    });
+    teardownPromiseRef.current = operation;
+    try {
+      await operation;
+    } finally {
+      teardownPromiseRef.current = null;
+    }
+  };
+
+  const closeAfterTeardown = async (failureReason?: string) => {
+    try {
+      await teardown(failureReason);
+      onClose();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not save the call state. Try again.";
+      toast.error(message);
+      setStage({ kind: "error", message });
+    }
   };
 
   // ── Pre-flight permission check ────────────────────────────────────────
@@ -113,8 +187,8 @@ const CallModal = ({ roomId, mode, sessionId, onClose }: CallModalProps) => {
         body: { roomId, mode, ...(sessionId ? { sessionId } : {}) },
       });
       if (error) throw new Error(error.message ?? "Failed to fetch call token");
-      if (!data?.url || !data?.token) throw new Error("Invalid call token response");
-      sessionIdRef.current = data.sessionId ?? null;
+      if (!data?.url || !data?.token || !data?.sessionId) throw new Error("Invalid call token response");
+      sessionIdRef.current = data.sessionId;
 
       if (!containerRef.current) throw new Error("Call container not ready");
 
@@ -126,30 +200,46 @@ const CallModal = ({ roomId, mode, sessionId, onClose }: CallModalProps) => {
       callRef.current = call;
 
       call.on("joined-meeting", async () => {
-        setStage({ kind: "in_call" });
-        if (user && sessionIdRef.current) {
-          const { data: row } = await supabase.from("call_participants")
+        try {
+          if (!user || !sessionIdRef.current) throw new Error("Your call session is no longer available");
+          const { data: row, error: participantError } = await supabase.from("call_participants")
             .insert({ session_id: sessionIdRef.current, user_id: user.id })
             .select("id").single();
-          participantRowRef.current = row?.id ?? null;
-          // bump participant_count
-          const { count } = await supabase.from("call_participants")
-            .select("id", { count: "exact", head: true })
-            .eq("session_id", sessionIdRef.current);
-          await supabase.from("call_sessions")
-            .update({ participant_count: count ?? 1 })
-            .eq("id", sessionIdRef.current);
+          if (participantError || !row?.id) throw new Error(participantError?.message || "Could not join the call session");
+          participantRowRef.current = row.id;
+          if (teardownStartedRef.current) {
+            await recordParticipantLeave();
+            return;
+          }
+          startParticipantLeaseHeartbeat();
+          setStage({ kind: "in_call" });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Could not join the call session";
+          toast.error(message);
+          try { await teardown(message); } catch { /* The visible error below remains actionable. */ }
+          setStage({ kind: "error", message });
         }
       });
-      call.on("left-meeting", async () => { await teardown(); onClose(); });
+      call.on("left-meeting", () => { void closeAfterTeardown(); });
       call.on("error", async (ev: any) => {
         console.error("Daily error", ev);
-        await teardown(`daily_error: ${ev?.errorMsg ?? "unknown"}`);
-        setStage({ kind: "error", message: ev?.errorMsg ?? "Call error" });
+        const message = ev?.errorMsg ?? "Call error";
+        try { await teardown(`daily_error: ${message}`); }
+        catch (cleanupError) {
+          const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : "Could not save the call state";
+          toast.error(cleanupMessage);
+        }
+        setStage({ kind: "error", message });
       });
       call.on("network-connection", (ev: any) => {
-        if (ev?.event === "interrupted") setStage({ kind: "reconnecting" });
-        if (ev?.event === "connected") setStage({ kind: "in_call" });
+        if (ev?.event === "interrupted") {
+          stopParticipantLeaseHeartbeat();
+          setStage({ kind: "reconnecting" });
+        }
+        if (ev?.event === "connected") {
+          startParticipantLeaseHeartbeat();
+          setStage({ kind: "in_call" });
+        }
       });
 
       setStage({ kind: "joining" });
@@ -165,7 +255,40 @@ const CallModal = ({ roomId, mode, sessionId, onClose }: CallModalProps) => {
 
   // ── Cleanup on unmount ─────────────────────────────────────────────────
   useEffect(() => {
-    return () => { teardown(); };
+    return () => { void teardown().catch((error) => console.error("Call cleanup failed", error)); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        void closeAfterTeardown();
+        return;
+      }
+      if (event.key !== "Tab" || !modalRef.current) return;
+      const focusable = [...modalRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )].filter((element) => !element.hasAttribute("hidden"));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocused?.focus();
+    };
+    // Teardown and onClose belong to this modal instance.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -174,9 +297,11 @@ const CallModal = ({ roomId, mode, sessionId, onClose }: CallModalProps) => {
       className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-2 sm:p-4"
       style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))", paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
     >
-      <div className="relative w-full h-full max-w-5xl max-h-[100dvh] sm:max-h-[90vh] bg-card rounded-xl overflow-hidden shadow-2xl">
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-label={`${mode === "video" ? "Video" : "Audio"} call`} className="relative w-full h-full max-w-5xl max-h-[100dvh] sm:max-h-[90vh] bg-card rounded-xl overflow-hidden shadow-2xl">
         <button
-          onClick={async () => { await teardown(); onClose(); }}
+          ref={closeButtonRef}
+          type="button"
+          onClick={() => { void closeAfterTeardown(); }}
           className="absolute top-3 right-3 z-20 p-2 rounded-full bg-black/60 text-white hover:bg-black/80 transition"
           aria-label="Close call"
         >
@@ -243,7 +368,9 @@ const CallModal = ({ roomId, mode, sessionId, onClose }: CallModalProps) => {
             <p className="text-sm text-muted-foreground max-w-sm">{stage.message}</p>
             <div className="flex gap-3">
               <Button variant="outline" onClick={onClose}>Close</Button>
-              <Button onClick={requestPermissions}>Retry</Button>
+              <Button onClick={() => { void (participantRowRef.current || sessionIdRef.current ? closeAfterTeardown() : requestPermissions()); }}>
+                {participantRowRef.current || sessionIdRef.current ? "Retry cleanup" : "Retry"}
+              </Button>
             </div>
           </div>
         )}

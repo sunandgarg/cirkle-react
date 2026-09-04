@@ -149,8 +149,5 @@
     "vite": "^6.4.3",
     "vitest": "^3.2.4",
     "wrangler": "^4.128.0"
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
   }
 }

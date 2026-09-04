@@ -14,10 +14,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { resolveConnectionState, type ConnectionRow } from "@/lib/connections";
 import { requestRealtimeDispatch } from "@/lib/appsyncEvents";
 import {
-  collectNetworkMemberPages,
-  memberMatchesNetworkSearch,
   NETWORK_MEMBER_PAGE_SIZE,
   NETWORK_SEARCH_PAGE_SIZE,
+  networkSearchTerms,
   pageCount,
   resolveNetworkTab,
   type NetworkMember,
@@ -51,39 +50,101 @@ const Network = () => {
     setSearchParams({ tab });
   };
 
-  const userIit = profile?.iit_name || "";
+  const { data: primaryEducation } = useQuery({
+    queryKey: ["network-primary-education", user?.id, profile?.primary_education_id],
+    queryFn: async () => {
+      if (!user?.id) return null;
+      let query = supabase.from("education").select("id,user_id,institution,passing_year,is_verified").eq("user_id", user.id);
+      if (profile?.primary_education_id) query = query.eq("id", profile.primary_education_id);
+      const { data, error } = profile?.primary_education_id
+        ? await query.maybeSingle()
+        : await query.eq("is_verified", true).order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (error) throw error;
+      return data as { institution?: string | null; passing_year?: string | null } | null;
+    },
+    enabled: !!user?.id,
+    staleTime: 5 * 60_000,
+  });
+
+  const userIit = primaryEducation?.institution || profile?.iit_name || "";
   const userStudentStatus = profile?.student_status || "";
-  const userYear = userStudentStatus.match(/\d{4}/)?.[0] || "";
+  const userYear = String(primaryEducation?.passing_year || userStudentStatus.match(/\d{4}/)?.[0] || "");
 
   const selectedIit = filterByIit ? userIit : "";
   const selectedYear = filterByYear ? userYear : "";
+
+  const { data: cohortCandidateIds } = useQuery({
+    queryKey: ["network-cohort-candidates", selectedIit || userIit, selectedYear || userYear],
+    queryFn: async () => {
+      const year = selectedYear || userYear;
+      const institute = selectedIit || userIit;
+      if (!year || !institute) return [] as string[];
+      const { data, error } = await supabase.from("education")
+        .select("user_id")
+        .eq("passing_year", year)
+        .eq("institution", institute)
+        .eq("is_verified", true)
+        .limit(500);
+      if (error) throw error;
+      return [...new Set((data ?? []).map((item: any) => item.user_id).filter((id: unknown): id is string => typeof id === "string" && id !== user?.id))];
+    },
+    enabled: !!user?.id && !!userIit && !!userYear,
+    staleTime: 5 * 60_000,
+  });
+
   const fetchMemberPage = useCallback(async (from: number, to: number) => {
+    if (selectedYear && !cohortCandidateIds?.length) return { rows: [] as NetworkMember[], count: 0 };
     let query = supabase.from("profiles")
       .select(NETWORK_MEMBER_COLUMNS, { count: "exact" })
-      .neq("user_id", user?.id || "");
+      .neq("user_id", user?.id || "")
+      .eq("is_verified", true);
+    if (selectedYear) query = query.in("user_id", cohortCandidateIds ?? []);
     if (selectedIit) query = query.eq("iit_name", selectedIit);
-    if (selectedYear) query = query.ilike("student_status", `%${selectedYear}%`);
+    for (const term of networkSearchTerms(search)) {
+      const pattern = `%${term}%`;
+      query = query.or(`name.ilike.${pattern},headline.ilike.${pattern},iit_name.ilike.${pattern},location.ilike.${pattern},student_status.ilike.${pattern}`);
+    }
     const { data, error, count } = await query.order("user_id", { ascending: true }).range(from, to);
     if (error) throw error;
     return { rows: (data ?? []) as NetworkMember[], count };
-  }, [selectedIit, selectedYear, user?.id]);
+  }, [cohortCandidateIds, search, selectedIit, selectedYear, user?.id]);
 
   const { data: memberPageResult, isLoading: membersLoading, isFetching: membersFetching, error: membersError, refetch: refetchMembers } = useQuery({
-    queryKey: ["network-members-page", user?.id, selectedIit, selectedYear, memberPage],
+    queryKey: ["network-members-page", user?.id, selectedIit, selectedYear, search.trim(), memberPage],
     queryFn: async () => {
       return fetchMemberPage(memberPage * NETWORK_MEMBER_PAGE_SIZE, (memberPage + 1) * NETWORK_MEMBER_PAGE_SIZE - 1);
     },
-    enabled: !!user && isVerified,
+    enabled: !!user && isVerified && (!selectedYear || cohortCandidateIds !== undefined),
     staleTime: 60_000,
   });
   const members = useMemo(() => memberPageResult?.rows ?? [], [memberPageResult?.rows]);
   const memberTotal = memberPageResult?.count ?? members.length;
 
   const hasSearch = search.trim().length > 0;
-  const { data: searchCorpus = [], isLoading: searchLoading, error: searchError, refetch: refetchSearch } = useQuery({
-    queryKey: ["network-member-search-corpus", user?.id, selectedIit, selectedYear],
-    queryFn: () => collectNetworkMemberPages(fetchMemberPage, NETWORK_SEARCH_PAGE_SIZE),
-    enabled: !!user && isVerified && hasSearch,
+
+  const { data: campusRecommendationRows = [] } = useQuery({
+    queryKey: ["network-campus-recommendations", user?.id, userIit],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("profiles").select(NETWORK_MEMBER_COLUMNS)
+        .neq("user_id", user?.id || "").eq("iit_name", userIit).eq("is_verified", true).order("user_id").limit(12);
+      if (error) throw error;
+      return (data ?? []) as NetworkMember[];
+    },
+    enabled: !!user?.id && !!userIit && isVerified,
+    staleTime: 5 * 60_000,
+  });
+
+  const { data: cohortRecommendationRows = [] } = useQuery({
+    queryKey: ["network-cohort-recommendations", user?.id, userIit, userYear, cohortCandidateIds],
+    queryFn: async () => {
+      const candidates = (cohortCandidateIds ?? []).slice(0, 200);
+      if (!candidates.length) return [];
+      const { data, error } = await supabase.from("profiles").select(NETWORK_MEMBER_COLUMNS)
+        .in("user_id", candidates).eq("is_verified", true).order("user_id").limit(12);
+      if (error) throw error;
+      return (data ?? []) as NetworkMember[];
+    },
+    enabled: !!user?.id && !!userIit && !!userYear && !!cohortCandidateIds?.length && isVerified,
     staleTime: 5 * 60_000,
   });
 
@@ -138,9 +199,11 @@ const Network = () => {
 
   const networkMembers = useMemo<NetworkMember[]>(() => {
     const merged = new Map<string, any>();
-    for (const member of [...(members ?? []), ...connectionMembers]) merged.set(member.user_id, member);
+    for (const member of [...members, ...connectionMembers, ...campusRecommendationRows, ...cohortRecommendationRows]) {
+      merged.set(member.user_id, member);
+    }
     return [...merged.values()];
-  }, [connectionMembers, members]);
+  }, [campusRecommendationRows, cohortRecommendationRows, connectionMembers, members]);
 
   const getConnectionStatus = useCallback((memberId: string) => {
     const conn = connections?.find((c: any) =>
@@ -238,18 +301,14 @@ const Network = () => {
   };
 
   const cohortMembers = useMemo(() => {
-    if (!members || !userIit || !userYear) return [];
-    return shuffled(members.filter((m: any) =>
-      m.iit_name === userIit && m.student_status?.includes(userYear) && getConnectionStatus(m.user_id) === "none"
-    ));
-  }, [members, userIit, userYear, getConnectionStatus]);
+    if (!userIit || !userYear) return [];
+    return shuffled(cohortRecommendationRows.filter((member) => getConnectionStatus(member.user_id) === "none"));
+  }, [cohortRecommendationRows, getConnectionStatus, userIit, userYear]);
 
   const campusMembers = useMemo(() => {
-    if (!members || !userIit) return [];
-    return shuffled(members.filter((m: any) =>
-      m.iit_name === userIit && getConnectionStatus(m.user_id) === "none"
-    ));
-  }, [members, userIit, getConnectionStatus]);
+    if (!userIit) return [];
+    return shuffled(campusRecommendationRows.filter((member) => getConnectionStatus(member.user_id) === "none"));
+  }, [campusRecommendationRows, getConnectionStatus, userIit]);
 
   const globalMembers = useMemo(() => {
     if (!members) return [];
@@ -282,14 +341,6 @@ const Network = () => {
     () => pendingMembers.filter((member: any) => getConnectionStatus(member.user_id) === "pending_sent"),
     [getConnectionStatus, pendingMembers],
   );
-
-  const filteredMembers = useMemo(() => hasSearch
-    ? searchCorpus.filter((member) => memberMatchesNetworkSearch(member, search))
-    : null, [hasSearch, search, searchCorpus]);
-  const searchPageMembers = filteredMembers?.slice(
-    memberPage * NETWORK_MEMBER_PAGE_SIZE,
-    (memberPage + 1) * NETWORK_MEMBER_PAGE_SIZE,
-  ) ?? null;
 
   const activateDiscoveryFilters = (iit: boolean, year: boolean) => {
     setSearch("");
@@ -336,7 +387,7 @@ const Network = () => {
 
         <div className="relative">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input aria-label="Search members" placeholder="Search name, headline, IIT, location, or skill..." value={search} onChange={(e) => { setSearch(e.target.value); setMemberPage(0); }}
+          <Input aria-label="Search members" placeholder="Search name, headline, IIT, location, or status..." value={search} onChange={(e) => { setSearch(e.target.value); setMemberPage(0); }}
             className="pl-10 h-11 rounded-full bg-card border-border text-foreground placeholder:text-muted-foreground" />
         </div>
 
@@ -360,16 +411,16 @@ const Network = () => {
           ))}
         </div>
 
-        {hasSearch && searchLoading ? (
-          <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Searching all members…</div>
-        ) : hasSearch && searchError ? (
-          <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-6 text-center"><p className="text-sm font-semibold text-foreground">Could not search members</p><Button variant="outline" size="sm" className="mt-3" onClick={() => void refetchSearch()}>Try again</Button></div>
-        ) : filteredMembers ? (
+        {hasSearch && membersLoading ? (
+          <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Searching members…</div>
+        ) : hasSearch && membersError ? (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-6 text-center"><p className="text-sm font-semibold text-foreground">Could not search members</p><Button variant="outline" size="sm" className="mt-3" onClick={() => void refetchMembers()}>Try again</Button></div>
+        ) : hasSearch ? (
           <div className="space-y-2">
-            {searchPageMembers?.length ? searchPageMembers.map((m: any) => (
+            {members.length ? members.map((m: any) => (
               <PersonRow key={m.user_id} m={m} status={getConnectionStatus(m.user_id)} connection={getConnection(m.user_id)} onConnect={() => openInvite(m)} onRespond={respondRequest.mutate} onWithdraw={withdrawRequest.mutate} navigate={navigate} />
             )) : <EmptyState icon={Users} title="No members found" />}
-            <MemberPagination page={memberPage} total={filteredMembers.length} onChange={setMemberPage} />
+            <MemberPagination page={memberPage} total={memberTotal} onChange={setMemberPage} loading={membersFetching} />
           </div>
         ) : membersError && (activeTab === "explore" || activeTab === "discover") ? (
           <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-6 text-center"><p className="text-sm font-semibold text-foreground">Could not load members</p><Button variant="outline" size="sm" className="mt-3" onClick={() => void refetchMembers()}>Try again</Button></div>
@@ -387,11 +438,11 @@ const Network = () => {
                     ))}
                   </div>
                 </div>
-                {userIit && userYear && (
+                {userIit && userYear && cohortMembers.length > 0 && (
                   <PeopleSection title={`Same Cohort ${userYear}`} subtitle={`${userIit} · ${userStudentStatus}`} members={cohortMembers}
                     onViewAll={() => activateDiscoveryFilters(true, true)} onConnect={openInvite} navigate={navigate} getConnectionStatus={getConnectionStatus} />
                 )}
-                {userIit && (
+                {userIit && campusMembers.length > 0 && (
                   <PeopleSection title={userIit} subtitle="All students & alumni" members={campusMembers}
                     onViewAll={() => activateDiscoveryFilters(true, false)} onConnect={openInvite} navigate={navigate} getConnectionStatus={getConnectionStatus} />
                 )}

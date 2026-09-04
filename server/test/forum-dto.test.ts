@@ -30,6 +30,38 @@ describe("forum post DTO", () => {
     expect(dto.profile).toMatchObject({ name: "Author" });
   });
 
+  it("does not reveal the creator ID through an anonymous poll", () => {
+    const dto = buildForumPostDto(post, "viewer-id", "member", {
+      poll: { id: "poll-id", post_id: post.id, created_by: "author-id", question: "Private poll author" },
+    });
+    expect(dto.poll).toEqual({ id: "poll-id", post_id: post.id, question: "Private poll author" });
+  });
+
+  it("uses opaque attachment handles and neutral metadata for anonymous viewers", () => {
+    const dto = buildForumPostDto({
+      ...post,
+      image_path: "author-id/private.webp",
+      file_path: "author-id/Sunand-Garg-resume.pdf",
+      file_name: "Sunand Garg resume.pdf",
+      deleted_by_user_id: "author-id",
+    } as Post, "viewer-id", "member", {
+      mediaHandles: new Map([
+        ["post-images/author-id/private.webp", "opaque/11111111-1111-4111-8111-111111111111"],
+        ["forum-files/author-id/Sunand-Garg-resume.pdf", "opaque/22222222-2222-4222-8222-222222222222"],
+      ]),
+    });
+    expect(dto).toMatchObject({
+      author_id: null,
+      deleted_by_user_id: null,
+      client_id: null,
+      image_path: "opaque/11111111-1111-4111-8111-111111111111",
+      file_path: "opaque/22222222-2222-4222-8222-222222222222",
+      file_name: "Attachment",
+    });
+    expect(JSON.stringify(dto)).not.toContain("author-id/");
+    expect(JSON.stringify(dto)).not.toContain("Sunand Garg");
+  });
+
   it("returns only tombstone metadata after delete-for-everyone", () => {
     const dto = buildForumPostDto({
       ...post, is_anonymous: false, is_deleted_for_everyone: true,
