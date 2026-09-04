@@ -368,8 +368,9 @@ operator approval.
 
 ## Cloudflare Pages
 
-Create a Pages project named `cirkle` connected to the production
-repository. Use:
+Use the separate Pages project named `cirkle-world`; its production URL is
+`https://cirkle-world.pages.dev`. The legacy `cirkle` project and its domains
+must remain untouched until the API and data cutover is complete. Use:
 
 ```text
 Production branch: pages-production

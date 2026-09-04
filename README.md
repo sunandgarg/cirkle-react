@@ -133,6 +133,7 @@ instance.
 
 Cloudflare Pages settings:
 
+- Project: `cirkle-world` (`https://cirkle-world.pages.dev`)
 - Build command: `pnpm build:pages`
 - Output directory: `dist`
 - Production branch: `pages-production` (advance only after the same commit's API passes `/readyz`)
