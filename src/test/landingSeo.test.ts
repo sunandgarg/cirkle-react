@@ -23,4 +23,12 @@ describe("public market positioning", () => {
     expect(sitemap).not.toContain("https://cirkle.world/jobs");
     expect(sitemap).not.toContain("https://cirkle.world/blogs");
   });
+
+  it("keeps invite-only positioning out of the public landing and sign-in experience", () => {
+    const landing = projectFile("src/pages/Landing.tsx");
+    const auth = projectFile("src/pages/Auth.tsx");
+    expect(`${landing}\n${auth}`.toLowerCase()).not.toContain("invite-only");
+    expect(landing).toContain("Our journey");
+    expect(landing).toContain("Voices shaping Cirkle");
+  });
 });

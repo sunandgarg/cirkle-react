@@ -240,7 +240,7 @@ const Auth = () => {
         </picture>
         <div aria-hidden="true" className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(245,247,249,0.02)_0%,rgba(245,247,249,0.12)_55%,#f5f7f9_100%)] dark:bg-[linear-gradient(to_bottom,rgba(13,14,16,0.04)_0%,rgba(13,14,16,0.14)_60%,#0d0e10_100%)] lg:bg-[linear-gradient(to_right,rgba(245,247,249,0.02)_0%,rgba(245,247,249,0.08)_55%,rgba(245,247,249,0.56)_100%)] lg:dark:bg-[linear-gradient(to_right,rgba(13,14,16,0.08)_0%,rgba(13,14,16,0.12)_55%,rgba(13,14,16,0.72)_100%)]" />
         <div className="absolute inset-x-8 bottom-10 hidden max-w-lg lg:block">
-          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/55">The invite-only community network</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/55">The verified community network</p>
           <p className="mt-3 text-3xl font-semibold leading-tight tracking-[-0.025em] text-white/90">Your real communities, without the noise.</p>
         </div>
       </div>

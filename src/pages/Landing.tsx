@@ -10,9 +10,12 @@ import {
   ChevronRight,
   CircleDot,
   Handshake,
+  Infinity as InfinityIcon,
   MessageCircleMore,
   MessagesSquare,
   Network,
+  Plane,
+  Quote,
   Search,
   ShieldCheck,
   Sparkles,
@@ -60,6 +63,33 @@ const COMMUNITY_TYPES = [
   { label: "Professional circles", caption: "Teams, functions and operators", icon: Network },
   { label: "Alumni communities", caption: "People connected by shared history", icon: BadgeCheck },
   { label: "Curated collectives", caption: "Creators, experts and niche groups", icon: Sparkles },
+];
+
+const JOURNEY = [
+  { year: "2025", title: "An idea takes flight", body: "A simple belief: communities work better when identity, context and trust come first." },
+  { year: "2026", title: "Cirkle begins", body: "The platform is built around focused rooms, meaningful connections and useful opportunities." },
+  { year: "First community", title: "IIT circles launch", body: "Verified campus, cohort and alumni communities become the first living Cirkles." },
+  { year: "Next", title: "Academic communities", body: "More institutions and learning networks join with their own identity and shared spaces." },
+  { year: "Beyond", title: "Corporate communities", body: "Teams, professional networks and expert communities connect knowledge with opportunity." },
+  { year: "∞", title: "Every community that matters", body: "A growing network of trusted Cirkles—designed to keep expanding without losing belonging." },
+];
+
+const TESTIMONIALS = [
+  {
+    quote: "I want professional conversations where people already understand the context—not another feed built for reach.",
+    role: "Student member",
+    context: "Early community perspective",
+  },
+  {
+    quote: "The most useful introductions begin with a shared institution, experience or purpose. Cirkle makes that visible from the start.",
+    role: "Alumni mentor",
+    context: "Early community perspective",
+  },
+  {
+    quote: "A community needs more than a chat group. It needs memory, trusted access and a way for the right people to find each other.",
+    role: "Community operator",
+    context: "Early community perspective",
+  },
 ];
 
 const FAQS = [
@@ -311,6 +341,68 @@ const Landing = () => {
                   <h3 className="mt-14 text-2xl font-black tracking-[-0.035em]">{step.title}</h3>
                   <p className="mt-3 text-sm leading-6 text-black/55 dark:text-white/55">{step.body}</p>
                 </motion.article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="journey" className="relative overflow-hidden bg-[#f4eee8] px-4 py-20 dark:bg-[#11151c] sm:px-6 sm:py-28">
+          <div className="pointer-events-none absolute left-1/2 top-12 h-72 w-72 -translate-x-1/2 rounded-full bg-[#f3b99e]/25 blur-3xl" />
+          <div className="relative mx-auto max-w-7xl">
+            <motion.div {...reveal} className="max-w-3xl">
+              <p className="mb-4 text-[11px] font-extrabold uppercase tracking-[0.18em] text-[#b6502e] dark:text-[#f3b99e]">Our journey</p>
+              <h2 className="font-display text-4xl font-medium leading-[1.02] tracking-[-0.05em] sm:text-6xl">From one idea to every Cirkle that matters.</h2>
+              <p className="mt-5 max-w-2xl text-sm leading-7 text-black/56 dark:text-white/56 sm:text-base">The route keeps growing, but the destination stays the same: help people find belonging, knowledge and opportunity through communities they trust.</p>
+            </motion.div>
+
+            <div className="relative mt-14 lg:mt-20">
+              <svg className="pointer-events-none absolute left-[7%] top-10 hidden h-36 w-[86%] overflow-visible lg:block" viewBox="0 0 1000 150" fill="none" aria-hidden="true">
+                <path d="M12 108 C150 4 280 142 414 62 S674 20 806 82 S930 116 990 28" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeDasharray="3 12" className="text-[#1f68c5]/45" />
+              </svg>
+
+              <div className="relative grid gap-5 border-l-2 border-dashed border-[#1f68c5]/30 pl-7 lg:grid-cols-6 lg:gap-3 lg:border-l-0 lg:pl-0">
+                {JOURNEY.map((stop, index) => (
+                  <motion.article
+                    key={`${stop.year}-${stop.title}`}
+                    {...reveal}
+                    transition={{ ...reveal.transition, delay: index * 0.06 }}
+                    className={`relative rounded-[24px] border border-black/10 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#191e27]/90 lg:min-h-[235px] ${index % 2 === 0 ? "lg:mt-0" : "lg:mt-20"}`}
+                  >
+                    <span className="absolute -left-[36px] top-7 h-4 w-4 rounded-full border-4 border-[#f4eee8] bg-[#1f68c5] shadow dark:border-[#11151c] lg:-top-5 lg:left-6" />
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#1f68c5]">{stop.year}</p>
+                    <h3 className="mt-4 text-lg font-black leading-tight tracking-[-0.025em]">{stop.title}</h3>
+                    <p className="mt-3 text-xs leading-5 text-black/52 dark:text-white/52">{stop.body}</p>
+                    {index === JOURNEY.length - 1 && <InfinityIcon className="mt-5 h-6 w-6 text-[#b6502e] dark:text-[#f3b99e]" aria-hidden="true" />}
+                  </motion.article>
+                ))}
+                <div className="absolute -bottom-5 -left-[42px] flex h-9 w-9 items-center justify-center rounded-full bg-[#1f68c5] text-white shadow-lg lg:-right-3 lg:-top-5 lg:bottom-auto lg:left-auto">
+                  <Plane className="h-4 w-4 rotate-45" aria-hidden="true" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="testimonials" className="bg-white px-4 py-20 dark:bg-[#0b0e13] sm:px-6 sm:py-28">
+          <div className="mx-auto max-w-7xl">
+            <motion.div {...reveal} className="grid gap-8 lg:grid-cols-[.72fr_1.28fr] lg:items-end">
+              <div>
+                <p className="text-[11px] font-extrabold uppercase tracking-[0.18em] text-[#1f68c5]">Voices shaping Cirkle</p>
+                <h2 className="mt-4 font-display text-4xl font-medium leading-[1.02] tracking-[-0.05em] sm:text-6xl">Built around what communities actually need.</h2>
+              </div>
+              <p className="max-w-2xl text-sm leading-7 text-black/55 dark:text-white/55 sm:text-base">Early community perspectives keep the product grounded in trust, relevance and the kinds of connections people are comfortable acting on.</p>
+            </motion.div>
+
+            <div className="mt-12 grid gap-4 lg:grid-cols-3">
+              {TESTIMONIALS.map((testimonial, index) => (
+                <motion.figure key={testimonial.role} {...reveal} transition={{ ...reveal.transition, delay: index * 0.07 }} className="flex min-h-[285px] flex-col rounded-[28px] border border-black/10 bg-[#fbfaf8] p-6 shadow-sm dark:border-white/10 dark:bg-[#11151c] sm:p-8">
+                  <Quote className="h-8 w-8 text-[#1f68c5]" fill="currentColor" aria-hidden="true" />
+                  <blockquote className="mt-8 flex-1 text-xl font-bold leading-8 tracking-[-0.025em]">“{testimonial.quote}”</blockquote>
+                  <figcaption className="mt-8 border-t border-black/10 pt-5 dark:border-white/10">
+                    <p className="text-sm font-black">{testimonial.role}</p>
+                    <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-black/40 dark:text-white/40">{testimonial.context}</p>
+                  </figcaption>
+                </motion.figure>
               ))}
             </div>
           </div>
