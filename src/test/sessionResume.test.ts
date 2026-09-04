@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { readResumeRoute, resolvePostAuthRoute, saveResumeRoute } from "@/lib/sessionResume";
+import { readResumeRoute, readSafeReturnRoute, resolvePostAuthRoute, saveResumeRoute } from "@/lib/sessionResume";
 
 describe("durable member route resume", () => {
   beforeEach(() => localStorage.clear());
@@ -26,5 +26,18 @@ describe("durable member route resume", () => {
     saveResumeRoute("admin-1", "/cirkle-forum?room=cohort");
     expect(resolvePostAuthRoute("admin-1", true)).toBe("/admin");
     expect(resolvePostAuthRoute("member-1", false)).toBe("/cirkle-forum");
+  });
+
+  it("returns a member to the protected route that sent them to login", () => {
+    expect(resolvePostAuthRoute("member-1", false, "/u/member-slug?tab=about")).toBe("/u/member-slug?tab=about");
+    expect(resolvePostAuthRoute("admin-1", true, "/profile/member-2")).toBe("/profile/member-2");
+  });
+
+  it("rejects external and authentication return locations", () => {
+    expect(readSafeReturnRoute("https://attacker.example/profile")).toBeNull();
+    expect(readSafeReturnRoute("//attacker.example/profile")).toBeNull();
+    expect(readSafeReturnRoute("/\\attacker.example/profile")).toBeNull();
+    expect(readSafeReturnRoute("/auth?returnTo=/profile")).toBeNull();
+    expect(resolvePostAuthRoute("member-1", false, "//attacker.example")).toBe("/cirkle-forum");
   });
 });

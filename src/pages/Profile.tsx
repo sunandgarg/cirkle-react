@@ -24,7 +24,7 @@ import { companies, loadCompanies } from "@/data/companiesList";
 import { locations } from "@/data/locationsList";
 import { clearMobileTestSession } from "@/lib/mobileVerification";
 import { defaultIitLogo, IIT_LIST } from "@/data/iitInstitutes";
-import { buildSocialLinks, MENTOR_CATEGORIES, readSocialLinks, SOCIAL_FIELDS, socialLabel, type CustomSocialLink } from "@/lib/profileOptions";
+import { buildSocialLinks, MENTOR_CATEGORIES, readSocialLinks, safeExternalUrl, SOCIAL_FIELDS, socialLabel, type CustomSocialLink } from "@/lib/profileOptions";
 import { compressProfileImage, convertToWebP } from "@/lib/imageUtils";
 import { findCompanyOption, shouldOfferInitialCompanyLogo } from "@/lib/companyCatalog";
 import { effectiveMemberStatus } from "@/lib/memberStatus";
@@ -49,6 +49,11 @@ const formatMemberStatus = (status?: string | null) => status
 const getIitLogo = (name?: string | null) => {
   const institute = IIT_LIST.find((item) => item.name.toLowerCase() === name?.trim().toLowerCase());
   return institute ? defaultIitLogo(institute.studentDomain) : null;
+};
+
+const displayableSocialUrl = (value: unknown): string => {
+  if (typeof value !== "string") return "";
+  try { return safeExternalUrl(value); } catch { return ""; }
 };
 
 const Profile = () => {
@@ -209,7 +214,8 @@ const Profile = () => {
     queryFn: async () => {
       if (!targetId) return { posts: 0, connections: 0, sessions: 0 };
       const [postsRes, connectionsRes, sessionsRes] = await Promise.all([
-        supabase.from("posts").select("id", { count: "exact", head: true }).eq("author_id", targetId),
+        supabase.from("posts").select("id", { count: "exact", head: true })
+          .eq("author_id", targetId).eq("is_anonymous", false),
         supabase.from("connections").select("id", { count: "exact", head: true })
           .or(`requester_id.eq.${targetId},receiver_id.eq.${targetId}`).eq("status", "accepted"),
         supabase.from("consultations").select("id", { count: "exact", head: true })
@@ -521,6 +527,10 @@ const Profile = () => {
   const displayMemberStatus = effectiveMemberStatus((displayProfile as any)?.student_status, (primaryEducation as any)?.passing_year);
   const skills = (displayProfile as any)?.skills || [];
   const socialLinks = (displayProfile as any)?.social_links as any || {};
+  const safeSocialLinks = Object.entries(socialLinks).flatMap(([key, value]) => {
+    const url = displayableSocialUrl(value);
+    return url ? [{ key, url }] : [];
+  });
   const profileSlug = (displayProfile as any)?.slug;
   const slugUpdatedAt = (displayProfile as any)?.slug_updated_at;
   const pendingLocationValue = isOwn ? pendingProfileOptions.find((item: any) => item.field === "location")?.value : null;
@@ -895,13 +905,13 @@ const Profile = () => {
                 <h3 className="font-bold text-foreground text-sm">Social Handles</h3>
                 <EditButton section="social" />
               </div>
-              {Object.keys(socialLinks).length > 0 && Object.values(socialLinks).some(v => !!v) ? (
+              {safeSocialLinks.length > 0 ? (
                 <div className="space-y-3">
-                  {Object.entries(socialLinks).map(([key, val]) => val ? (
-                    <a key={key} href={val as string} target="_blank" rel="noopener noreferrer" className="flex min-w-0 items-start gap-2.5 border-b border-border py-2 text-sm text-primary last:border-0 hover:underline">
-                      <LinkIcon className="mt-0.5 w-4 h-4 text-muted-foreground flex-shrink-0" /><span>{socialLabel(key)}:</span><span className="min-w-0 break-all">{val as string}</span>
+                  {safeSocialLinks.map(({ key, url }) => (
+                    <a key={key} href={url} target="_blank" rel="noopener noreferrer" className="flex min-w-0 items-start gap-2.5 border-b border-border py-2 text-sm text-primary last:border-0 hover:underline">
+                      <LinkIcon className="mt-0.5 w-4 h-4 text-muted-foreground flex-shrink-0" /><span>{socialLabel(key)}:</span><span className="min-w-0 break-all">{url}</span>
                     </a>
-                  ) : null)}
+                  ))}
                 </div>
               ) : <p className="text-sm text-muted-foreground/50 italic text-center py-8">No social links added</p>}
             </div>

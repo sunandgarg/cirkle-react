@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Download, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
+import { safeHttpUrl } from "@/lib/safeUrl";
 
 interface ImageLightboxProps {
   src: string;
@@ -42,6 +43,9 @@ const ImageLightbox = ({ src, alt, onClose }: ImageLightboxProps) => {
 
   const zoomIn = () => setZoom((value) => Math.min(value + 1, MAX_ZOOM));
   const zoomOut = () => setZoom((value) => Math.max(value - 1, MIN_ZOOM));
+  const safeSrc = safeHttpUrl(src);
+
+  if (!safeSrc) return null;
 
   return createPortal(
     <div
@@ -86,7 +90,7 @@ const ImageLightbox = ({ src, alt, onClose }: ImageLightboxProps) => {
           </button>
         )}
         <a
-          href={src}
+          href={safeSrc}
           download
           target="_blank"
           rel="noopener noreferrer"
@@ -110,7 +114,7 @@ const ImageLightbox = ({ src, alt, onClose }: ImageLightboxProps) => {
         className="flex min-h-full min-w-full items-center justify-center p-3 sm:p-8"
       >
         <img
-          src={src}
+          src={safeSrc}
           alt={alt || ""}
           className="block max-h-[92dvh] max-w-[94vw] select-none object-contain transition-transform duration-150"
           style={{ transform: `scale(${zoom})`, transformOrigin: "center" }}

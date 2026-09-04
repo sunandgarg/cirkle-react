@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { ArrowLeft, BookOpen, Clock, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { format, formatDistanceToNow } from "date-fns";
+import { isBlogLive } from "@/lib/blogVisibility";
 
 const db = supabase as any;
 
@@ -24,7 +25,7 @@ const BlogAuthor = () => {
         db.from("blogs").select("*").eq("author_id", authorId!).eq("published", true).order("created_at", { ascending: false }),
       ]);
       if (error) throw error;
-      return { profile, posts: (posts ?? []) as any[] };
+      return { profile, posts: ((posts ?? []) as any[]).filter((post) => isBlogLive(post)) };
     },
     enabled: !!authorId,
   });

@@ -1,0 +1,451 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String    @id @default(uuid()) @db.VarChar(36)
+  email             String    @unique @db.VarChar(320)
+  phone             String?   @unique @db.VarChar(32)
+  password_hash     String?   @db.VarChar(255)
+  role              String    @default("member") @db.VarChar(24)
+  status            String    @default("active") @db.VarChar(24)
+  email_verified_at DateTime? @db.DateTime(3)
+  phone_verified_at DateTime? @db.DateTime(3)
+  last_login_at     DateTime? @db.DateTime(3)
+  created_at        DateTime  @default(now()) @db.DateTime(3)
+  updated_at        DateTime  @updatedAt @db.DateTime(3)
+
+  profile             Profile?
+  identities          AuthIdentity[]
+  refresh_sessions    RefreshSession[]
+  email_otps          EmailOtp[]
+  password_resets     PasswordReset[]
+  oauth_codes         OAuthCode[]
+  posts               Post[]            @relation("PostAuthor")
+  comments            Comment[]
+  reactions           Reaction[]
+  reports             Report[]
+  sent_connections    Connection[]       @relation("ConnectionRequester")
+  received_connections Connection[]      @relation("ConnectionReceiver")
+  applications        Application[]
+  rsvps               Rsvp[]
+  files               FileObject[]
+  audits              AuditLog[]         @relation("AuditActor")
+
+  @@map("users")
+}
+
+model AuthIdentity {
+  id               String   @id @default(uuid()) @db.VarChar(36)
+  user_id          String   @db.VarChar(36)
+  provider         String   @db.VarChar(32)
+  provider_subject String   @db.VarChar(255)
+  provider_email   String?  @db.VarChar(320)
+  created_at       DateTime @default(now()) @db.DateTime(3)
+  updated_at       DateTime @updatedAt @db.DateTime(3)
+  user             User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([provider, provider_subject])
+  @@index([user_id])
+  @@map("auth_identities")
+}
+
+model Profile {
+  user_id                  String    @id @db.VarChar(36)
+  name                     String?   @db.VarChar(160)
+  slug                     String?   @unique @db.VarChar(100)
+  avatar_url               String?   @db.Text
+  cover_photo_url          String?   @db.Text
+  headline                 String?   @db.VarChar(255)
+  bio                      String?   @db.Text
+  location                 String?   @db.VarChar(255)
+  date_of_birth            DateTime? @db.Date
+  phone_country_code       String?   @db.VarChar(8)
+  phone_number             String?   @db.VarChar(24)
+  phone_full               String?   @db.VarChar(32)
+  iit_email                String?   @unique @db.VarChar(320)
+  iit_name                 String?   @db.VarChar(160)
+  student_status           String?   @db.VarChar(40)
+  community_id             String    @default("iit-community") @db.VarChar(80)
+  role                     String    @default("member") @db.VarChar(24)
+  is_verified              Boolean   @default(false)
+  onboarding_completed     Boolean   @default(false)
+  is_mentor                Boolean   @default(false)
+  mentor_category          String?   @db.VarChar(120)
+  mentor_price_chat        Decimal?  @db.Decimal(10, 2)
+  mentor_price_audio       Decimal?  @db.Decimal(10, 2)
+  mentor_price_video       Decimal?  @db.Decimal(10, 2)
+  expertise                Json?
+  skills                   Json?
+  experience               Json?
+  social_links             Json?
+  primary_education_id     String?   @db.VarChar(36)
+  slug_updated_at          DateTime? @db.DateTime(3)
+  created_at               DateTime  @default(now()) @db.DateTime(3)
+  updated_at               DateTime  @updatedAt @db.DateTime(3)
+  user                     User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([community_id, is_verified])
+  @@index([iit_name, student_status])
+  @@map("profiles")
+}
+
+model RefreshSession {
+  id             String    @id @default(uuid()) @db.VarChar(36)
+  user_id        String    @db.VarChar(36)
+  family_id      String    @db.VarChar(36)
+  token_hash     String    @unique @db.Char(64)
+  parent_id      String?   @db.VarChar(36)
+  replaced_by_id String?   @db.VarChar(36)
+  user_agent     String?   @db.VarChar(512)
+  ip_hash        String?   @db.Char(64)
+  expires_at     DateTime  @db.DateTime(3)
+  last_used_at   DateTime? @db.DateTime(3)
+  revoked_at     DateTime? @db.DateTime(3)
+  revoke_reason  String?   @db.VarChar(80)
+  created_at     DateTime  @default(now()) @db.DateTime(3)
+  user           User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, revoked_at])
+  @@index([family_id])
+  @@index([expires_at])
+  @@map("refresh_sessions")
+}
+
+model EmailOtp {
+  id               String    @id @default(uuid()) @db.VarChar(36)
+  user_id          String?   @db.VarChar(36)
+  email             String    @db.VarChar(320)
+  destination_hash String    @db.Char(64)
+  code_hash         String    @db.VarChar(255)
+  purpose           String    @db.VarChar(40)
+  attempts          Int       @default(0)
+  max_attempts      Int       @default(5)
+  expires_at        DateTime  @db.DateTime(3)
+  consumed_at       DateTime? @db.DateTime(3)
+  ip_hash           String?   @db.Char(64)
+  created_at        DateTime  @default(now()) @db.DateTime(3)
+  user              User?     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([destination_hash, purpose, created_at])
+  @@index([expires_at])
+  @@map("email_otps")
+}
+
+model PasswordReset {
+  id         String    @id @default(uuid()) @db.VarChar(36)
+  user_id    String    @db.VarChar(36)
+  token_hash String    @unique @db.Char(64)
+  expires_at DateTime  @db.DateTime(3)
+  used_at    DateTime? @db.DateTime(3)
+  created_at DateTime  @default(now()) @db.DateTime(3)
+  user       User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([expires_at])
+  @@map("password_resets")
+}
+
+model OAuthCode {
+  id           String    @id @default(uuid()) @db.VarChar(36)
+  user_id      String?   @db.VarChar(36)
+  kind         String    @db.VarChar(32)
+  code_hash    String    @unique @db.Char(64)
+  redirect_uri String?   @db.Text
+  expires_at   DateTime  @db.DateTime(3)
+  used_at      DateTime? @db.DateTime(3)
+  created_at   DateTime  @default(now()) @db.DateTime(3)
+  user         User?     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([kind, expires_at])
+  @@map("oauth_codes")
+}
+
+model Post {
+  id                        String    @id @default(uuid()) @db.VarChar(36)
+  author_id                 String?   @db.VarChar(36)
+  content                   String    @db.Text
+  community_id              String    @default("iit-community") @db.VarChar(80)
+  channel                   String?   @db.VarChar(40)
+  scope_type                String    @default("GLOBAL") @db.VarChar(40)
+  scope_key                 String    @default("IIT_ALL") @db.VarChar(255)
+  is_anonymous              Boolean   @default(false)
+  tags                      Json?
+  campus_filter             String?   @db.VarChar(160)
+  degree_filter             String?   @db.VarChar(160)
+  branch_filter             String?   @db.VarChar(160)
+  batch_filter              String?   @db.VarChar(40)
+  cohort_filter             String?   @db.VarChar(255)
+  student_status_filter     String?   @db.VarChar(40)
+  image_url                 String?   @db.Text
+  image_path                String?   @db.Text
+  media_url                 String?   @db.Text
+  media_type                String?   @db.VarChar(80)
+  media_path                String?   @db.Text
+  media_metadata            Json?
+  file_url                  String?   @db.Text
+  file_path                 String?   @db.Text
+  file_name                 String?   @db.VarChar(255)
+  file_type                 String?   @db.VarChar(160)
+  file_size                 BigInt?
+  voice_url                 String?   @db.Text
+  voice_path                String?   @db.Text
+  voice_duration            Int?
+  client_id                 String?   @db.VarChar(100)
+  message_type              String?   @db.VarChar(40)
+  reply_to_id               String?   @db.VarChar(36)
+  reshared_post_id          String?   @db.VarChar(36)
+  is_deleted_for_everyone   Boolean   @default(false)
+  deleted_by_user_id        String?   @db.VarChar(36)
+  deleted_for_users         Json?
+  seen_by                   Json?
+  deleted_at                DateTime? @db.DateTime(3)
+  edited_at                 DateTime? @db.DateTime(3)
+  pinned_at                 DateTime? @db.DateTime(3)
+  created_at                DateTime  @default(now()) @db.DateTime(3)
+  updated_at                DateTime  @updatedAt @db.DateTime(3)
+  author                    User?     @relation("PostAuthor", fields: [author_id], references: [id], onDelete: SetNull)
+  parent                    Post?     @relation("PostReplies", fields: [reply_to_id], references: [id], onDelete: SetNull)
+  replies                   Post[]    @relation("PostReplies")
+  original                  Post?     @relation("PostReshares", fields: [reshared_post_id], references: [id], onDelete: SetNull)
+  reshares                  Post[]    @relation("PostReshares")
+  comments                  Comment[]
+
+  @@index([scope_type, scope_key, created_at])
+  @@index([community_id, created_at])
+  @@index([author_id, created_at])
+  @@index([reply_to_id, created_at])
+  @@unique([author_id, client_id])
+  @@map("posts")
+}
+
+model Comment {
+  id         String    @id @default(uuid()) @db.VarChar(36)
+  post_id    String    @db.VarChar(36)
+  author_id  String    @db.VarChar(36)
+  content    String    @db.Text
+  parent_comment_id String? @db.VarChar(36)
+  edited_at  DateTime? @db.DateTime(3)
+  created_at DateTime  @default(now()) @db.DateTime(3)
+  updated_at DateTime  @updatedAt @db.DateTime(3)
+  post       Post      @relation(fields: [post_id], references: [id], onDelete: Cascade)
+  author     User      @relation(fields: [author_id], references: [id], onDelete: Cascade)
+  parent     Comment?  @relation("CommentReplies", fields: [parent_comment_id], references: [id], onDelete: SetNull)
+  replies    Comment[] @relation("CommentReplies")
+
+  @@index([post_id, created_at])
+  @@index([author_id])
+  @@map("comments")
+}
+
+model Reaction {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  entity_id   String   @db.VarChar(36)
+  user_id     String   @db.VarChar(36)
+  entity_type String   @default("post") @db.VarChar(40)
+  emoji       String   @db.VarChar(32)
+  created_at  DateTime @default(now()) @db.DateTime(3)
+  user        User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([entity_type, entity_id, user_id, emoji])
+  @@index([entity_type, entity_id])
+  @@index([user_id])
+  @@map("reactions")
+}
+
+model Report {
+  id          String    @id @default(uuid()) @db.VarChar(36)
+  entity_id   String    @db.VarChar(36)
+  reporter_id String    @db.VarChar(36)
+  entity_type String    @default("forum_msg") @db.VarChar(40)
+  reason      String    @db.VarChar(500)
+  status      String    @default("open") @db.VarChar(24)
+  resolved_at DateTime? @db.DateTime(3)
+  resolved_by String?   @db.VarChar(36)
+  created_at  DateTime  @default(now()) @db.DateTime(3)
+  reporter    User      @relation(fields: [reporter_id], references: [id], onDelete: Cascade)
+
+  @@unique([entity_type, entity_id, reporter_id])
+  @@index([status, created_at])
+  @@map("reports")
+}
+
+model Connection {
+  id           String    @id @default(uuid()) @db.VarChar(36)
+  requester_id String    @db.VarChar(36)
+  receiver_id  String    @db.VarChar(36)
+  pair_key     String    @unique @db.VarChar(73)
+  status       String    @default("pending") @db.VarChar(24)
+  note         String?   @db.VarChar(200)
+  responded_at DateTime? @db.DateTime(3)
+  created_at   DateTime  @default(now()) @db.DateTime(3)
+  updated_at   DateTime  @updatedAt @db.DateTime(3)
+  requester    User      @relation("ConnectionRequester", fields: [requester_id], references: [id], onDelete: Cascade)
+  receiver     User      @relation("ConnectionReceiver", fields: [receiver_id], references: [id], onDelete: Cascade)
+
+  @@index([requester_id, status])
+  @@index([receiver_id, status])
+  @@map("connections")
+}
+
+model Job {
+  id                String    @id @default(uuid()) @db.VarChar(36)
+  title             String    @db.VarChar(255)
+  created_by        String?   @db.VarChar(36)
+  community_id      String    @default("iit-community") @db.VarChar(80)
+  company           String    @db.VarChar(255)
+  company_logo_url  String?   @db.Text
+  location          String?   @db.VarChar(255)
+  job_type          String?   @db.VarChar(80)
+  category          String?   @db.VarChar(120)
+  experience        String?   @db.VarChar(255)
+  experience_level  String?   @db.VarChar(80)
+  easy_apply        Boolean   @default(false)
+  description       String?   @db.LongText
+  application_url   String?   @db.Text
+  apply_url         String?   @db.Text
+  source_url        String?   @db.Text
+  source_type       String?   @db.VarChar(40)
+  status            String    @default("published") @db.VarChar(24)
+  salary_min        Decimal?  @db.Decimal(14, 2)
+  salary_max        Decimal?  @db.Decimal(14, 2)
+  salary_currency   String?   @db.VarChar(8)
+  salary_text       String?   @db.VarChar(255)
+  skills            Json?
+  source_fingerprint String?  @unique @db.Char(64)
+  scan_run_id       String?   @db.VarChar(36)
+  discovered_at     DateTime? @db.DateTime(3)
+  last_seen_at      DateTime? @db.DateTime(3)
+  expires_at        DateTime? @db.DateTime(3)
+  published_at      DateTime? @db.DateTime(3)
+  created_at        DateTime  @default(now()) @db.DateTime(3)
+  updated_at        DateTime  @updatedAt @db.DateTime(3)
+  applications      Application[]
+
+  @@index([status, published_at])
+  @@index([community_id, status, published_at])
+  @@index([company])
+  @@map("jobs")
+}
+
+model Application {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  job_id       String   @db.VarChar(36)
+  applicant_id String   @db.VarChar(36)
+  note         String?  @db.Text
+  resume_url   String?  @db.Text
+  status       String   @default("submitted") @db.VarChar(24)
+  created_at   DateTime @default(now()) @db.DateTime(3)
+  updated_at   DateTime @updatedAt @db.DateTime(3)
+  job          Job      @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  applicant    User     @relation(fields: [applicant_id], references: [id], onDelete: Cascade)
+
+  @@unique([job_id, applicant_id])
+  @@index([applicant_id, created_at])
+  @@map("applications")
+}
+
+model Event {
+  id                  String    @id @default(uuid()) @db.VarChar(36)
+  title               String    @db.VarChar(255)
+  description         String?   @db.LongText
+  location            String?   @db.VarChar(255)
+  start_time          DateTime  @db.DateTime(3)
+  end_time            DateTime? @db.DateTime(3)
+  image_url            String?   @db.Text
+  registration_url     String?   @db.Text
+  organizer_name       String?   @db.VarChar(255)
+  organizer            String?   @db.VarChar(255)
+  source_iit           String?   @db.VarChar(160)
+  audience_type        String?   @db.VarChar(40)
+  audience_targets     Json?
+  audience_mode        String?   @db.VarChar(40)
+  target_iits          Json?
+  target_courses       Json?
+  target_specialisations Json?
+  source_url           String?   @db.Text
+  source_fingerprint   String?   @unique @db.Char(64)
+  scan_run_id          String?   @db.VarChar(36)
+  source_type          String?   @db.VarChar(40)
+  status               String    @default("draft") @db.VarChar(24)
+  community_id         String    @default("iit-community") @db.VarChar(80)
+  created_by           String?   @db.VarChar(36)
+  published_at         DateTime? @db.DateTime(3)
+  created_at           DateTime  @default(now()) @db.DateTime(3)
+  updated_at           DateTime  @updatedAt @db.DateTime(3)
+  rsvps                 Rsvp[]
+
+  @@index([status, start_time])
+  @@index([community_id, start_time])
+  @@map("events")
+}
+
+model Rsvp {
+  id         String   @id @default(uuid()) @db.VarChar(36)
+  event_id   String   @db.VarChar(36)
+  user_id    String   @db.VarChar(36)
+  status     String   @default("going") @db.VarChar(24)
+  created_at DateTime @default(now()) @db.DateTime(3)
+  updated_at DateTime @updatedAt @db.DateTime(3)
+  event      Event    @relation(fields: [event_id], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([event_id, user_id])
+  @@index([user_id])
+  @@map("rsvps")
+}
+
+model FileObject {
+  id            String    @id @default(uuid()) @db.VarChar(36)
+  uploaded_by   String?   @db.VarChar(36)
+  bucket        String    @db.VarChar(80)
+  object_key    String    @unique @db.VarChar(600)
+  original_name String    @db.VarChar(255)
+  mime_type     String    @db.VarChar(160)
+  size_bytes    BigInt
+  visibility    String    @default("private") @db.VarChar(16)
+  sha256        String?   @db.Char(64)
+  status        String    @default("ready") @db.VarChar(24)
+  created_at    DateTime  @default(now()) @db.DateTime(3)
+  deleted_at    DateTime? @db.DateTime(3)
+  uploader      User?     @relation(fields: [uploaded_by], references: [id], onDelete: SetNull)
+
+  @@index([uploaded_by, bucket, created_at])
+  @@map("file_objects")
+}
+
+model AuditLog {
+  id            String   @id @default(uuid()) @db.VarChar(36)
+  actor_id      String?  @db.VarChar(36)
+  action        String   @db.VarChar(120)
+  resource_type String   @db.VarChar(80)
+  resource_id   String?  @db.VarChar(100)
+  ip_hash       String?  @db.Char(64)
+  metadata      Json?
+  created_at    DateTime @default(now()) @db.DateTime(3)
+  actor         User?    @relation("AuditActor", fields: [actor_id], references: [id], onDelete: SetNull)
+
+  @@index([actor_id, created_at])
+  @@index([resource_type, resource_id])
+  @@map("audit_logs")
+}
+
+model LegacyRecord {
+  id         String   @id @default(uuid()) @db.VarChar(36)
+  table_name String   @db.VarChar(100)
+  record_id  String   @db.VarChar(100)
+  owner_id   String?  @db.VarChar(36)
+  community_id String? @db.VarChar(80)
+  data       Json
+  created_at DateTime @default(now()) @db.DateTime(3)
+  updated_at DateTime @updatedAt @db.DateTime(3)
+
+  @@unique([table_name, record_id])
+  @@index([table_name, owner_id])
+  @@index([table_name, community_id])
+  @@map("legacy_records")
+}

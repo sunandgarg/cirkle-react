@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { resolvePostAuthRoute } from "@/lib/sessionResume";
+import { readSafeReturnRoute, resolvePostAuthRoute } from "@/lib/sessionResume";
 import { applyThemePreference, readThemePreference, type ThemePreference } from "@/lib/theme";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
@@ -41,8 +41,14 @@ const Auth = () => {
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user, profile, loading: authLoading, profileResolved, isAdmin } = useAuth();
+  const requestedRoute = readSafeReturnRoute((location.state as { returnTo?: unknown } | null)?.returnTo)
+    ?? readSafeReturnRoute(searchParams.get("returnTo"));
+  const verificationRoute = requestedRoute
+    ? `/iit-verify?${new URLSearchParams({ returnTo: requestedRoute }).toString()}`
+    : "/iit-verify";
 
   useEffect(() => {
     applyThemePreference(theme);
@@ -52,7 +58,9 @@ const Auth = () => {
     if (searchParams.get("password_reset") !== "success") return;
     toast.success("Password updated. Sign in with your new password.");
     setAuthMethod("password");
-    setSearchParams({}, { replace: true });
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("password_reset");
+    setSearchParams(nextParams, { replace: true });
   }, [searchParams, setSearchParams]);
 
   // Redirect already-logged-in users
@@ -60,12 +68,12 @@ const Auth = () => {
     const accessState = resolveMemberAccessState(profile, profileResolved);
     if (!authLoading && user && accessState !== "pending") {
       if (accessState !== "ready") {
-        navigate("/iit-verify", { replace: true });
+        navigate(verificationRoute, { replace: true, state: requestedRoute ? { returnTo: requestedRoute } : undefined });
       } else {
-        navigate(resolvePostAuthRoute(user.id, isAdmin), { replace: true });
+        navigate(resolvePostAuthRoute(user.id, isAdmin, requestedRoute), { replace: true });
       }
     }
-  }, [user, profile, profileResolved, authLoading, isAdmin, navigate]);
+  }, [user, profile, profileResolved, authLoading, isAdmin, navigate, requestedRoute, verificationRoute]);
 
   const handleEmailChange = (value: string) => {
     setEmail(value.trim().toLowerCase());
@@ -85,7 +93,7 @@ const Auth = () => {
         supabase.functions.invoke("request-login-otp", {
           body: {
             email,
-            redirect_to: `${window.location.origin}/iit-verify`,
+            redirect_to: new URL(verificationRoute, window.location.origin).toString(),
           },
         }),
         new Promise<never>((_, reject) => {
@@ -119,7 +127,7 @@ const Auth = () => {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/iit-verify`,
+          redirectTo: new URL(verificationRoute, window.location.origin).toString(),
           queryParams: { prompt: "select_account" },
         },
       });
@@ -204,7 +212,7 @@ const Auth = () => {
       const { error: sessionError } = await supabase.auth.setSession(data.session);
       if (sessionError) throw sessionError;
       toast.success("Email verified");
-      navigate("/iit-verify", { replace: true });
+      navigate(verificationRoute, { replace: true, state: requestedRoute ? { returnTo: requestedRoute } : undefined });
     } catch (error: any) {
       reportError(error, { flow: "authentication", action: "verify_email_otp", metadata: { method: "email_otp" } });
       toast.error(error.message || "Could not verify the code. Please try again.");

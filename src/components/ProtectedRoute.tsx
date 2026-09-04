@@ -10,6 +10,7 @@ const ProtectedRoute = ({ children, requireAdmin = false }: { children: React.Re
 
   const accessState = resolveMemberAccessState(profile, profileResolved);
   const canEnterApp = accessState === "ready";
+  const returnTo = `${location.pathname}${location.search}${location.hash}`;
 
   useEffect(() => {
     if (user?.id && canEnterApp) {
@@ -26,7 +27,7 @@ const ProtectedRoute = ({ children, requireAdmin = false }: { children: React.Re
   }
 
   if (!user) {
-    return <Navigate to="/auth" replace />;
+    return <Navigate to="/auth" replace state={{ returnTo }} />;
   }
 
   if (profileError) {
@@ -50,7 +51,7 @@ const ProtectedRoute = ({ children, requireAdmin = false }: { children: React.Re
   // Verification and onboarding are durable server-side states. No protected
   // route can bypass them, so a returning member always resumes the exact gate.
   if (accessState === "verification" || accessState === "onboarding") {
-    return <Navigate to="/iit-verify" replace />;
+    return <Navigate to="/iit-verify" replace state={{ returnTo }} />;
   }
 
   if (requireAdmin && !isAdmin) {

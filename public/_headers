@@ -1,5 +1,6 @@
 /*
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; connect-src 'self' https://bugwubrwvlqayxwcazfd.supabase.co wss://bugwubrwvlqayxwcazfd.supabase.co https://xwuvlnknuzcj5b7msvcbtmq3x4.appsync-api.ap-south-1.amazonaws.com wss://xwuvlnknuzcj5b7msvcbtmq3x4.appsync-realtime-api.ap-south-1.amazonaws.com https://*.daily.co wss://*.daily.co; frame-src 'self' https://*.daily.co; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
+  Cache-Control: public, max-age=0, must-revalidate
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://api.cirkle.world; script-src 'self' 'sha256-9R51Pm4w2hpUYj1jF3coUj15mQONvfoFo9Ptg5u3gqI='; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; connect-src 'self' https://api.cirkle.world wss://api.cirkle.world https://*.daily.co wss://*.daily.co; frame-src 'self' https://*.daily.co; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
   Cross-Origin-Opener-Policy: same-origin-allow-popups
   Permissions-Policy: camera=(self "https://*.daily.co"), microphone=(self "https://*.daily.co"), geolocation=(), payment=(), usb=()
   Referrer-Policy: strict-origin-when-cross-origin
@@ -9,13 +10,21 @@
   X-Frame-Options: DENY
 
 /assets/*
+  ! Cache-Control
   Cache-Control: public, max-age=31536000, immutable
 
+/company-logos/*
+  ! Cache-Control
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
 /iit-logos/*
+  ! Cache-Control
   Cache-Control: public, max-age=86400, stale-while-revalidate=604800
 
 /sw.js
+  ! Cache-Control
   Cache-Control: no-store
 
 /index.html
+  ! Cache-Control
   Cache-Control: no-store

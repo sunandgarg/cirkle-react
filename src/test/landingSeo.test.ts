@@ -12,12 +12,14 @@ describe("public market positioning", () => {
     expect(html).not.toContain("IIT Community Forum, Jobs, Consult & Events");
   });
 
-  it("publishes the crawlable public routes listed by robots.txt", () => {
+  it("publishes only genuinely public routes in the sitemap", () => {
     const robots = projectFile("public/robots.txt");
     const sitemap = projectFile("public/sitemap.xml");
     expect(robots).toContain("Sitemap: https://cirkle.world/sitemap.xml");
     expect(sitemap).toContain("https://cirkle.world/");
-    expect(sitemap).toContain("https://cirkle.world/jobs");
-    expect(sitemap).toContain("https://cirkle.world/blogs");
+    expect(sitemap).toContain("https://cirkle.world/privacy");
+    expect(sitemap).toContain("https://cirkle.world/terms");
+    expect(sitemap).not.toContain("https://cirkle.world/jobs");
+    expect(sitemap).not.toContain("https://cirkle.world/blogs");
   });
 });

@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, Shield, ToggleLeft, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays, Mail, RotateCcw, LayoutDashboard, UserPlus, Phone, Clock3, Bug } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Users, FileText, Settings2, Image, Ban, CheckCircle2, Search, Shield, Briefcase, Plus, ClipboardCheck, Eye, XCircle, GraduationCap, CalendarDays, Mail, RotateCcw, LayoutDashboard, UserPlus, Phone, Clock3, Bug } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -86,7 +86,7 @@ const Admin = () => {
         supabase.from("posts").select("id, content, author_id, is_anonymous, created_at, image_url, scope_type, scope_key").in("id", postIds),
         supabase.from("profiles").select("user_id, name, avatar_url").in("user_id", reporterIds),
       ]);
-      const postMap = new Map((posts ?? []).map((p: any) => [p.id, p]));
+      const postMap = new Map<string, any>(((posts ?? []) as any[]).map((p: any) => [p.id, p]));
       const authorIds = [...new Set((posts ?? []).map((p: any) => p.author_id))];
       const { data: authors } = await supabase.from("profiles").select("user_id, name, avatar_url").in("user_id", authorIds);
       const authorMap = new Map((authors ?? []).map((p: any) => [p.user_id, p]));
@@ -930,23 +930,7 @@ const Admin = () => {
               <p className="text-[11px] text-muted-foreground">Images are converted to WebP and resized before upload to reduce storage and egress.</p>
             </div>
 
-            {/* Show Home & Network Toggle */}
-            <div className="bg-card border border-border rounded-xl p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><ToggleLeft className="w-5 h-5 text-primary" /></div>
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">Show Home & Network</p>
-                    <p className="text-xs text-muted-foreground">When OFF, Home feed and Network tabs are hidden for all users</p>
-                  </div>
-                </div>
-                <Switch checked={appSettings?.show_home_network === "true"} onCheckedChange={(checked) => {
-                  updateSetting("show_home_network", checked ? "true" : "false");
-                  queryClient.invalidateQueries({ queryKey: ["app-settings"] });
-                }} />
-              </div>
-            </div>
-            <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+            {import.meta.env.DEV && <div className="bg-card border border-border rounded-xl p-4 space-y-3">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><Users className="w-5 h-5 text-primary" /></div>
                 <div className="flex-1">
@@ -963,8 +947,8 @@ const Admin = () => {
                   <Trash2 className="w-4 h-4 mr-1.5" /> {testDataAction === "purge" ? "Removing…" : "Remove dummy data"}
                 </Button>
               </div>
-              <p className="text-[10px] text-muted-foreground">Requires the seed-data Edge Function with SEED_DATA_ENABLED=true. Purge only uses tracked dummy user IDs.</p>
-            </div>
+              <p className="text-[10px] text-muted-foreground">Local development only. Requires ENABLE_SEED_DATA=true on the Node API; purge uses only tracked dummy user IDs.</p>
+            </div>}
 
 
             {/* Terms & Conditions editor */}
@@ -1022,7 +1006,7 @@ const Admin = () => {
         <DialogContent className="w-[calc(100%_-_1.5rem)] max-w-md rounded-3xl p-5 sm:p-6">
           <DialogHeader>
             <DialogTitle>Create verified member</DialogTitle>
-            <DialogDescription>This provisions a fully verified IIT Delhi · MBA · General · 2026 account. The password is sent only to Supabase and is never stored in this app.</DialogDescription>
+            <DialogDescription>This provisions a fully verified IIT Delhi · MBA · General · 2026 account. The password is sent only to the Cirkle API and is never stored in this browser.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div><Label htmlFor="member-name">Full name</Label><Input id="member-name" value={memberForm.name} onChange={(e) => setMemberForm((v) => ({ ...v, name: e.target.value }))} className="mt-1.5" autoComplete="off" /></div>

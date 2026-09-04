@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 
@@ -46,6 +46,7 @@ const ServiceButton = ({ icon: Icon, label, price, color, active, onClick }: any
 
 const Consult = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user, profile } = useAuth();
   const queryClient = useQueryClient();
@@ -57,9 +58,14 @@ const Consult = () => {
   const [selectedTime, setSelectedTime] = useState("");
   const [selectedDuration, setSelectedDuration] = useState(30);
   const [bookingNotes, setBookingNotes] = useState("");
-  const [activeTab, setActiveTab] = useState<"mentors" | "bookings">("mentors");
+  const [activeTab, setActiveTab] = useState<"mentors" | "bookings">(() => location.pathname.endsWith("/bookings") ? "bookings" : "mentors");
 
   const isVerified = !!user && !!profile?.is_verified && !!profile?.onboarding_completed;
+
+  useEffect(() => {
+    if (location.pathname.endsWith("/bookings")) setActiveTab("bookings");
+    else if (location.pathname.endsWith("/mentors")) setActiveTab("mentors");
+  }, [location.pathname]);
 
   // Only fetch mentors who opted in
   const { data: experts, isLoading: expertsLoading, error: expertsError, refetch: refetchExperts } = useQuery({
@@ -140,6 +146,21 @@ const Consult = () => {
       toast.success("Booking updated");
     },
     onError: (error: any) => toast.error(error.message || "Could not update this booking"),
+  });
+
+  const ensureConsultationChat = useMutation({
+    mutationFn: async (consultationId: string) => {
+      const { data, error } = await supabase.functions.invoke("create-consult-chat", { body: { consultation_id: consultationId } });
+      if (error) throw error;
+      const roomId = (data as { room_id?: unknown } | null)?.room_id;
+      if (typeof roomId !== "string" || !roomId) throw new Error("The private conversation was not created");
+      return roomId;
+    },
+    onSuccess: async (roomId) => {
+      await queryClient.invalidateQueries({ queryKey: ["my-consultations"] });
+      navigate(`/chats/${roomId}`);
+    },
+    onError: (error: any) => toast.error(error.message || "Could not create the private conversation"),
   });
 
   const displayExperts = !user ? experts?.slice(0, 3) : isVerified ? experts : experts?.slice(0, 3);
@@ -366,6 +387,9 @@ const Consult = () => {
                   )}
                   {booking.chat_room_id && booking.status === "confirmed" && (
                     <Button size="sm" className="mt-2 h-8 w-full rounded-xl text-xs" onClick={() => navigate(`/chats/${booking.chat_room_id}`)}><MessageCircle className="mr-1.5 h-3.5 w-3.5" /> Open private conversation</Button>
+                  )}
+                  {!booking.chat_room_id && booking.status === "confirmed" && (
+                    <Button size="sm" className="mt-2 h-8 w-full rounded-xl text-xs" disabled={ensureConsultationChat.isPending} onClick={() => ensureConsultationChat.mutate(booking.id)}><MessageCircle className="mr-1.5 h-3.5 w-3.5" /> {ensureConsultationChat.isPending ? "Creating conversation…" : "Create private conversation"}</Button>
                   )}
                 </div>
               ))}

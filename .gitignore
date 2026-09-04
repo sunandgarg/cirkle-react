@@ -11,7 +11,19 @@ node_modules
 *.tsbuildinfo
 dist
 dist-ssr
+server/dist
+server/uploads
+.local/
+.wrangler/
+.pm2/
 *.local
+
+# Environment files may contain database, JWT, OAuth, mail, and AI secrets.
+.env
+.env.*
+!.env.example
+!.env.production.example
+!.env.pages.example
 .tools/
 supabase/.temp/
 

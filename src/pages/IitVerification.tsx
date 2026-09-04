@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { clearSupabaseAuthSession, supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle,
 import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, expectedIitEmailDomain, IIT_LIST, iitLogoSettingKey, isMatchingIitEmail, type IitInstitute, type IitMemberStatus } from "@/data/iitInstitutes";
-import { resolvePostAuthRoute } from "@/lib/sessionResume";
+import { readSafeReturnRoute, resolvePostAuthRoute } from "@/lib/sessionResume";
 import CountryCodeSelect, { COUNTRY_CODES, type CountryOption } from "@/components/CountryCodeSelect";
 import { loadOnboardingProgress, saveOnboardingProgress } from "@/lib/onboardingProgress";
 import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
@@ -73,7 +73,10 @@ type Step = "account_details" | "select_iit" | "select_status" | "verify_email" 
 
 const IitVerification = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, profile, refetchProfile, loading: authLoading, profileResolved, profileError, isAdmin } = useAuth();
+  const requestedRoute = readSafeReturnRoute((location.state as { returnTo?: unknown } | null)?.returnTo)
+    ?? readSafeReturnRoute(new URLSearchParams(location.search).get("returnTo"));
   const restoredProgressRef = useRef(false);
   const [step, setStep] = useState<Step>("account_details");
   const [selectedIit, setSelectedIit] = useState<IitInstitute | null>(null);
@@ -155,7 +158,7 @@ const IitVerification = () => {
     }
 
     if (profile?.is_verified && profile?.onboarding_completed && user?.id) {
-      navigate(resolvePostAuthRoute(user.id, isAdmin), { replace: true });
+      navigate(resolvePostAuthRoute(user.id, isAdmin, requestedRoute), { replace: true });
       return;
     }
     if (latestDocumentSubmission?.iit_name) {
@@ -202,7 +205,7 @@ const IitVerification = () => {
       return;
     }
     setStep("select_iit");
-  }, [authLoading, documentSettingFetched, documentStatusFetched, documentVerificationEnabled, isAdmin, latestDocumentSubmission, navigate, profile, profileResolved, progressFetched, savedProgress, user]);
+  }, [authLoading, documentSettingFetched, documentStatusFetched, documentVerificationEnabled, isAdmin, latestDocumentSubmission, navigate, profile, profileResolved, progressFetched, requestedRoute, savedProgress, user]);
 
   useEffect(() => {
     if (!user || !restoredProgressRef.current || step === "onboarding" || profile?.onboarding_completed) return;
@@ -315,7 +318,7 @@ const IitVerification = () => {
       
       const data = res.data as any;
       
-      // Handle errors from edge function (409 etc.)
+      // Handle structured verification API errors (409 etc.).
       if (res.error) {
         const parsed = await readEdgeFunctionError(res.error, data, "Could not send the verification code. Please try again.");
         const errMsg = parsed.message;
@@ -552,7 +555,7 @@ const IitVerification = () => {
         onComplete={async () => {
           // Ensure profile is fresh before navigating
           await refetchProfile();
-          navigate(resolvePostAuthRoute(user?.id, isAdmin), { replace: true });
+          navigate(resolvePostAuthRoute(user?.id, isAdmin, requestedRoute), { replace: true });
         }}
       />
     );

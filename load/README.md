@@ -1,48 +1,177 @@
-# Chat capacity validation
+# Load-test tooling
 
-The repository includes two complementary checks:
+These checks target the Cirkle Node API. They intentionally separate HTTP
+throughput from Socket.IO fan-out so a result is easy to interpret:
 
-- `npm run test:chat-load` is a deterministic local simulation that validates ordering, room isolation, fan-out and cache behavior without touching production.
-- `npm run test:chat-load:live` writes real forum `posts`, reads paginated history, and keeps real private Supabase Realtime subscribers connected against an isolated performance project.
+- `load/k6-chat.js` measures direct-message write and history-query traffic.
+- `load/k6-forum.js` measures forum post write and history-query traffic.
+- `load/live-forum-50.mjs` verifies forum persistence and Socket.IO delivery to
+  2–50 connections.
 
-## Production 50-client delivery smoke test
+All data operations use authenticated `POST /api/data/query` requests. The live
+harness connects to `/api/socket.io`, subscribes with `realtime:subscribe`, and
+observes `realtime:event` envelopes.
 
-`npm run test:forum:live50` is a deliberately guarded end-to-end smoke test for
-the deployed Supabase + AWS AppSync path. It creates up to 50 temporary verified
-users, subscribes every client, sends simultaneous root messages and replies,
-adds reactions, verifies exact database counts, and deletes every generated user
-and cascading row in `finally`. It also removes stale synthetic accounts from an
-interrupted prior run before starting.
+## Safety rules
 
-It refuses to run unless `LIVE_FORUM_TEST_ACK` equals
-`PRODUCTION_SYNTHETIC_USERS_WITH_CLEANUP`, `TEST_AGENTS` is between 2 and 50,
-and the Supabase service/publishable keys plus AppSync HTTP/realtime endpoints
-are supplied. This check proves delivery correctness for a small controlled
-burst; it is not a production-capacity or 100-million-message certification.
+Every script requires an exact acknowledgement phrase and `TARGET_ENV`. Allowed
+target values are `local`, `development`, `test`, `staging`, `performance`, and
+`production`. `API_URL` must be an origin with no `/api` suffix or other path,
+for example `http://localhost:3001`.
 
-## Safety and required environment
-
-Never run the live test against the production database. Use a separate project populated with synthetic users and a room whose members are only test accounts. The script refuses to start unless these variables exist:
+Production is disabled by default. A target declared as production, or any
+`cirkle.world` hostname, additionally requires both:
 
 ```text
-FORUM_LOAD_TEST_ACK=ISOLATED_PROJECT_ONLY
-PERF_PROJECT_REF=dedicated-performance-project-ref
-SUPABASE_URL=https://PROJECT.supabase.co
-SUPABASE_ANON_KEY=...
-TEST_JWT=...
-TEST_USER_ID=...
-SCOPE_TYPE=GLOBAL
-SCOPE_KEY=LOAD_TEST
+ALLOW_PRODUCTION_LOAD_TEST=true
+PRODUCTION_LOAD_TEST_ACK=I_ACCEPT_PRODUCTION_LOAD_TEST_WRITES
 ```
 
-Optional controls are `WRITE_RATE`, `READ_RATE`, `REALTIME_SUBSCRIBERS`, `DURATION`, `REALTIME_WARMUP`, `MAX_WRITE_VUS`, `REALTIME_SESSION_MS`, and `RUN_ID`. `REALTIME_JWT` can override the subscriber token for diagnosing Realtime authorization independently from authenticated REST writes. The harness refuses both known application project refs and any URL that does not match `PERF_PROJECT_REF`. Every generated message is tagged `[load-test:<RUN_ID>:<timestamp>]` for isolated-project cleanup and end-to-end Realtime latency measurement.
+A production target must use HTTPS. Setting only one production flag is not
+enough. Use a dedicated performance environment whenever possible.
 
-Set `PLAN_PROFILE=PRO_SPEND_CAP` for a guarded Pro-plan run. The harness then refuses configurations above 500 subscribers or a conservative estimate of 500 Realtime events/second (`WRITE_RATE * (REALTIME_SUBSCRIBERS + 1)`). It uses Realtime protocol v2, decodes server Broadcast binary frames, and starts writes only after the subscriber warm-up interval so a zero-event result cannot be mistaken for capacity.
+The bearer token and password are secrets. Do not paste them into committed
+files or include them in captured load-test output.
 
-To validate the connection ceiling independently, set `WRITE_RATE=0`, `READ_RATE=0`, and `REALTIME_SUBSCRIBERS=500`. Use `REALTIME_RAMP_UP` (for example, `15s`) to avoid turning the connection test into an unrealistic single-millisecond TLS and channel-join spike. The HTTP scenarios and delivery thresholds are omitted, while the run still fails unless every requested private Realtime subscription joins successfully. Connection and throughput ceilings must be tested separately because one broadcast to 500 listening clients counts as approximately 501 Realtime messages.
+## Chat HTTP load test
 
-## 100 million messages/day qualification
+Required environment:
 
-One hundred million persisted messages/day averages about 1,158 writes/second. Qualify at no less than ten times that average (about 12,000 writes/second) for the expected peak window, with realistic concurrent history reads and Realtime subscribers. Increase in stages (10, 100, 1,000, 5,000, then 12,000 writes/second), stop on the first failed threshold, and retain the Supabase database, Realtime, connection-pool, WAL, storage, CPU and egress metrics for each run.
+```text
+LOAD_TEST_ACK=I_UNDERSTAND_THIS_WRITES_TEST_CHAT_MESSAGES
+API_URL=http://localhost:3001
+TARGET_ENV=local
+TEST_JWT=...
+TEST_USER_ID=...
+ROOM_ID=...
+```
 
-Passing the local simulation or a small live run is not a 100-million/day certification. Certification requires an isolated full-scale test on the actual Supabase plan and region, followed by a soak test and a reviewed capacity report.
+Run it with:
+
+```sh
+k6 run load/k6-chat.js
+```
+
+The JWT must belong to `TEST_USER_ID`, and that user must be a member of the
+isolated test room. Writes and reads are serialized Node API queries; the script
+does not exercise Socket.IO. Generated messages are tagged with
+`[load-test:<RUN_ID>]` and remain in the target database for deliberate cleanup.
+
+Optional controls:
+
+```text
+RUN_ID=k6-chat-manual-001
+WRITE_RATE=10
+READ_RATE=2
+DURATION=1m
+WRITE_VUS=20
+WRITE_MAX_VUS=500
+READ_VUS=5
+READ_MAX_VUS=100
+```
+
+Either write or read rate may be `0`, but they cannot both be `0`.
+
+## Forum HTTP load test
+
+Required environment:
+
+```text
+FORUM_LOAD_TEST_ACK=I_UNDERSTAND_THIS_WRITES_TEST_FORUM_POSTS
+API_URL=http://localhost:3001
+TARGET_ENV=local
+TEST_JWT=...
+```
+
+Run it with:
+
+```sh
+npm run test:chat-load:live
+```
+
+The account represented by `TEST_JWT` must be verified and authorized for the
+selected scope. This k6 test covers only HTTP persistence and history reads; use
+the live harness below for Socket.IO delivery. Generated posts use channel
+`load-test`, are tagged with `[load-test:<RUN_ID>:<timestamp>]`, and remain in
+the database for deliberate cleanup.
+
+Optional controls:
+
+```text
+RUN_ID=forum-k6-manual-001
+SCOPE_TYPE=GLOBAL
+SCOPE_KEY=LOAD_TEST
+WRITE_RATE=10
+READ_RATE=2
+DURATION=1m
+WRITE_VUS=20
+WRITE_MAX_VUS=500
+READ_VUS=5
+READ_MAX_VUS=100
+```
+
+Either write or read rate may be `0`, but they cannot both be `0`.
+
+## Live 2–50 client forum delivery test
+
+Required environment:
+
+```text
+LIVE_FORUM_TEST_ACK=I_UNDERSTAND_THIS_WRITES_AND_DELETES_TEST_FORUM_POSTS
+API_URL=http://localhost:3001
+TARGET_ENV=local
+TEST_USER_EMAIL=load-test-user@example.test
+TEST_USER_PASSWORD=...
+TEST_AGENTS=50
+```
+
+Run it with:
+
+```sh
+npm run test:forum:live50
+```
+
+The supplied account must already exist, be email-verified, be an active member,
+and have permission to post in the selected forum scope. The harness signs in
+once, opens `TEST_AGENTS` independent Socket.IO connections with that one access
+token, and subscribes them to `forum:<SCOPE_TYPE>:<SCOPE_KEY>`. It then:
+
+1. writes one root post per connection identity slot;
+2. requires every socket to observe every root post;
+3. writes the same number of replies to the first root;
+4. requires every socket to observe every reply;
+5. verifies all generated rows through `/api/data/query`;
+6. disconnects, deletes only the generated posts, and logs out.
+
+The script does not create, update, or delete user accounts. It therefore tests
+connection and fan-out behavior for one authenticated identity, not authorization
+isolation between 50 distinct members. It also does not test reactions, typing,
+presence, moderation, long-running reconnects, or production-scale capacity.
+
+Optional controls:
+
+```text
+RUN_ID=live-forum-manual-001
+SCOPE_TYPE=GLOBAL
+SCOPE_KEY=LOAD_TEST
+SOCKET_CHANNEL=forum:GLOBAL:LOAD_TEST
+REQUEST_TIMEOUT_MS=20000
+DELIVERY_TIMEOUT_MS=30000
+CONNECT_BATCH_SIZE=10
+WRITE_BATCH_SIZE=50
+```
+
+`CONNECT_BATCH_SIZE` and `WRITE_BATCH_SIZE` must be integers from 1 through 50.
+If the process is killed before `finally` runs, automatic post cleanup cannot
+complete. Use the printed `RUN_ID` (and, on cleanup failure, the printed IDs) to
+remove only that run's generated data.
+
+## Interpreting results
+
+A passing k6 run demonstrates the configured HTTP rates for the configured
+duration and thresholds. A passing live run demonstrates a controlled burst of
+`2 * TEST_AGENTS` persisted posts and `2 * TEST_AGENTS²` observed deliveries to
+at most 50 sockets. Neither result certifies a daily traffic target or a
+production connection ceiling. Capacity qualification still requires staged
+ramp tests, a soak test, realistic identity distribution, and correlated API,
+Socket.IO, MySQL, CPU, memory, network, and error-rate telemetry.

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive, Bot, CheckCircle2, ExternalLink, Loader2, Pencil,
@@ -15,8 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 
 type JobStatus = "draft" | "published" | "archived" | "closed";
-type Provider = "gemini" | "openai" | "anthropic" | "custom";
-type RecruiterSource = { company: string; source_url: string };
+type Provider = "gemini" | "openai";
 
 type JobForm = {
   id?: string;
@@ -44,8 +43,6 @@ const emptyJob = (): JobForm => ({
 const MODEL_DEFAULTS: Record<Provider, string> = {
   gemini: "gemini-2.5-flash",
   openai: "gpt-5.4-mini",
-  anthropic: "claude-sonnet-4-20250514",
-  custom: "your-model",
 };
 
 const CRITERIA_PRESETS = [
@@ -91,8 +88,6 @@ const AdminJobs = () => {
   const [instructions, setInstructions] = useState("");
   const [publishMode, setPublishMode] = useState<"draft" | "published">("draft");
   const [saveSources, setSaveSources] = useState(true);
-  const [recruiterScanSecret, setRecruiterScanSecret] = useState("");
-  const [recruiterScanProgress, setRecruiterScanProgress] = useState({ completed: 0, total: 0 });
 
   const { data: jobs = [], isLoading, error: jobsError } = useQuery({
     queryKey: ["admin-jobs"],
@@ -133,14 +128,25 @@ const AdminJobs = () => {
       const { data, error } = await supabase.functions.invoke("scan-jobs", { body: { action: "status" } });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
-      return data as { configured_providers?: Provider[]; openai_web_discovery?: boolean; experience_buckets?: string[] };
+      return data as { configured_providers?: Provider[] };
     },
     enabled: !!user,
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
-  const configuredProviders = scannerStatus?.configured_providers || [];
+  const configuredProviders = useMemo(
+    () => (scannerStatus?.configured_providers || []).filter((item): item is Provider => item === "openai" || item === "gemini"),
+    [scannerStatus?.configured_providers],
+  );
   const scannerReady = configuredProviders.length > 0;
+  const selectedProviderReady = configuredProviders.includes(provider);
+
+  useEffect(() => {
+    if (!scannerReady || selectedProviderReady) return;
+    const next = configuredProviders[0];
+    setProvider(next);
+    setModel(MODEL_DEFAULTS[next]);
+  }, [configuredProviders, scannerReady, selectedProviderReady]);
 
   const refreshJobs = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ["admin-jobs"] }),
@@ -227,6 +233,7 @@ const AdminJobs = () => {
       const urls = [...new Set(sourceUrls.split(/\n|,/).map((item) => item.trim()).filter(Boolean))].slice(0, 5);
       if (!urls.length) throw new Error("Add at least one company careers URL.");
       urls.forEach((url) => parseHttpsUrl(url, "Career source"));
+      if (!configuredProviders.includes(provider)) throw new Error("Choose a configured OpenAI or Gemini provider.");
       if (!model.trim()) throw new Error("Enter the provider model name.");
       const { data, error } = await supabase.functions.invoke("scan-jobs", {
         body: { provider, model: model.trim(), company: company.trim(), source_urls: urls, instructions: instructions.trim(), publish_mode: publishMode },
@@ -254,71 +261,7 @@ const AdminJobs = () => {
     },
     onError: (error: Error) => toast.error(error.message || "Career scan failed"),
   });
-  const discoverJobs = useMutation({
-    mutationFn: async () => {
-      const buckets = scannerStatus?.experience_buckets || [];
-      let imported = 0;
-      const failures: string[] = [];
-      for (const experienceBucket of buckets) {
-        const { data, error } = await supabase.functions.invoke("scan-jobs", {
-          body: {
-            action: "discover",
-            model: MODEL_DEFAULTS.openai,
-            experience_bucket: experienceBucket,
-            publish_mode: "draft",
-            instructions: "Prioritize roles open to applicants in India and retain only active, directly applicable listings.",
-          },
-        });
-        if (error || data?.error) failures.push(experienceBucket);
-        else imported += Number(data.imported || 0);
-      }
-      return { imported, failures };
-    },
-    onSuccess: async (result) => {
-      await Promise.all([refreshJobs(), queryClient.invalidateQueries({ queryKey: ["admin-job-scans"] })]);
-      if (result.failures.length) toast.warning(`${result.imported} drafts imported; ${result.failures.length} experience buckets need retry`);
-      else toast.success(`${result.imported} trusted-source job draft${result.imported === 1 ? "" : "s"} imported`);
-    },
-    onError: (error: Error) => toast.error(error.message || "OpenAI job discovery failed"),
-  });
-  const scanRecruiters = useMutation({
-    mutationFn: async () => {
-      if (recruiterScanSecret.trim().length < 32) throw new Error("Enter the protected recruiter dispatcher secret.");
-      const response = await fetch("/iit-recruiter-career-sources.json", { cache: "no-store" });
-      if (!response.ok) throw new Error("Recruiter career-source manifest is unavailable.");
-      const sources = await response.json() as RecruiterSource[];
-      const batches = Array.from({ length: Math.ceil(sources.length / 5) }, (_, index) => sources.slice(index * 5, index * 5 + 5));
-      setRecruiterScanProgress({ completed: 0, total: batches.length });
-      let imported = 0;
-      let skipped = 0;
-      const failures: string[] = [];
-      let cursor = 0;
-      await Promise.all(Array.from({ length: Math.min(3, batches.length) }, async () => {
-        while (cursor < batches.length) {
-          const batchIndex = cursor++;
-          const { data, error } = await (supabase.functions as any).invoke("scan-jobs", {
-            body: { action: "recruiter_batch", model: MODEL_DEFAULTS.openai, sources: batches[batchIndex] },
-            headers: { "x-recruiter-scan-secret": recruiterScanSecret.trim() },
-          });
-          if (error || data?.error) failures.push(`Batch ${batchIndex + 1}: ${data?.error || error?.message || "failed"}`);
-          else {
-            imported += Number(data.imported || 0);
-            skipped += Number(data.skipped || 0);
-          }
-          setRecruiterScanProgress((current) => ({ ...current, completed: current.completed + 1 }));
-        }
-      }));
-      return { imported, skipped, failures, sources: sources.length };
-    },
-    onSuccess: async (result) => {
-      setRecruiterScanSecret("");
-      await Promise.all([refreshJobs(), queryClient.invalidateQueries({ queryKey: ["admin-job-scans"] })]);
-      if (result.failures.length) toast.warning(`${result.imported} fresh jobs published; ${result.failures.length} batches need retry`);
-      else toast.success(`${result.imported} fresh jobs published from ${result.sources} recruiter sources`);
-    },
-    onError: (error: Error) => toast.error(error.message || "Recruiter workbook scan failed"),
-  });
-  const agentStatus = runScan.isPending || discoverJobs.isPending || scanRecruiters.isPending ? "Running" : isScannerStatusLoading ? "Checking" : scannerReady ? "Ready" : "Setup needed";
+  const agentStatus = runScan.isPending ? "Running" : isScannerStatusLoading ? "Checking" : scannerReady ? "Ready" : "Setup needed";
 
   const updateSource = async (id: string, patch: Record<string, unknown>) => {
     const { error } = await (supabase as any).from("job_scan_sources").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
@@ -344,7 +287,7 @@ const AdminJobs = () => {
     <div className="space-y-4">
       {jobsError && <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
         <p className="font-bold">Jobs database upgrade required</p>
-        <p className="mt-1 text-xs">Apply the latest Supabase migration and deploy the scan-jobs function, then refresh.</p>
+        <p className="mt-1 text-xs">Apply the latest Prisma migration and deploy the Node API, then refresh.</p>
       </div>}
 
       <div className="flex gap-2 overflow-x-auto pb-1">
@@ -353,12 +296,6 @@ const AdminJobs = () => {
         </Button>
         <Button variant="outline" className="h-11 shrink-0 rounded-full px-5 font-bold" onClick={() => { setForm(emptyJob()); setShowEditor(true); }}>
           <Plus className="h-4 w-4" /> Add manually
-        </Button>
-        <Button variant="outline" className="h-11 shrink-0 rounded-full px-5 font-bold" disabled={discoverJobs.isPending || !scannerStatus?.openai_web_discovery} onClick={() => discoverJobs.mutate()}>
-          {discoverJobs.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />} Discover trusted jobs
-        </Button>
-        <Button variant="outline" className="h-11 shrink-0 rounded-full px-5 font-bold" disabled={scanRecruiters.isPending || !scannerStatus?.openai_web_discovery} onClick={() => setShowScanner(true)}>
-          <ShieldCheck className="h-4 w-4" /> IIT recruiter scan
         </Button>
       </div>
 
@@ -373,7 +310,7 @@ const AdminJobs = () => {
           </div>
           <Button variant="outline" className="shrink-0 rounded-xl" onClick={() => setShowScanner(true)}><Radar className="h-4 w-4" /> Search sources</Button>
         </div>
-        {!isScannerStatusLoading && !scannerReady && <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-200">AI provider setup is required. Configure `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or a custom compatible provider in Supabase secrets.</div>}
+        {!isScannerStatusLoading && !scannerReady && <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-200">AI provider setup is required. Configure `GEMINI_API_KEY` or `OPENAI_API_KEY` in the Node API environment.</div>}
         <div className="mt-4 grid grid-cols-4 gap-2">
           {(["draft", "published", "closed", "archived"] as JobStatus[]).map((status) => <button key={status} onClick={() => setStatusFilter(statusFilter === status ? "all" : status)} className={`rounded-xl p-3 text-center transition-colors ${statusFilter === status ? "bg-primary/10 ring-1 ring-primary" : "bg-secondary/55"}`}>
             <p className="text-lg font-bold">{jobs.filter((job) => job.status === status).length}</p><p className="truncate text-[9px] uppercase tracking-wide text-muted-foreground sm:text-[10px]">{status}</p>
@@ -472,23 +409,14 @@ const AdminJobs = () => {
         <div className="max-h-[92dvh] w-full max-w-xl overflow-y-auto rounded-t-3xl border border-border bg-card p-5 sm:rounded-3xl sm:p-6">
           <div className="mb-5 flex items-start justify-between"><div><h3 className="flex items-center gap-2 font-bold"><Sparkles className="h-5 w-5 text-primary" /> AI Job Studio</h3><p className="text-xs text-muted-foreground">Search up to five trusted public career sources, extract real openings, deduplicate, and push them into Cirkle.</p></div><button onClick={() => setShowScanner(false)} className="rounded-full p-2 hover:bg-secondary"><X className="h-5 w-5" /></button></div>
           <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2"><Field label="AI provider"><select value={provider} onChange={(e) => { const next = e.target.value as Provider; setProvider(next); setModel(MODEL_DEFAULTS[next]); }} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="custom">Any OpenAI-compatible API</option></select></Field><Field label="Model"><Input value={model} onChange={(e) => setModel(e.target.value)} /></Field></div>
+            <div className="grid gap-3 sm:grid-cols-2"><Field label="AI provider"><select value={provider} disabled={!scannerReady} onChange={(e) => { const next = e.target.value as Provider; setProvider(next); setModel(MODEL_DEFAULTS[next]); }} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60">{scannerReady ? configuredProviders.map((item) => <option key={item} value={item}>{item === "gemini" ? "Gemini" : "OpenAI"}</option>) : <option value={provider}>No provider configured</option>}</select></Field><Field label="Model"><Input value={model} onChange={(e) => setModel(e.target.value)} disabled={!scannerReady} /></Field></div>
             <Field label="Company"><Input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Optional fallback company name" /></Field>
             <Field label="Career URLs (one per line, maximum 5)"><Textarea rows={5} value={sourceUrls} onChange={(e) => setSourceUrls(e.target.value)} placeholder={"https://company.com/careers\nhttps://jobs.company.com/search"} /></Field>
             <Field label="Hiring criteria"><div className="mb-2 flex flex-wrap gap-2">{CRITERIA_PRESETS.map(([label, text]) => <button type="button" key={label} onClick={() => setInstructions((current) => current.includes(text) ? current : `${current}${current.trim() ? "\n" : ""}${text}`)} className="rounded-full border border-border bg-secondary/50 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground hover:border-primary hover:text-primary">+ {label}</button>)}</div><Textarea rows={4} value={instructions} onChange={(e) => setInstructions(e.target.value)} placeholder="Choose criteria above or add your own. The scanner will only extract real vacancies from the supplied sources." /></Field>
             <div className="grid grid-cols-2 gap-2"><button onClick={() => setPublishMode("draft")} className={`min-h-12 rounded-xl border text-xs font-semibold ${publishMode === "draft" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}>Import as drafts<br /><span className="font-normal">Recommended</span></button><button onClick={() => setPublishMode("published")} className={`min-h-12 rounded-xl border text-xs font-semibold ${publishMode === "published" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}>Publish automatically<br /><span className="font-normal">Use trusted sources only</span></button></div>
             <label className="flex items-center justify-between gap-3 rounded-xl border border-border p-3 text-xs font-semibold">Save these sources for future scans <Switch checked={saveSources} onCheckedChange={setSaveSources} /></label>
             <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-[11px] leading-relaxed text-muted-foreground"><p className="flex items-center gap-1 font-bold text-foreground"><ShieldCheck className="h-3.5 w-3.5 text-primary" /> Verified-source AI workflow</p><p className="mt-1">AI extracts only real openings found on the career URLs, imports drafts by default, deduplicates them, and keeps API keys on the server. It never invents a vacancy.</p></div>
-            <Button className="h-11 w-full rounded-xl" disabled={runScan.isPending} onClick={() => runScan.mutate(undefined)}>{runScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{runScan.isPending ? "Searching and validating…" : "Search, extract and import"}</Button>
-            <div className="rounded-2xl border border-border bg-secondary/25 p-3">
-              <p className="text-xs font-bold">IIT recruiter workbook scan</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">Scans all 413 traceable recruiter career sources. A vacancy is published only when its official source explicitly shows it was posted during the last 24 hours.</p>
-              <Input className="mt-3" type="password" autoComplete="off" value={recruiterScanSecret} onChange={(event) => setRecruiterScanSecret(event.target.value)} placeholder="Protected dispatcher secret" />
-              {scanRecruiters.isPending && <p className="mt-2 text-[11px] font-semibold text-primary">Validated {recruiterScanProgress.completed} of {recruiterScanProgress.total} source batches</p>}
-              <Button variant="outline" className="mt-3 h-10 w-full rounded-xl" disabled={scanRecruiters.isPending || !scannerStatus?.openai_web_discovery} onClick={() => scanRecruiters.mutate()}>
-                {scanRecruiters.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />} {scanRecruiters.isPending ? "Scanning official sources" : "Run recruiter workbook scan"}
-              </Button>
-            </div>
+            <Button className="h-11 w-full rounded-xl" disabled={runScan.isPending || !selectedProviderReady} onClick={() => runScan.mutate(undefined)}>{runScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{runScan.isPending ? "Searching and validating…" : "Search, extract and import"}</Button>
           </div>
         </div>
       </div>}

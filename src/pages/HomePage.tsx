@@ -25,6 +25,7 @@ import StoryViewer from "@/components/StoryViewer";
 import StoryCreator from "@/components/StoryCreator";
 import PostComposer from "@/components/PostComposer";
 import { toast } from "sonner";
+import { hydrateForumMediaUrls } from "@/lib/forumMedia";
 
 const getInitials = (name?: string | null): string => {
   if (!name) return "U";
@@ -194,7 +195,8 @@ const HomePage = () => {
   const { data: customOptions } = useQuery({
     queryKey: ["custom-options"],
     queryFn: async () => {
-      const { data } = await supabase.from("custom_options").select("*");
+      const { data, error } = await supabase.from("custom_options").select("*");
+      if (error) throw error;
       return data ?? [];
     },
     staleTime: 60000,
@@ -234,7 +236,19 @@ const HomePage = () => {
         .select("user_id, name, avatar_url")
         .in("user_id", userIds);
       const profileMap = new Map(profiles?.map((p) => [p.user_id, p]) ?? []);
-      return storiesData.map((s) => ({ ...s, profile: profileMap.get(s.user_id) }));
+      const imagePaths = [...new Set<string>(storiesData.flatMap((story: any) =>
+        typeof story.image_path === "string" && story.image_path.length > 0 ? [story.image_path] : []))];
+      const signedByPath = new Map<string, string>();
+      if (imagePaths.length) {
+        const { data: signedRows, error: signedError } = await supabase.storage.from("stories").createSignedUrls(imagePaths, 900);
+        if (signedError) throw signedError;
+        for (const row of signedRows || []) if (!row.error && row.signedUrl) signedByPath.set(row.path, row.signedUrl);
+      }
+      return storiesData.map((story: any) => ({
+        ...story,
+        image_url: story.image_path ? signedByPath.get(story.image_path) || null : story.image_url,
+        profile: profileMap.get(story.user_id),
+      }));
     },
     enabled: !!user && isVerified,
     staleTime: Infinity,
@@ -243,7 +257,7 @@ const HomePage = () => {
   const storyGroups = useMemo(() => {
     if (!stories) return [];
     return Object.values(
-      stories.reduce<Record<string, any>>((acc, s: any) => {
+      (stories as any[]).reduce<Record<string, any>>((acc, s: any) => {
         if (!acc[s.user_id])
           acc[s.user_id] = {
             userId: s.user_id,
@@ -320,7 +334,7 @@ const HomePage = () => {
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       });
       
-      return enriched;
+      return hydrateForumMediaUrls(enriched);
     },
     enabled: !!user && isVerified,
     staleTime: Infinity,
@@ -482,6 +496,14 @@ const HomePage = () => {
       if (!user) return;
       const step = WIZARD_STEPS[wizardStep];
       const value = (wizardForm[step.key] || "").trim();
+      const submitCatalogSuggestion = async (category: string, suggestion: string) => {
+        const { error } = await (supabase as any).rpc("submit_custom_option", {
+          p_category: category,
+          p_value: suggestion,
+          p_logo_url: null,
+        });
+        if (error) throw new Error(error.message);
+      };
 
       // Validation
       if (step.mandatory) {
@@ -509,10 +531,7 @@ const HomePage = () => {
       } else if (step.key === "institute") {
         update.iit_name = value;
         if (value && !IIT_NAMES.includes(value)) {
-          await supabase
-            .from("custom_options")
-            .insert({ category: "institute", value, created_by: user.id } as any)
-            .then(() => {});
+          await submitCatalogSuggestion("institution", value);
         }
       } else if (step.key === "course") {
         // Build full student_status with current course + existing branch + year
@@ -520,10 +539,7 @@ const HomePage = () => {
         const year = wizardForm.passing_year || "";
         update.student_status = [year, value, branch].filter(Boolean).join(" ").trim();
         if (value && !COURSES.includes(value)) {
-          await supabase
-            .from("custom_options")
-            .insert({ category: "degree", value, created_by: user.id } as any)
-            .then(() => {});
+          await submitCatalogSuggestion("degree", value);
         }
       } else if (step.key === "branch") {
         const course = wizardForm.course || "";
@@ -532,10 +548,7 @@ const HomePage = () => {
         const courseKey = wizardForm.course || "default";
         const branches = BRANCHES[courseKey] || BRANCHES.default;
         if (value && !branches.includes(value)) {
-          await supabase
-            .from("custom_options")
-            .insert({ category: "branch", value, created_by: user.id } as any)
-            .then(() => {});
+          await submitCatalogSuggestion("branch", value);
         }
       } else if (step.key === "passing_year") {
         const course = wizardForm.course || "";
@@ -544,10 +557,7 @@ const HomePage = () => {
       } else if (step.key === "location") {
         update.location = value;
         if (value) {
-          await supabase
-            .from("custom_options")
-            .insert({ category: "city", value, created_by: user.id } as any)
-            .then(() => {});
+          await submitCatalogSuggestion("location", value);
         }
       } else if (step.key === "skills") {
         const skills = (wizardForm.skills || "")
@@ -555,14 +565,6 @@ const HomePage = () => {
           .map((s) => s.trim())
           .filter(Boolean);
         update.skills = skills;
-        for (const skill of skills) {
-          if (!SUGGESTED_SKILLS.includes(skill)) {
-            await supabase
-              .from("custom_skills")
-              .insert({ name: skill, created_by: user.id } as any)
-              .then(() => {});
-          }
-        }
       } else if (step.key === "bio") {
         update.bio = value;
       } else if (step.key === "mentor") {
@@ -594,23 +596,14 @@ const HomePage = () => {
           .eq("user_id", user.id);
         if (error) throw new Error(error.message);
       }
-    },
-    onSuccess: async () => {
-      // Refetch profile immediately so data is fresh
-      await refetchAuthProfile();
-      queryClient.invalidateQueries({ queryKey: ["profile"] });
-      queryClient.invalidateQueries({ queryKey: ["profile", user?.id] });
 
-      if (wizardStep < WIZARD_STEPS.length - 1) {
-        setWizardStep(wizardStep + 1);
-      } else {
-        // Also insert education record from wizard data
+      if (wizardStep === WIZARD_STEPS.length - 1) {
         const institute = wizardForm.institute?.trim();
         const course = wizardForm.course?.trim();
         const branch = wizardForm.branch?.trim();
         const year = wizardForm.passing_year?.trim();
-        if (institute && user) {
-          const { data: eduEntry } = await supabase
+        if (institute) {
+          const { data: eduEntry, error: educationError } = await supabase
             .from("education")
             .insert({
               user_id: user.id,
@@ -622,19 +615,29 @@ const HomePage = () => {
             })
             .select("id")
             .single();
-          // Set as primary education
-          if (eduEntry) {
-            await supabase
-              .from("profiles")
-              .update({ primary_education_id: eduEntry.id } as any)
-              .eq("user_id", user.id);
-          }
+          if (educationError) throw new Error(educationError.message);
+          const { error: primaryError } = await supabase
+            .from("profiles")
+            .update({ primary_education_id: eduEntry.id } as any)
+            .eq("user_id", user.id);
+          if (primaryError) throw new Error(primaryError.message);
         }
-        // Mark onboarding complete
-        await supabase
+        const { error: completionError } = await supabase
           .from("profiles")
           .update({ onboarding_completed: true } as any)
-          .eq("user_id", user!.id);
+          .eq("user_id", user.id);
+        if (completionError) throw new Error(completionError.message);
+      }
+    },
+    onSuccess: async () => {
+      // Refetch profile immediately so data is fresh
+      await refetchAuthProfile();
+      queryClient.invalidateQueries({ queryKey: ["profile"] });
+      queryClient.invalidateQueries({ queryKey: ["profile", user?.id] });
+
+      if (wizardStep < WIZARD_STEPS.length - 1) {
+        setWizardStep(wizardStep + 1);
+      } else {
         await refetchAuthProfile();
         queryClient.invalidateQueries({ queryKey: ["education"] });
         setShowProfileWizard(false);
@@ -718,8 +721,8 @@ const HomePage = () => {
 
   const extraDegrees = customOptions?.filter((o: any) => o.category === "degree").map((o: any) => o.value) || [];
   const extraBranches = customOptions?.filter((o: any) => o.category === "branch").map((o: any) => o.value) || [];
-  const extraCities = customOptions?.filter((o: any) => o.category === "city").map((o: any) => o.value) || [];
-  const extraInstitutes = customOptions?.filter((o: any) => o.category === "institute").map((o: any) => o.value) || [];
+  const extraCities = customOptions?.filter((o: any) => o.category === "location" || o.category === "city").map((o: any) => o.value) || [];
+  const extraInstitutes = customOptions?.filter((o: any) => o.category === "institution" || o.category === "institute").map((o: any) => o.value) || [];
 
   const renderWizardField = () => {
     const step = WIZARD_STEPS[wizardStep];

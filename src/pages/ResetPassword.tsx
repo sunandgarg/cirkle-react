@@ -1,11 +1,35 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 
-type RecoveryState = "checking" | "ready" | "invalid" | "saving";
+type RecoveryState = "ready" | "invalid" | "saving";
+
+const RECOVERY_TOKEN_KEY = "cirkle.password-reset-token";
+
+const validRecoveryToken = (value: string | null): value is string =>
+  typeof value === "string" && value.length >= 20 && value.length <= 512;
+
+export const readRecoveryToken = (): string => {
+  if (typeof window === "undefined") return "";
+  const url = new URL(window.location.href);
+  const incoming = url.searchParams.get("token")?.trim() || null;
+  let stored: string | null = null;
+  try { stored = window.sessionStorage.getItem(RECOVERY_TOKEN_KEY); } catch { /* storage can be disabled */ }
+  const token = validRecoveryToken(incoming) ? incoming : validRecoveryToken(stored) ? stored : "";
+
+  if (incoming !== null) {
+    try {
+      if (token) window.sessionStorage.setItem(RECOVERY_TOKEN_KEY, token);
+      else window.sessionStorage.removeItem(RECOVERY_TOKEN_KEY);
+    } catch { /* the in-memory token still keeps this page usable */ }
+    url.searchParams.delete("token");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+  return token;
+};
 
 const passwordChecks = (password: string) => ({
   length: password.length >= 10,
@@ -16,43 +40,14 @@ const passwordChecks = (password: string) => ({
 
 const ResetPassword = () => {
   const navigate = useNavigate();
-  const [state, setState] = useState<RecoveryState>("checking");
+  const [recoveryToken] = useState(readRecoveryToken);
+  const [state, setState] = useState<RecoveryState>(recoveryToken ? "ready" : "invalid");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const checks = useMemo(() => passwordChecks(password), [password]);
   const passwordValid = checks.length && checks.letter && checks.number && checks.maximum;
   const confirmationValid = confirmation.length > 0 && confirmation === password;
-
-  useEffect(() => {
-    let active = true;
-    let invalidTimer: ReturnType<typeof setTimeout> | undefined;
-
-    const markReady = () => {
-      if (!active) return;
-      if (invalidTimer) clearTimeout(invalidTimer);
-      setState("ready");
-    };
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "PASSWORD_RECOVERY" && session) markReady();
-    });
-
-    void supabase.auth.getSession().then(({ data, error }) => {
-      if (!active) return;
-      if (!error && data.session) {
-        markReady();
-        return;
-      }
-      invalidTimer = setTimeout(() => active && setState("invalid"), 2500);
-    });
-
-    return () => {
-      active = false;
-      if (invalidTimer) clearTimeout(invalidTimer);
-      subscription.unsubscribe();
-    };
-  }, []);
 
   const handleUpdatePassword = async () => {
     if (!passwordValid) {
@@ -66,8 +61,9 @@ const ResetPassword = () => {
 
     setState("saving");
     try {
-      const { error } = await supabase.auth.updateUser({ password });
+      const { error } = await supabase.auth.completePasswordReset({ token: recoveryToken, password });
       if (error) throw error;
+      try { window.sessionStorage.removeItem(RECOVERY_TOKEN_KEY); } catch { /* no-op */ }
       await supabase.auth.signOut({ scope: "local" });
       navigate("/auth?password_reset=success", { replace: true });
     } catch (error: any) {
@@ -86,13 +82,6 @@ const ResetPassword = () => {
       <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[min(360px,38svh)] bg-gradient-to-b from-transparent via-[#f6f7f9]/60 to-[#f6f7f9]" />
       <main id="main-content" className="relative z-10 flex min-h-[100svh] items-end justify-center px-5 pb-[max(28px,env(safe-area-inset-bottom))] pt-28 supports-[height:100dvh]:min-h-[100dvh] sm:items-center">
         <section className="w-full max-w-md rounded-[24px] border border-[#dfe3e8] bg-white/95 p-5 shadow-[0_18px_50px_rgba(16,22,30,0.10)] backdrop-blur sm:p-7" aria-labelledby="reset-title">
-          {state === "checking" && (
-            <div className="py-10 text-center" aria-live="polite">
-              <div className="mx-auto h-7 w-7 animate-spin rounded-full border-2 border-[#1666b6] border-t-transparent" />
-              <p className="mt-4 text-sm text-[#637083]">Verifying your secure reset link…</p>
-            </div>
-          )}
-
           {state === "invalid" && (
             <div className="py-4 text-center">
               <h1 id="reset-title" className="text-2xl font-bold">Reset link expired</h1>

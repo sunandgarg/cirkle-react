@@ -1,0 +1,11 @@
+/srv/cirkle/shared/logs/*.log /home/cirkle/.pm2/pm2.log {
+    daily
+    rotate 14
+    maxsize 25M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su cirkle cirkle
+}

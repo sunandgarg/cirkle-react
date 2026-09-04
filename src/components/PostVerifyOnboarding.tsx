@@ -15,6 +15,7 @@ import { clearOnboardingProgress, loadOnboardingProgress, saveOnboardingProgress
 import { convertToWebP } from "@/lib/imageUtils";
 import { findCompanyOption, shouldOfferInitialCompanyLogo } from "@/lib/companyCatalog";
 import { reportError } from "@/lib/errorTelemetry";
+import { safeExternalUrl } from "@/lib/profileOptions";
 
 const YEARS = Array.from({ length: 56 }, (_, i) => String(2035 - i));
 
@@ -349,6 +350,12 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
         companyOption = data?.[0];
       }
 
+      let linkedinUrl: string | null = null;
+      if (linkedin.trim()) {
+        try { linkedinUrl = safeExternalUrl(linkedin); }
+        catch { throw new Error("LinkedIn link must use http or https."); }
+      }
+
       // One database transaction owns education, primary profile linkage and
       // optional details. A refresh can no longer observe a half-saved profile.
       const { error: onboardingError } = await (supabase as any).rpc("complete_member_onboarding", {
@@ -358,7 +365,7 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
         p_specialisation: specialisation,
         p_passing_year: year,
         p_location: location || null,
-        p_linkedin: linkedin.trim() || null,
+        p_linkedin: linkedinUrl,
         p_company: company.trim() || null,
         p_phone_country_code: phone ? phoneCountryCode : null,
         p_phone: phone || null,

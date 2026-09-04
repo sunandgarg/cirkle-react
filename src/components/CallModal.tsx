@@ -9,6 +9,7 @@ import { toast } from "sonner";
 interface CallModalProps {
   roomId: string;
   mode: "audio" | "video";
+  sessionId?: string;
   onClose: () => void;
 }
 
@@ -23,7 +24,7 @@ type Stage =
   | { kind: "reconnecting" }
   | { kind: "error"; message: string };
 
-const CallModal = ({ roomId, mode, onClose }: CallModalProps) => {
+const CallModal = ({ roomId, mode, sessionId, onClose }: CallModalProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const callRef = useRef<DailyCall | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -109,7 +110,7 @@ const CallModal = ({ roomId, mode, onClose }: CallModalProps) => {
     try {
       setStage({ kind: "fetching_token" });
       const { data, error } = await supabase.functions.invoke("daily-create-room", {
-        body: { roomId, mode },
+        body: { roomId, mode, ...(sessionId ? { sessionId } : {}) },
       });
       if (error) throw new Error(error.message ?? "Failed to fetch call token");
       if (!data?.url || !data?.token) throw new Error("Invalid call token response");

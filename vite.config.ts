@@ -7,8 +7,20 @@ export default defineConfig(() => ({
   server: {
     host: "::",
     port: 8080,
+    strictPort: true,
     hmr: {
       overlay: false,
+    },
+    proxy: {
+      "/api/socket.io": {
+        target: "http://127.0.0.1:3001",
+        ws: true,
+        changeOrigin: true,
+      },
+      "/api": {
+        target: "http://127.0.0.1:3001",
+        changeOrigin: true,
+      },
     },
   },
   plugins: [react()],
@@ -22,7 +34,7 @@ export default defineConfig(() => ({
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
-          if (id.includes("@supabase") || id.includes("realtime-js") || id.includes("postgrest-js")) return "supabase";
+          if (id.includes("/node_modules/socket.io-client/") || id.includes("/node_modules/engine.io-client/")) return "realtime";
           if (id.includes("/node_modules/@tanstack/")) return "query";
           if (
             id.includes("/node_modules/react/") ||

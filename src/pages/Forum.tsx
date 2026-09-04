@@ -62,12 +62,14 @@ import {
 } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { shouldAnchorLatestDuringKeyboard, useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
+import { safeHttpUrl } from "@/lib/safeUrl";
+import NotificationBell from "@/components/NotificationBell";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
 );
 const QUICK_REACTIONS = ["❤️", "🔥", "👍", "😂", "💯"];
-const LEGACY_FORUM_POST_COLUMNS = "id,community_id,scope_type,scope_key,channel,content,is_anonymous,author_id,created_at,image_url,reply_to_id,file_url,file_name,file_size,file_type,deleted_at,deleted_for_users,is_deleted_for_everyone,edited_at,pinned_at,voice_url,voice_duration";
+const LEGACY_FORUM_POST_COLUMNS = "id,community_id,scope_type,scope_key,channel,content,is_anonymous,author_id,created_at,image_url,image_path,reply_to_id,file_url,file_path,file_name,file_size,file_type,deleted_at,deleted_for_users,is_deleted_for_everyone,edited_at,pinned_at,voice_url,voice_path,voice_duration";
 
 /* ─── Color helpers ─── */
 const DISCORD_COLORS = [
@@ -172,8 +174,8 @@ const generateTestMessages = (): any[] => {
   m("Rust vs Go for backend services - what's the IIT consensus? Starting a new microservice and genuinely torn", 6, 80);
   m("Go for 90% of use cases. Rust only if you need zero-cost abstractions or systems-level perf.", 8, 79, { reactions: { "👍": 8, "❤️": 2 } });
   m("Go has a gentler learning curve too. Your team will thank you when onboarding new devs", 9, 78.5);
-  m("Supabase AMA happening next Friday! Drop your questions here and I'll compile them 📋", 0, 72, { pinned_at: new Date().toISOString(), replyCount: 7 });
-  m("Question: Will Supabase ever support MongoDB-style document queries? Sometimes I miss flexible schemas", 10, 71);
+  m("Platform engineering AMA happening next Friday! Drop your questions here and I'll compile them 📋", 0, 72, { pinned_at: new Date().toISOString(), replyCount: 7 });
+  m("Question: How are we balancing typed relational data with flexible community features?", 10, 71);
   m("AI made me 40% more productive but 40% more lazy. Is this a net positive? 🤖", 11, 65, { is_anonymous: true, reactions: { "😂": 12, "💯": 5, "🔥": 3 } });
   m("The real question is: does your manager know the productivity gain is from AI? 😏", 4, 64.5, { reactions: { "😂": 8 } });
   m("TypeScript 5.4 discriminated unions are so clean. Here's a pattern I've been using for API responses…", 12, 56);
@@ -217,7 +219,7 @@ const generateTestMessages = (): any[] => {
 
   // ── Recent messages (today) ──
   m("Good morning everyone! ☀️ What's everyone working on today?", 5, 8);
-  m("Building a real-time dashboard with Supabase + React Query. The combo is 🤌", 2, 7.5, { reactions: { "🔥": 2 } });
+  m("Building a real-time dashboard with Node, MySQL and React Query. The combo is 🤌", 2, 7.5, { reactions: { "🔥": 2 } });
   m("Debugging a memory leak in our Node service. Send help 🆘", 8, 6, { reactions: { "😂": 3 } });
   m("Have you tried the --inspect flag with Chrome DevTools? Saved my life last week", 0, 5.5);
   m("Hot take: Prettier > ESLint for code formatting. Fight me.", 14, 4, { reactions: { "👍": 3, "😂": 2 } });
@@ -376,6 +378,7 @@ const Forum = () => {
   const [searchTab, setSearchTab] = useState<"messages" | "media" | "pins" | "links">("messages");
   const [activeTab, setActiveTab] = useState<"feed" | "pinned">("feed");
   const [highlightedPostId, setHighlightedPostId] = useState<string | null>(null);
+  const [deepLinkedPost, setDeepLinkedPost] = useState<any>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
   const [showMentionSuggestions, setShowMentionSuggestions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
@@ -427,6 +430,7 @@ const Forum = () => {
   const shouldFollowLiveRef = useRef(true);
   const sendIdentityRef = useRef<ForumSendIdentity | null>(null);
   const processingOutboxRef = useRef(false);
+  const deepLinkRequestRef = useRef<string | null>(null);
   const outboxPreviewUrlsRef = useRef<Map<string, string>>(new Map());
   const anchorLatestDuringKeyboardRef = useRef(false);
   const scrollWorkFrameRef = useRef<number | null>(null);
@@ -774,7 +778,7 @@ const Forum = () => {
   const { data: postsData, isLoading } = useQuery({
     queryKey: ["forum-posts", user?.id, activeScope.type, activeScope.key],
     queryFn: async () => {
-      // Test accounts are a fully local sandbox. Do not wait for Supabase or let
+      // Test accounts are a fully local sandbox. Do not wait for the API or let
       // an unavailable/partially-migrated backend hide the room from testers.
       if (readMobileTestSession()) {
         return {
@@ -801,8 +805,10 @@ const Forum = () => {
           setCachedPosts(activeScope.type, activeScope.key, history, user?.id);
           return { posts: history, isDemo: false, demos: [] };
         }
-        // Real empty: return marker so empty-state UI can show.
-        return { posts: [], isDemo: activeScope.type === "GLOBAL", demos: activeScope.type === "GLOBAL" ? DEMO_MESSAGES : [] };
+        // A real empty room stays empty. Demo conversations are restricted to
+        // the explicit mobile test session above so production outages and
+        // fresh communities are never disguised as successful data loads.
+        return { posts: [], isDemo: false, demos: [] };
       }
       const enriched = (serverEnriched ? rawPosts : await enrichPosts(rawPosts)).reverse();
       const merged = mergeForumHistoryPosts(history, enriched);
@@ -843,8 +849,12 @@ const Forum = () => {
     const roomOutbox = outboxPosts.filter((post) =>
       post.scope_type === activeScope.type && post.scope_key === activeScope.key && !post.reply_to_id
     );
-    return sortPostsChronologically([...persisted, ...roomOutbox]);
-  }, [postsData, olderPages, testRoomPosts, outboxPosts, activeScope.type, activeScope.key]);
+    const linked = deepLinkedPost?.scope_type === activeScope.type && deepLinkedPost?.scope_key === activeScope.key
+      && ![...persisted, ...roomOutbox].some((post) => post.id === deepLinkedPost.id)
+      ? [deepLinkedPost]
+      : [];
+    return sortPostsChronologically([...persisted, ...roomOutbox, ...linked]);
+  }, [postsData, olderPages, testRoomPosts, outboxPosts, activeScope.type, activeScope.key, deepLinkedPost]);
   const isEmptyChannel = !!postsData && !postsData.isDemo && (posts?.length || 0) === 0;
 
   const getCurrentSendSnapshot = (): ForumSendSnapshot => ({
@@ -1162,7 +1172,9 @@ const Forum = () => {
         }
       }
     },
-    onSuccess: () => {
+    onSuccess: (_data, { postId }) => {
+      setOlderPages((current) => current.filter((post) => post.id !== postId));
+      if (deepLinkedPost?.id === postId) setDeepLinkedPost(null);
       queryClient.invalidateQueries({ queryKey: ["forum-posts"] });
       queryClient.invalidateQueries({ queryKey: ["user-deleted-messages"] });
       toast.success("Message removed");
@@ -1354,8 +1366,8 @@ const Forum = () => {
       },
     });
 
-    // AppSync is the primary low-latency fan-out when configured. Supabase
-    // remains the durable history and automatically takes over on any failure.
+    // The archived AppSync compatibility branch stays disabled in production.
+    // Socket.IO provides fan-out; MySQL remains the durable history for recovery.
     if (appSyncRealtimeEnabled) void (async () => {
       const channels = await getForumAppSyncChannels(activeScope.type, activeScope.key);
       if (disposed) return;
@@ -1812,8 +1824,58 @@ const Forum = () => {
 
   const scrollToMessage = (postId: string) => {
     const el = messageRefs.current[postId];
-    if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); setHighlightedPostId(postId); setTimeout(() => setHighlightedPostId(null), 2000); }
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedPostId(postId);
+    setTimeout(() => setHighlightedPostId((current) => current === postId ? null : current), 2000);
   };
+
+  useEffect(() => {
+    const requested = searchParams.get("post") || "";
+    if (!/^[a-zA-Z0-9_-]{1,100}$/.test(requested) || !user?.id) return;
+    const clearDeepLink = () => {
+      const next = new URLSearchParams(searchParams);
+      next.delete("post");
+      next.delete("scope_type");
+      next.delete("scope_key");
+      setSearchParams(next, { replace: true });
+    };
+    const available = (posts || []).find((post: any) => post.id === requested)
+      || (deepLinkedPost?.id === requested ? deepLinkedPost : null);
+    if (available) {
+      if (available.scope_type !== activeScope.type || available.scope_key !== activeScope.key) {
+        setActiveScope({ type: available.scope_type, key: available.scope_key });
+        setActiveTab("feed");
+        setThreadPost(null);
+        return;
+      }
+      const timer = window.setTimeout(() => {
+        if (deepLinkedPost?.id === requested) {
+          setOlderPages((current) => current.some((post) => post.id === requested) ? current : [deepLinkedPost, ...current]);
+          setDeepLinkedPost(null);
+        }
+        scrollToMessage(requested);
+        clearDeepLink();
+      }, 80);
+      return () => window.clearTimeout(timer);
+    }
+    if (deepLinkRequestRef.current === requested) return;
+    deepLinkRequestRef.current = requested;
+    let cancelled = false;
+    void (supabase as any).rpc("get_forum_post", { p_post_id: requested }).then(async ({ data, error }: any) => {
+      if (cancelled) return;
+      if (error || !data) {
+        toast.error("That forum post is no longer available.");
+        clearDeepLink();
+        return;
+      }
+      const [hydrated] = await hydrateForumMediaUrls([data.post || data]);
+      if (!cancelled && hydrated) setDeepLinkedPost(hydrated);
+    }).finally(() => {
+      if (deepLinkRequestRef.current === requested) deepLinkRequestRef.current = null;
+    });
+    return () => { cancelled = true; };
+  }, [activeScope.key, activeScope.type, deepLinkedPost, posts, searchParams, setSearchParams, user?.id]);
+
   const scrollToBottom = () => {
     shouldFollowLiveRef.current = true;
     scrollContainerRef.current?.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: "smooth" });
@@ -2035,6 +2097,7 @@ const Forum = () => {
               </button>
             )}
 
+            <NotificationBell />
             <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); setSearchTab("messages"); }} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${showSearch ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="Search messages">
               <Search className="w-4 h-4" />
             </button>
@@ -2593,6 +2656,13 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContaine
     useAnimationFrameWithResizeObserver: true,
     isScrollingResetDelay: 120,
   });
+  useEffect(() => {
+    if (!highlightedPostId) return;
+    const targetIndex = timelineItems.findIndex((item) => item.type === "post" && item.post.id === highlightedPostId);
+    if (targetIndex < 0) return;
+    const frame = requestAnimationFrame(() => virtualizer.scrollToIndex(targetIndex, { align: "center" }));
+    return () => cancelAnimationFrame(frame);
+  }, [highlightedPostId, timelineItems, virtualizer]);
   return (
   <>
     {isLoading ? (
@@ -2624,7 +2694,7 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContaine
                 <Megaphone className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium text-foreground">{ad.content}</p>
-                  {ad.link_url && <a href={ad.link_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary hover:underline mt-1 block">Learn more →</a>}
+                  {safeHttpUrl(ad.link_url) && <a href={safeHttpUrl(ad.link_url)!} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary hover:underline mt-1 block">Learn more →</a>}
                 </div>
                 <span className="text-[8px] text-muted-foreground uppercase font-bold">Ad</span>
               </div>
@@ -2731,6 +2801,9 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
   const isHighlighted = highlightedPostId === post.id;
   const isDeleted = !!post.deleted_at || !!post.is_deleted_for_everyone;
   const isEdited = !!post.edited_at;
+  const imageUrl = safeHttpUrl(post.image_url);
+  const fileUrl = safeHttpUrl(post.file_url);
+  const voiceUrl = safeHttpUrl(post.voice_url);
   const replyCount = post.replyCount || 0;
   const parentPost = findParentPost(post.reply_to_id);
   const canDeleteForEveryone = isMine && !isDeleted && ((Date.now() - new Date(post.created_at).getTime()) < 3 * 60 * 1000);
@@ -2885,22 +2958,22 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
           )}
 
           {/* Image */}
-          {!isDeleted && post.image_url && (
-            <img src={post.image_url} alt={post.content === "GIF" ? "Shared GIF" : "Shared image"} className="mt-1.5 block h-auto max-h-72 w-full max-w-[400px] rounded-lg object-contain cursor-pointer hover:opacity-90 transition-opacity"
-              loading="lazy" onClick={() => onImageClick(post.image_url)} />
+          {!isDeleted && imageUrl && (
+            <img src={imageUrl} alt={post.content === "GIF" ? "Shared GIF" : "Shared image"} className="mt-1.5 block h-auto max-h-72 w-full max-w-[400px] rounded-lg object-contain cursor-pointer hover:opacity-90 transition-opacity"
+              loading="lazy" onClick={() => onImageClick(imageUrl)} />
           )}
 
           {/* File */}
-          {!isDeleted && post.file_url && post.file_name && (
+          {!isDeleted && fileUrl && post.file_name && (
             <div className="mt-1.5 max-w-[300px]">
-              <FileAttachment fileName={post.file_name} fileUrl={post.file_url} fileSize={post.file_size} fileType={post.file_type} />
+              <FileAttachment fileName={post.file_name} fileUrl={fileUrl} fileSize={post.file_size} fileType={post.file_type} />
             </div>
           )}
 
           {/* Voice */}
-          {!isDeleted && post.voice_url && (
+          {!isDeleted && voiceUrl && (
             <div className="mt-1.5 max-w-[280px]">
-              <VoicePlayback url={post.voice_url} duration={post.voice_duration || 0} />
+              <VoicePlayback url={voiceUrl} duration={post.voice_duration || 0} />
             </div>
           )}
 

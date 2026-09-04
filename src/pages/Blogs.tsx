@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { format, formatDistanceToNow, isAfter, isBefore, parseISO } from "date-fns";
 import BlogComments from "@/components/blog/BlogComments";
+import { isBlogLive } from "@/lib/blogVisibility";
 
 const db = supabase as any;
 
@@ -21,9 +22,6 @@ const slugify = (title: string, id: string) =>
   `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60)}-${id.slice(0, 8)}`;
 
 const readTime = (content: string) => Math.max(1, Math.round(content.trim().split(/\s+/).length / 200));
-
-const isLive = (b: any) =>
-  b.published && (b.status ?? "published") === "published" && (!b.scheduled_at || new Date(b.scheduled_at) <= new Date());
 
 const emptyForm = {
   title: "", content: "", category: "General", cover_image_url: "",
@@ -69,7 +67,7 @@ const Blogs = () => {
   });
 
   const visibleBlogs = useMemo(
-    () => (blogs ?? []).filter((b) => isAdmin || isLive(b)),
+    () => (blogs ?? []).filter((b) => isAdmin || isBlogLive(b)),
     [blogs, isAdmin]
   );
 
@@ -147,6 +145,15 @@ const Blogs = () => {
     mutationFn: async () => {
       if (!user) return;
       const tags = form.tags.split(",").map((t) => t.trim()).filter(Boolean);
+      let scheduledAt: string | null = null;
+      if (form.status === "scheduled") {
+        if (!form.scheduled_at) throw new Error("Choose a future publication date and time.");
+        const scheduledDate = new Date(form.scheduled_at);
+        if (Number.isNaN(scheduledDate.getTime()) || scheduledDate <= new Date()) {
+          throw new Error("Scheduled publication must be in the future.");
+        }
+        scheduledAt = scheduledDate.toISOString();
+      }
       const payload: any = {
         title: form.title,
         content: form.content,
@@ -154,7 +161,7 @@ const Blogs = () => {
         cover_image_url: form.cover_image_url || null,
         tags,
         status: form.status,
-        scheduled_at: form.status === "scheduled" && form.scheduled_at ? new Date(form.scheduled_at).toISOString() : null,
+        scheduled_at: scheduledAt,
         published: form.status !== "draft",
       };
       if (editingBlog) {
@@ -206,8 +213,8 @@ const Blogs = () => {
   };
 
   const listSource = useMemo(() => {
-    if (isAdmin && adminView === "drafts") return visibleBlogs.filter((b) => !isLive(b));
-    return visibleBlogs.filter(isLive);
+    if (isAdmin && adminView === "drafts") return visibleBlogs.filter((b) => !isBlogLive(b));
+    return visibleBlogs.filter((blog) => isBlogLive(blog));
   }, [visibleBlogs, isAdmin, adminView]);
 
   const categories = useMemo(() => {
@@ -261,7 +268,7 @@ const Blogs = () => {
       );
     }
     const author = blogAuthors?.[activeBlog.author_id];
-    const related = visibleBlogs.filter((b: any) => isLive(b) && b.id !== activeBlog.id && (b.category || "General") === (activeBlog.category || "General")).slice(0, 3);
+    const related = visibleBlogs.filter((b: any) => isBlogLive(b) && b.id !== activeBlog.id && (b.category || "General") === (activeBlog.category || "General")).slice(0, 3);
     return (
       <div className="bg-background min-h-screen pb-24">
         <header className="sticky top-0 z-40 bg-card/95 backdrop-blur border-b border-border px-4 py-3">
@@ -271,7 +278,7 @@ const Blogs = () => {
           </div>
         </header>
         <article className="max-w-3xl mx-auto px-4 py-6">
-          {!isLive(activeBlog) && (
+          {!isBlogLive(activeBlog) && (
             <div className="mb-4 text-xs font-semibold px-3 py-2 rounded-xl bg-amber-500/10 text-amber-700 border border-amber-500/20">
               Preview - this post is {activeBlog.status === "scheduled" ? `scheduled for ${format(new Date(activeBlog.scheduled_at), "dd MMM yyyy, HH:mm")}` : "a draft"} and is not visible to readers.
             </div>
@@ -539,7 +546,7 @@ const Blogs = () => {
               </div>
               <div className="p-5 sm:p-6 flex flex-col justify-center">
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
-                  <span className="text-[10px] font-semibold px-2.5 py-1 rounded-full bg-primary/10 text-primary">{isLive(featured) ? "Featured" : featured.status === "scheduled" ? "Scheduled" : "Draft"}</span>
+                  <span className="text-[10px] font-semibold px-2.5 py-1 rounded-full bg-primary/10 text-primary">{isBlogLive(featured) ? "Featured" : featured.status === "scheduled" ? "Scheduled" : "Draft"}</span>
                   <span className="text-[10px] text-muted-foreground">{format(new Date(featured.created_at), "dd MMM yyyy")}</span>
                 </div>
                 <h3 className="text-xl font-bold text-foreground leading-snug mb-2">{featured.title}</h3>
@@ -565,7 +572,7 @@ const Blogs = () => {
                       <div className="p-4">
                         <div className="flex items-center gap-2 mb-2 flex-wrap">
                           <span className="text-[10px] font-semibold px-2.5 py-1 rounded-full bg-primary/10 text-primary">{blog.category || "General"}</span>
-                          {!isLive(blog) && (
+                          {!isBlogLive(blog) && (
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-700">
                               {blog.status === "scheduled" ? `Scheduled ${blog.scheduled_at ? format(new Date(blog.scheduled_at), "dd MMM HH:mm") : ""}` : "Draft"}
                             </span>
@@ -607,7 +614,7 @@ const Blogs = () => {
                         </button>
                         {isAdmin && (
                           <div className="flex gap-1 ml-auto">
-                            {!isLive(blog) && (
+                            {!isBlogLive(blog) && (
                               <button onClick={() => publishNow.mutate(blog.id)} className="p-1.5 text-muted-foreground hover:text-primary rounded-lg" aria-label="Publish now"><Send className="w-3.5 h-3.5" /></button>
                             )}
                             <button onClick={() => openEdit(blog)} className="p-1.5 text-muted-foreground hover:text-primary rounded-lg" aria-label="Edit post"><Pencil className="w-3.5 h-3.5" /></button>

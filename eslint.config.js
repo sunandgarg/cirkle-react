@@ -5,7 +5,9 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist"] },
+  // Supabase is retained only as a migration/reference archive. The running
+  // React + Node application is checked independently of those Deno sources.
+  { ignores: ["dist", "server/dist", "server/storage", ".local", ".wrangler", "supabase"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
@@ -27,6 +29,12 @@ export default tseslint.config(
       "@typescript-eslint/no-empty-object-type": "off",
       "@typescript-eslint/no-require-imports": "off",
       "no-empty": ["error", { allowEmptyCatch: true }],
+    },
+  },
+  {
+    files: ["server/**/*.ts", "prisma/**/*.ts"],
+    languageOptions: {
+      globals: globals.node,
     },
   },
 );

@@ -30,9 +30,11 @@ import {
 } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { getDirectChatBackTarget, getDirectChatProfileTarget } from "@/lib/directMessages";
+import { parseCallInviteQuery } from "@/lib/callInvites";
+import NotificationBell from "@/components/NotificationBell";
 
 const PAGE_SIZE = 50;
-const INBOX_CACHE_KEY = "cirkle:chat-inbox";
+const inboxCacheKey = (userId: string) => `cirkle:chat-inbox:${userId}`;
 const CALLS_ENABLED = import.meta.env.VITE_DAILY_CALLS_ENABLED === "true";
 const CallModal = lazy(() => import("@/components/CallModal"));
 
@@ -90,15 +92,16 @@ const formatMessageDate = (date: string) => {
 
 const normalizeRoom = (room: RawRoom): ChatRoom => ({
   ...room,
-  displayName: room.display_name || room.displayName || (room.is_group ? room.name : "User") || "User",
+  displayName: room.display_name || room.displayName || room.name || (room.is_group ? "Group" : "User"),
   displayAvatar: room.display_avatar || room.displayAvatar || room.avatar_url,
   lastMessage: (room.last_message && typeof room.last_message === "object" ? room.last_message as ChatMessage : null) || room.lastMessage || null,
   unreadCount: Number(room.unread_count ?? room.unreadCount ?? 0),
   peerId: room.peer_id || room.peerId || null,
 });
 
-const readInboxCache = (): ChatRoom[] => {
-  try { return (JSON.parse(localStorage.getItem(INBOX_CACHE_KEY) || "[]") as RawRoom[]).map(normalizeRoom); }
+const readInboxCache = (userId?: string): ChatRoom[] => {
+  if (!userId) return [];
+  try { return (JSON.parse(localStorage.getItem(inboxCacheKey(userId)) || "[]") as RawRoom[]).map(normalizeRoom); }
   catch { return []; }
 };
 
@@ -146,6 +149,7 @@ const Chats = () => {
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [callMode, setCallMode] = useState<"audio" | "video" | null>(null);
+  const [callSessionId, setCallSessionId] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
   const [showConversationInfo, setShowConversationInfo] = useState(false);
@@ -203,18 +207,38 @@ const Chats = () => {
         (supabase as any).rpc("get_direct_message_sidebar"),
       ]);
       if (error) throw error;
-      const peerByRoom = new Map<string, string>((directRows || [])
-        .filter((row: { room_id?: string | null; peer_id?: string | null }) => row.room_id && row.peer_id)
-        .map((row: { room_id: string; peer_id: string }) => [row.room_id, row.peer_id]));
-      const inbox = (data || []).map((room) => normalizeRoom({ ...room, peer_id: peerByRoom.get(room.id) || null }));
-      localStorage.setItem(INBOX_CACHE_KEY, JSON.stringify(inbox));
+      const directByRoom = new Map<string, Record<string, unknown>>((directRows || [])
+        .filter((row: { room_id?: string | null }) => !!row.room_id)
+        .map((row: { room_id: string } & Record<string, unknown>) => [row.room_id, row]));
+      const inbox = (data || []).map((room) => normalizeRoom({ ...room, ...(directByRoom.get(room.id) || {}) }));
+      localStorage.setItem(inboxCacheKey(user.id), JSON.stringify(inbox));
       return inbox as ChatRoom[];
     },
     enabled: !!user,
-    placeholderData: readInboxCache,
+    placeholderData: () => readInboxCache(user?.id),
     staleTime: 30_000,
     refetchOnReconnect: true,
   });
+
+  const incomingCallInvite = useMemo(
+    () => parseCallInviteQuery(roomId, searchParams),
+    [roomId, searchParams],
+  );
+  const hasCallInviteParams = searchParams.has("call") || searchParams.has("session") || searchParams.has("expires");
+  const clearCallInviteParams = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("call");
+    next.delete("session");
+    next.delete("expires");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (!hasCallInviteParams) return;
+    if (CALLS_ENABLED && incomingCallInvite) return;
+    clearCallInviteParams();
+    toast.error(CALLS_ENABLED ? "This call invitation is invalid or has expired" : "Audio and video calls are not available");
+  }, [clearCallInviteParams, hasCallInviteParams, incomingCallInvite]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -256,9 +280,10 @@ const Chats = () => {
       followLiveRef.current = true;
     }
 
-    void getCachedMessages<ChatMessage>(activeRoom.id).then((cached) => {
-      if (!cancelled && cached.length) void hydrateChatMedia(cached).then((hydrated) => {
-        if (!cancelled) setMessages((current) => mergeChatTimeline(current, hydrated, activeRoom.id));
+    let authoritativeFailed = false;
+    void getCachedMessages<ChatMessage>(user.id, activeRoom.id).then((cached) => {
+      if (!cancelled && !authoritativeFailed && cached.length) void hydrateChatMedia(cached).then((hydrated) => {
+        if (!cancelled && !authoritativeFailed) setMessages((current) => mergeChatTimeline(current, hydrated, activeRoom.id));
       });
     });
 
@@ -269,7 +294,7 @@ const Chats = () => {
         .order("id", { ascending: false })
         .limit(PAGE_SIZE);
       if (cancelled) return;
-      if (error) { toast.error("Could not refresh messages"); return; }
+      if (error) { authoritativeFailed = true; setMessages([]); toast.error("Could not refresh messages"); return; }
       const page = await hydrateChatMedia(((data || []) as ChatMessage[]).reverse());
       if (cancelled) return;
       // Cache hydration, the server query and Realtime all run concurrently.
@@ -277,7 +302,7 @@ const Chats = () => {
       // can never be erased by a slower response.
       setMessages((current) => mergeChatTimeline(current, page, activeRoom.id));
       setHasOlder(page.length === PAGE_SIZE);
-      void cacheMessages(activeRoom.id, page);
+      void cacheMessages(user.id, activeRoom.id, page);
       markReadSoon(activeRoom.id);
     })();
 
@@ -439,10 +464,10 @@ const Chats = () => {
   useEffect(() => {
     if (!activeRoom || !messages.length) return;
     messagesRef.current = messages;
-    void cacheMessages(activeRoom.id, messages);
+    if (user?.id) void cacheMessages(user.id, activeRoom.id, messages);
     if (!prependRef.current && followLiveRef.current) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     prependRef.current = false;
-  }, [activeRoom, messages]);
+  }, [activeRoom, messages, user?.id]);
 
   const loadOlder = async () => {
     if (!activeRoom || !messages.length || loadingOlder) return;
@@ -733,6 +758,7 @@ const Chats = () => {
     const leaveConversation = () => {
       setReplyTo(null);
       setCallMode(null);
+      setCallSessionId(null);
       if (!activeRoom.is_group) {
         navigate(getDirectChatBackTarget(), { replace: true });
         return;
@@ -750,8 +776,9 @@ const Chats = () => {
             <p className="text-sm font-semibold text-foreground truncate">{activeRoom.displayName}</p>
             <p className="text-[11px] text-muted-foreground">{typingUsers.length ? `${typingUsers.join(", ")} typing…` : activeRoom.is_group ? "Group chat" : "Connected"}</p>
           </button>
-          {CALLS_ENABLED && <button onClick={() => setCallMode("video")} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Video call"><Video className="w-5 h-5" /></button>}
-          {CALLS_ENABLED && <button onClick={() => setCallMode("audio")} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Audio call"><Phone className="w-5 h-5" /></button>}
+          {CALLS_ENABLED && <button onClick={() => { setCallSessionId(null); setCallMode("video"); }} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Video call"><Video className="w-5 h-5" /></button>}
+          {CALLS_ENABLED && <button onClick={() => { setCallSessionId(null); setCallMode("audio"); }} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Audio call"><Phone className="w-5 h-5" /></button>}
+          <NotificationBell />
           <button onClick={() => setShowConversationInfo(true)} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Conversation options"><MoreVertical className="w-5 h-5" /></button>
         </header>
 
@@ -816,7 +843,29 @@ const Chats = () => {
           <Input placeholder="Type a message" value={newMessage} onChange={(event) => { setNewMessage(event.target.value); handleTyping(); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} className="flex-1 h-10 rounded-full bg-secondary border-0" />
           {newMessage.trim() ? <button onClick={() => void sendMessage()} className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground" aria-label="Send"><Send className="w-4 h-4" /></button> : <button onClick={() => { setShowVoiceRecorder((value) => !value); setShowEmojiPicker(false); }} className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground" aria-label="Voice message"><Mic className="w-4 h-4" /></button>}
         </div>
-        {callMode && <Suspense fallback={null}><CallModal roomId={activeRoom.id} mode={callMode} onClose={() => setCallMode(null)} /></Suspense>}
+        {CALLS_ENABLED && incomingCallInvite?.roomId === activeRoom.id && (
+          <Dialog open onOpenChange={(open) => { if (!open) clearCallInviteParams(); }}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader><DialogTitle>Incoming {incomingCallInvite.mode} call</DialogTitle></DialogHeader>
+              <p className="text-sm text-muted-foreground">{activeRoom.displayName} is calling you.</p>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={clearCallInviteParams}>Decline</Button>
+                <Button onClick={() => {
+                  const currentInvite = parseCallInviteQuery(roomId, searchParams);
+                  if (!currentInvite) {
+                    clearCallInviteParams();
+                    toast.error("This call invitation has expired");
+                    return;
+                  }
+                  setCallSessionId(currentInvite.sessionId);
+                  setCallMode(currentInvite.mode);
+                  clearCallInviteParams();
+                }}>Answer</Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
+        {callMode && <Suspense fallback={null}><CallModal roomId={activeRoom.id} mode={callMode} sessionId={callSessionId || undefined} onClose={() => { setCallMode(null); setCallSessionId(null); }} /></Suspense>}
         <Dialog open={showConversationInfo} onOpenChange={setShowConversationInfo}>
           <DialogContent className="max-w-sm"><DialogHeader><DialogTitle>Conversation details</DialogTitle></DialogHeader>
             <button onClick={() => { setShowConversationInfo(false); openMemberProfile(); }} disabled={activeRoom.is_group || !activeRoom.peerId} className="flex w-full items-center gap-3 rounded-xl py-2 text-left hover:bg-accent disabled:cursor-default disabled:hover:bg-transparent"><div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-primary/10">{activeRoom.displayAvatar ? <img src={activeRoom.displayAvatar} alt="" className="h-full w-full object-cover" /> : <span className="font-bold text-primary">{getInitials(activeRoom.displayName)}</span>}</div><div><p className="font-semibold">{activeRoom.displayName}</p><p className="text-xs text-muted-foreground">{activeRoom.is_group ? "System-managed group" : "View member profile"}</p></div></button>
@@ -835,13 +884,16 @@ const Chats = () => {
         <div className="px-4 pt-4 pb-0">
           <div className="flex items-center justify-between max-w-lg mx-auto mb-3">
             <div className="flex items-center gap-3"><button onClick={() => navigate(-1)} className="p-1 text-primary-foreground"><ArrowLeft className="w-5 h-5" /></button><h1 className="text-xl font-bold text-primary-foreground">Chats</h1></div>
-            <Dialog>
-              <DialogTrigger asChild><button className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center"><Plus className="w-5 h-5 text-primary-foreground" /></button></DialogTrigger>
-              <DialogContent className="max-w-sm"><DialogHeader><DialogTitle>New Conversation</DialogTitle></DialogHeader><div className="space-y-2 max-h-[50vh] overflow-y-auto">
-                <p className="text-xs text-muted-foreground pt-2 px-1 flex items-center gap-1"><Lock className="w-3 h-3" />Only your connections</p>
-                {friendProfiles.length ? friendProfiles.map((profile) => <button key={profile.user_id} onClick={() => void startDM(profile.user_id)} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-muted/50">{profile.avatar_url ? <img src={profile.avatar_url} className="w-9 h-9 rounded-full object-cover" alt="" /> : <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center"><span className="text-xs font-bold text-primary">{getInitials(profile.name)}</span></div>}<span className="text-sm font-medium">{profile.name || "User"}</span></button>) : <p className="text-xs text-muted-foreground text-center py-4">Connect with people to start messaging.</p>}
-              </div></DialogContent>
-            </Dialog>
+            <div className="flex items-center gap-1">
+              <NotificationBell />
+              <Dialog>
+                <DialogTrigger asChild><button className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center"><Plus className="w-5 h-5 text-primary-foreground" /></button></DialogTrigger>
+                <DialogContent className="max-w-sm"><DialogHeader><DialogTitle>New Conversation</DialogTitle></DialogHeader><div className="space-y-2 max-h-[50vh] overflow-y-auto">
+                  <p className="text-xs text-muted-foreground pt-2 px-1 flex items-center gap-1"><Lock className="w-3 h-3" />Only your connections</p>
+                  {friendProfiles.length ? friendProfiles.map((profile) => <button key={profile.user_id} onClick={() => void startDM(profile.user_id)} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-muted/50">{profile.avatar_url ? <img src={profile.avatar_url} className="w-9 h-9 rounded-full object-cover" alt="" /> : <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center"><span className="text-xs font-bold text-primary">{getInitials(profile.name)}</span></div>}<span className="text-sm font-medium">{profile.name || "User"}</span></button>) : <p className="text-xs text-muted-foreground text-center py-4">Connect with people to start messaging.</p>}
+                </div></DialogContent>
+              </Dialog>
+            </div>
           </div>
           <div className="max-w-lg mx-auto pb-3 relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-primary-foreground/50" /><input placeholder="Search conversations" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className="w-full h-9 pl-10 pr-4 rounded-lg bg-white/15 text-primary-foreground text-sm placeholder:text-primary-foreground/50 border-0 outline-none" /></div>
         </div>
@@ -849,7 +901,7 @@ const Chats = () => {
       </header>
 
       <main className="max-w-lg mx-auto">
-        {roomsLoading && !rooms.length ? <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div> : roomsError && !rooms.length ? <div className="text-center py-20 px-6"><p className="text-sm font-medium">Chat database setup is not complete.</p><p className="text-xs text-muted-foreground mt-2">Apply the included Supabase migration, then refresh.</p></div> : filteredRooms.length ? filteredRooms.map((room) => <button key={room.id} onClick={() => setActiveRoom(room)} className="w-full text-left flex items-center gap-3 px-4 py-3.5 border-b border-border/50 hover:bg-muted/30"><div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center overflow-hidden flex-shrink-0">{room.displayAvatar ? <img src={room.displayAvatar} className="w-full h-full object-cover" alt="" loading="lazy" decoding="async" /> : <span className="text-lg font-bold text-primary">{getInitials(room.displayName)}</span>}</div><div className="flex-1 min-w-0"><div className="flex items-center justify-between"><p className="font-semibold text-sm truncate">{room.displayName}</p><span className={`text-[11px] ${room.unreadCount ? "text-primary font-semibold" : "text-muted-foreground"}`}>{room.lastMessage ? formatDistanceToNow(new Date(room.lastMessage.created_at), { addSuffix: false }) : ""}</span></div><div className="flex items-center justify-between mt-0.5"><p className="text-xs text-muted-foreground truncate pr-2">{room.lastMessage?.message_type === "image" || room.lastMessage?.content?.startsWith("📷") ? "📷 Photo" : room.lastMessage?.content || "No messages yet"}</p>{room.unreadCount > 0 && <span className="min-w-[22px] h-[22px] rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center px-1.5">{room.unreadCount > 99 ? "99+" : room.unreadCount}</span>}</div></div></button>) : <div className="flex flex-col items-center justify-center py-20 text-center"><p className="text-muted-foreground text-sm">No conversations yet</p><p className="text-xs text-muted-foreground mt-1">Tap + to message a connection</p></div>}
+        {roomsLoading && !rooms.length ? <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div> : roomsError && !rooms.length ? <div className="text-center py-20 px-6"><p className="text-sm font-medium">Chat database setup is not complete.</p><p className="text-xs text-muted-foreground mt-2">Apply the committed Prisma migration, then refresh.</p></div> : filteredRooms.length ? filteredRooms.map((room) => <button key={room.id} onClick={() => setActiveRoom(room)} className="w-full text-left flex items-center gap-3 px-4 py-3.5 border-b border-border/50 hover:bg-muted/30"><div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center overflow-hidden flex-shrink-0">{room.displayAvatar ? <img src={room.displayAvatar} className="w-full h-full object-cover" alt="" loading="lazy" decoding="async" /> : <span className="text-lg font-bold text-primary">{getInitials(room.displayName)}</span>}</div><div className="flex-1 min-w-0"><div className="flex items-center justify-between"><p className="font-semibold text-sm truncate">{room.displayName}</p><span className={`text-[11px] ${room.unreadCount ? "text-primary font-semibold" : "text-muted-foreground"}`}>{room.lastMessage ? formatDistanceToNow(new Date(room.lastMessage.created_at), { addSuffix: false }) : ""}</span></div><div className="flex items-center justify-between mt-0.5"><p className="text-xs text-muted-foreground truncate pr-2">{room.lastMessage?.message_type === "image" || room.lastMessage?.content?.startsWith("📷") ? "📷 Photo" : room.lastMessage?.content || "No messages yet"}</p>{room.unreadCount > 0 && <span className="min-w-[22px] h-[22px] rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center px-1.5">{room.unreadCount > 99 ? "99+" : room.unreadCount}</span>}</div></div></button>) : <div className="flex flex-col items-center justify-center py-20 text-center"><p className="text-muted-foreground text-sm">No conversations yet</p><p className="text-xs text-muted-foreground mt-1">Tap + to message a connection</p></div>}
       </main>
     </div>
   );

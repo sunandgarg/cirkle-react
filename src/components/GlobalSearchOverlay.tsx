@@ -1,12 +1,15 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Search, X, Hash, User, Briefcase, Calendar, MessageSquare } from "lucide-react";
-import { Input } from "@/components/ui/input";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { Search, X, User, Briefcase, Calendar, MessageSquare, LoaderCircle } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
 
 interface SearchResult {
   id: string;
-  type: "post" | "user" | "job" | "event" | "forum";
+  type: "post" | "user" | "job" | "event";
   title: string;
   subtitle?: string;
+  scopeType?: string;
+  scopeKey?: string;
 }
 
 interface GlobalSearchOverlayProps {
@@ -20,7 +23,6 @@ const TYPE_ICONS: Record<string, any> = {
   user: User,
   job: Briefcase,
   event: Calendar,
-  forum: Hash,
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -28,23 +30,29 @@ const TYPE_LABELS: Record<string, string> = {
   user: "People",
   job: "Jobs",
   event: "Events",
-  forum: "Forums",
 };
 
 export const GlobalSearchOverlay = ({ open, onClose, onSelect }: GlobalSearchOverlayProps) => {
   const [query, setQuery] = useState("");
-  const [recentSearches] = useState<string[]>(() => {
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem("recent_searches") || "[]").slice(0, 10);
     } catch { return []; }
   });
   const inputRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (open) {
       setTimeout(() => inputRef.current?.focus(), 100);
     } else {
       setQuery("");
+      setResults([]);
+      setError(null);
     }
   }, [open]);
 
@@ -66,8 +74,87 @@ export const GlobalSearchOverlay = ({ open, onClose, onSelect }: GlobalSearchOve
       const recent = JSON.parse(localStorage.getItem("recent_searches") || "[]");
       const updated = [term, ...recent.filter((s: string) => s !== term)].slice(0, 10);
       localStorage.setItem("recent_searches", JSON.stringify(updated));
+      setRecentSearches(updated);
     } catch { /* ignore */ }
   }, []);
+
+  useEffect(() => {
+    const term = query.trim();
+    if (!open || term.length < 2) {
+      setResults([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setLoading(true);
+      setError(null);
+      const pattern = `%${term}%`;
+      try {
+        const [profiles, jobs, posts, events] = await Promise.all([
+          supabase.from("profiles").select("user_id, name, headline, avatar_url").or(`name.ilike.${pattern},headline.ilike.${pattern}`).limit(5),
+          supabase.from("jobs").select("id, title, company, location").or(`title.ilike.${pattern},company.ilike.${pattern}`).limit(5),
+          supabase.from("posts").select("id, content, scope_type, scope_key").is("reply_to_id", null).ilike("content", pattern).limit(5),
+          supabase.from("events").select("id, title, location, start_time").ilike("title", pattern).limit(5),
+        ]);
+        if (controller.signal.aborted) return;
+        const firstError = profiles.error || jobs.error || posts.error || events.error;
+        if (firstError) throw firstError;
+        setResults([
+          ...(profiles.data ?? []).map((item: any) => ({ id: item.user_id, type: "user" as const, title: item.name || "Member", subtitle: item.headline || "Community member" })),
+          ...(jobs.data ?? []).map((item: any) => ({ id: item.id, type: "job" as const, title: item.title || "Job", subtitle: [item.company, item.location].filter(Boolean).join(" · ") })),
+          ...(posts.data ?? []).map((item: any) => ({
+            id: item.id,
+            type: "post" as const,
+            title: String(item.content || "Post").slice(0, 90),
+            subtitle: "Forum post",
+            scopeType: item.scope_type,
+            scopeKey: item.scope_key,
+          })),
+          ...(events.data ?? []).map((item: any) => ({ id: item.id, type: "event" as const, title: item.title || "Event", subtitle: item.location || "Community event" })),
+        ]);
+        setActiveIndex(0);
+      } catch (searchError) {
+        if (controller.signal.aborted) return;
+        setResults([]);
+        setError(searchError instanceof Error ? searchError.message : "Search is temporarily unavailable");
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [open, query]);
+
+  const selectResult = useCallback((result: SearchResult) => {
+    saveSearch(query.trim());
+    onSelect?.(result);
+    onClose();
+    if (onSelect) return;
+    if (result.type === "user") navigate(`/profile/${result.id}`);
+    else if (result.type === "job") navigate(`/jobs?job=${encodeURIComponent(result.id)}`);
+    else if (result.type === "event") navigate(`/calendar?event=${encodeURIComponent(result.id)}`);
+    else {
+      const params = new URLSearchParams({ post: result.id });
+      if (result.scopeType) params.set("scope_type", result.scopeType);
+      if (result.scopeKey) params.set("scope_key", result.scopeKey);
+      navigate(`/cirkle-forum?${params.toString()}`);
+    }
+  }, [navigate, onClose, onSelect, query, saveSearch]);
+
+  const groupedResults = useMemo(() => {
+    return Object.entries(
+      results.reduce<Record<string, SearchResult[]>>((groups, result) => {
+        (groups[result.type] ||= []).push(result);
+        return groups;
+      }, {}),
+    );
+  }, [results]);
 
   if (!open) return null;
 
@@ -86,9 +173,16 @@ export const GlobalSearchOverlay = ({ open, onClose, onSelect }: GlobalSearchOve
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && query.trim()) {
-                saveSearch(query.trim());
-              }
+              if (e.key === "ArrowDown" && results.length) {
+                e.preventDefault();
+                setActiveIndex((index) => (index + 1) % results.length);
+              } else if (e.key === "ArrowUp" && results.length) {
+                e.preventDefault();
+                setActiveIndex((index) => (index - 1 + results.length) % results.length);
+              } else if (e.key === "Enter" && results[activeIndex]) {
+                e.preventDefault();
+                selectResult(results[activeIndex]);
+              } else if (e.key === "Enter" && query.trim()) saveSearch(query.trim());
             }}
             placeholder="Search posts, people, jobs, events…"
             className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
@@ -126,11 +220,40 @@ export const GlobalSearchOverlay = ({ open, onClose, onSelect }: GlobalSearchOve
                 </p>
               )}
             </div>
+          ) : loading ? (
+            <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground" aria-live="polite">
+              <LoaderCircle className="h-4 w-4 animate-spin" /> Searching…
+            </div>
+          ) : error ? (
+            <p className="px-4 py-10 text-center text-sm text-destructive" role="alert">{error}</p>
+          ) : results.length === 0 ? (
+            <p className="px-4 py-10 text-center text-sm text-muted-foreground">No matching people, posts, jobs, or events.</p>
           ) : (
-            <div className="p-4">
-              <p className="text-sm text-muted-foreground text-center py-8">
-                Search results for "{query}" - coming soon
-              </p>
+            <div className="p-2">
+              {groupedResults.map(([type, items]) => (
+                <section key={type} className="mb-2 last:mb-0" aria-label={TYPE_LABELS[type]}>
+                  <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{TYPE_LABELS[type]}</p>
+                  {items.map((result) => {
+                    const Icon = TYPE_ICONS[result.type];
+                    const resultIndex = results.indexOf(result);
+                    return (
+                      <button
+                        key={`${result.type}-${result.id}`}
+                        type="button"
+                        onMouseEnter={() => setActiveIndex(resultIndex)}
+                        onClick={() => selectResult(result)}
+                        className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors ${activeIndex === resultIndex ? "bg-accent" : "hover:bg-accent/70"}`}
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><Icon className="h-4 w-4" /></span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-foreground">{result.title}</span>
+                          {result.subtitle && <span className="block truncate text-xs text-muted-foreground">{result.subtitle}</span>}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </section>
+              ))}
             </div>
           )}
         </div>

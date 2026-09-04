@@ -24,6 +24,7 @@ import { getForumBroadcastRow } from "@/lib/forumRealtime";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { appSyncRealtimeEnabled, subscribeAppSync } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
+import { safeHttpUrl } from "@/lib/safeUrl";
 
 const THREAD_PAGE_SIZE = 50;
 
@@ -355,6 +356,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
   const parentProfile = parentPost.profile;
   const parentIsMine = parentPost.viewer_is_author === true || parentPost.author_id === user?.id;
   const parentName = parentPost.is_anonymous ? (parentIsMine ? "You · Anonymous" : "Anonymous") : parentProfile?.name || "User";
+  const parentImageUrl = safeHttpUrl(parentPost.image_url);
 
   return (
     <div className="flex flex-col h-full border-l border-border bg-card animate-fade-in">
@@ -385,8 +387,8 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
             <p className="text-sm text-foreground whitespace-pre-wrap mt-0.5">
               {renderFormattedMessage(parentPost.content, profileMap, navigate)}
             </p>
-            {parentPost.image_url && (
-              <img src={parentPost.image_url} className="mt-2 rounded-lg max-h-32 object-cover" alt="" />
+            {parentImageUrl && (
+              <img src={parentImageUrl} className="mt-2 rounded-lg max-h-32 object-cover" alt="" />
             )}
             <p className="text-[10px] text-muted-foreground mt-1">{format(new Date(parentPost.created_at), "h:mm a")}</p>
             <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold text-primary"><LocateFixed className="w-3 h-3" /> View in chat</span>

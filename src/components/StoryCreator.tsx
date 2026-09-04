@@ -34,7 +34,7 @@ const StoryCreator = ({ onClose }: StoryCreatorProps) => {
     if (!user) return;
     setLoading(true);
     try {
-      let imageUrl: string | null = null;
+      let imagePath: string | null = null;
 
       if (imageFile) {
         const optimized = await convertToWebP(imageFile, 0.78, 1600);
@@ -43,14 +43,14 @@ const StoryCreator = ({ onClose }: StoryCreatorProps) => {
           .from("stories")
           .upload(path, optimized, { contentType: "image/webp", cacheControl: "31536000" });
         if (uploadError) throw uploadError;
-        const { data: urlData } = supabase.storage.from("stories").getPublicUrl(path);
-        imageUrl = urlData.publicUrl;
+        imagePath = path;
       }
 
       const { error } = await supabase.from("stories").insert({
         user_id: user.id,
         content: text || null,
-        image_url: imageUrl,
+        image_url: null,
+        image_path: imagePath,
       });
       if (error) throw error;
 

@@ -30,4 +30,10 @@ describe("forum image lightbox", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("does not render an executable media URL", () => {
+    const { container } = render(<ImageLightbox src="javascript:alert(1)" onClose={() => undefined} />);
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
 });

@@ -16,8 +16,6 @@ const Landing = lazy(() => import("@/pages/Landing"));
 const Auth = lazy(() => import("@/pages/Auth"));
 const Legal = lazy(() => import("@/pages/Legal"));
 const ResetPassword = lazy(() => import("@/pages/ResetPassword"));
-const OtpVerification = lazy(() => import("@/pages/OtpVerification"));
-const PhoneVerification = lazy(() => import("@/pages/PhoneVerification"));
 const IitVerification = lazy(() => import("@/pages/IitVerification"));
 const Forum = lazy(() => import("@/pages/Forum"));
 const CalendarPage = lazy(() => import("@/pages/CalendarPage"));
@@ -85,8 +83,9 @@ const App = () => (
                 <Route path="/privacy" element={<Legal />} />
                 <Route path="/terms" element={<Legal />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
-                <Route path="/otp-verify" element={<OtpVerification />} />
-                <Route path="/phone-verify" element={<PhoneVerification />} />
+                {/* Legacy phone-OTP links return to the supported Google/email sign-in flow. */}
+                <Route path="/otp-verify" element={<Navigate to="/auth" replace />} />
+                <Route path="/phone-verify" element={<Navigate to="/auth" replace />} />
                 <Route path="/iit-verify" element={<IitVerification />} />
 
                 {/* App routes with layout - Forum is the primary product */}
@@ -124,9 +123,9 @@ const App = () => (
                 </Route>
 
                 {/* Profile routes */}
-                <Route path="/u/:slug" element={<Suspense fallback={<PageLoader />}><Profile /></Suspense>} />
+                <Route path="/u/:slug" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><Profile /></Suspense></ProtectedRoute>} />
                 <Route path="/profile" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><Profile /></Suspense></ProtectedRoute>} />
-                <Route path="/profile/:userId" element={<Suspense fallback={<PageLoader />}><Profile /></Suspense>} />
+                <Route path="/profile/:userId" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><Profile /></Suspense></ProtectedRoute>} />
 
                 {/* Utility routes */}
                 <Route path="/chats" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><Chats /></Suspense></ProtectedRoute>} />

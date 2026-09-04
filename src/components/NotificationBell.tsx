@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import { reportError } from "@/lib/errorTelemetry";
+import { getCallInvitePath, parseCallInviteNotification } from "@/lib/callInvites";
 
 const NotificationBell = () => {
   const { user } = useAuth();
@@ -71,17 +72,22 @@ const NotificationBell = () => {
             <button onClick={() => setOpen(false)} className="text-muted-foreground"><X className="w-4 h-4" /></button>
           </div>
           <div className="overflow-y-auto max-h-80">
-            {notifications?.length ? notifications.map((n: any) => (
-              <div key={n.id} className={`px-4 py-3 border-b border-border last:border-0 ${!n.is_read ? "bg-primary/5" : ""}`}>
-                <p className="text-sm font-medium text-foreground">{n.title}</p>
-                {n.message && <p className="text-xs text-muted-foreground mt-0.5">{n.message}</p>}
-                <div className="mt-1 flex items-center justify-between gap-2">
-                  <p className="text-[10px] text-muted-foreground">{formatDistanceToNow(new Date(n.created_at), { addSuffix: true })}</p>
-                  {n.type === "connection_request" && <button className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-bold text-primary hover:bg-primary/15" onClick={() => { setOpen(false); navigate("/network?tab=pending"); }}>Review request</button>}
-                  {n.type === "connection_response" && <button className="rounded-full bg-secondary px-2.5 py-1 text-[10px] font-bold text-foreground hover:bg-accent" onClick={() => { setOpen(false); navigate("/network?tab=connected"); }}>View network</button>}
+            {notifications?.length ? notifications.map((n: any) => {
+              const callInvite = parseCallInviteNotification(n);
+              return (
+                <div key={n.id} className={`px-4 py-3 border-b border-border last:border-0 ${!n.is_read ? "bg-primary/5" : ""}`}>
+                  <p className="text-sm font-medium text-foreground">{n.title}</p>
+                  {n.message && <p className="text-xs text-muted-foreground mt-0.5">{n.message}</p>}
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <p className="text-[10px] text-muted-foreground">{formatDistanceToNow(new Date(n.created_at), { addSuffix: true })}</p>
+                    {n.type === "connection_request" && <button className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-bold text-primary hover:bg-primary/15" onClick={() => { setOpen(false); navigate("/network?tab=pending"); }}>Review request</button>}
+                    {n.type === "connection_response" && <button className="rounded-full bg-secondary px-2.5 py-1 text-[10px] font-bold text-foreground hover:bg-accent" onClick={() => { setOpen(false); navigate("/network?tab=connected"); }}>View network</button>}
+                    {callInvite && <button className="rounded-full bg-primary px-2.5 py-1 text-[10px] font-bold text-primary-foreground hover:bg-primary/90" onClick={() => { setOpen(false); navigate(getCallInvitePath(callInvite)); }}>Join call</button>}
+                    {n.type === "call_invite" && !callInvite && <span className="text-[10px] font-medium text-muted-foreground">Call ended</span>}
+                  </div>
                 </div>
-              </div>
-            )) : (
+              );
+            }) : (
               <div className="py-8 text-center"><p className="text-sm text-muted-foreground">No notifications yet</p></div>
             )}
           </div>

@@ -1,18 +1,30 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import EmptyState from "@/components/EmptyState";
 import { reportError } from "@/lib/errorTelemetry";
-import { Users, Search, BadgeCheck, MessageSquare, UserPlus, ShieldCheck, Inbox, Send, X } from "lucide-react";
+import { Users, Search, BadgeCheck, MessageSquare, UserPlus, ShieldCheck, Inbox, Send, X, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { resolveConnectionState, type ConnectionRow } from "@/lib/connections";
 import { requestRealtimeDispatch } from "@/lib/appsyncEvents";
+import {
+  collectNetworkMemberPages,
+  memberMatchesNetworkSearch,
+  NETWORK_MEMBER_PAGE_SIZE,
+  NETWORK_SEARCH_PAGE_SIZE,
+  pageCount,
+  resolveNetworkTab,
+  type NetworkMember,
+} from "@/lib/networkDiscovery";
+
+const NETWORK_MEMBER_COLUMNS = "user_id,name,slug,avatar_url,headline,location,iit_name,student_status,is_verified,skills,expertise";
+const NETWORK_CONNECTION_COLUMNS = "id,requester_id,receiver_id,status,note,responded_at,created_at,updated_at";
 
 const getInitials = (name?: string | null): string => {
   if (!name) return "?";
@@ -21,19 +33,21 @@ const getInitials = (name?: string | null): string => {
   return parts[0][0].toUpperCase();
 };
 
-type TabType = "explore" | "discover" | "pending" | "connected";
-
 const Network = () => {
   const { user, profile, isVerified } = useAuth();
   const [search, setSearch] = useState("");
   const [invitee, setInvitee] = useState<any>(null);
   const [inviteNote, setInviteNote] = useState("");
+  const [memberPage, setMemberPage] = useState(0);
+  const [filterByIit, setFilterByIit] = useState(false);
+  const [filterByYear, setFilterByYear] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = (searchParams.get("tab") as TabType) || "explore";
+  const location = useLocation();
+  const activeTab = resolveNetworkTab(location.pathname, searchParams.get("tab"));
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
-  const setActiveTab = (tab: TabType) => {
+  const setActiveTab = (tab: ReturnType<typeof resolveNetworkTab>) => {
     setSearchParams({ tab });
   };
 
@@ -41,30 +55,70 @@ const Network = () => {
   const userStudentStatus = profile?.student_status || "";
   const userYear = userStudentStatus.match(/\d{4}/)?.[0] || "";
 
-  const { data: members } = useQuery({
-    queryKey: ["members"],
+  const selectedIit = filterByIit ? userIit : "";
+  const selectedYear = filterByYear ? userYear : "";
+  const fetchMemberPage = useCallback(async (from: number, to: number) => {
+    let query = supabase.from("profiles")
+      .select(NETWORK_MEMBER_COLUMNS, { count: "exact" })
+      .neq("user_id", user?.id || "");
+    if (selectedIit) query = query.eq("iit_name", selectedIit);
+    if (selectedYear) query = query.ilike("student_status", `%${selectedYear}%`);
+    const { data, error, count } = await query.order("user_id", { ascending: true }).range(from, to);
+    if (error) throw error;
+    return { rows: (data ?? []) as NetworkMember[], count };
+  }, [selectedIit, selectedYear, user?.id]);
+
+  const { data: memberPageResult, isLoading: membersLoading, isFetching: membersFetching, error: membersError, refetch: refetchMembers } = useQuery({
+    queryKey: ["network-members-page", user?.id, selectedIit, selectedYear, memberPage],
     queryFn: async () => {
-      const { data } = await supabase.from("profiles").select("*").neq("user_id", user?.id || "").limit(200);
-      return data ?? [];
+      return fetchMemberPage(memberPage * NETWORK_MEMBER_PAGE_SIZE, (memberPage + 1) * NETWORK_MEMBER_PAGE_SIZE - 1);
     },
     enabled: !!user && isVerified,
-    staleTime: Infinity,
+    staleTime: 60_000,
+  });
+  const members = useMemo(() => memberPageResult?.rows ?? [], [memberPageResult?.rows]);
+  const memberTotal = memberPageResult?.count ?? members.length;
+
+  const hasSearch = search.trim().length > 0;
+  const { data: searchCorpus = [], isLoading: searchLoading, error: searchError, refetch: refetchSearch } = useQuery({
+    queryKey: ["network-member-search-corpus", user?.id, selectedIit, selectedYear],
+    queryFn: () => collectNetworkMemberPages(fetchMemberPage, NETWORK_SEARCH_PAGE_SIZE),
+    enabled: !!user && isVerified && hasSearch,
+    staleTime: 5 * 60_000,
   });
 
   const { data: connections } = useQuery({
-    queryKey: ["connections"],
+    queryKey: ["connections", user?.id],
     queryFn: async () => {
       if (!user) return [];
-      const { data } = await supabase.from("connections").select("*").or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`);
-      return data ?? [];
+      const rows: ConnectionRow[] = [];
+      let from = 0;
+      let count: number | null = null;
+      do {
+        const { data, error, count: pageCount } = await supabase.from("connections")
+          .select(NETWORK_CONNECTION_COLUMNS, { count: "exact" })
+          .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
+          .order("id", { ascending: true })
+          .range(from, from + NETWORK_SEARCH_PAGE_SIZE - 1);
+        if (error) throw error;
+        const page = (data ?? []) as ConnectionRow[];
+        rows.push(...page);
+        if (count === null && typeof pageCount === "number") count = pageCount;
+        if (page.length < NETWORK_SEARCH_PAGE_SIZE) break;
+        from += NETWORK_SEARCH_PAGE_SIZE;
+      } while (count === null || from < count);
+      return rows;
     },
     enabled: !!user && isVerified,
     staleTime: Infinity,
   });
 
-  const connectionPeerIds = useMemo(() => [...new Set((connections ?? []).map((connection: any) =>
-    connection.requester_id === user?.id ? connection.receiver_id : connection.requester_id
-  ).filter(Boolean))], [connections, user?.id]);
+  const connectionPeerIds = useMemo<string[]>(() => {
+    const rows = (connections ?? []) as Array<{ requester_id?: string; receiver_id?: string }>;
+    const ids = rows.map((connection) => connection.requester_id === user?.id ? connection.receiver_id : connection.requester_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    return [...new Set<string>(ids)];
+  }, [connections, user?.id]);
 
   // Discovery is intentionally bounded, but connection requests must never
   // disappear merely because the other member falls outside that first page.
@@ -73,7 +127,7 @@ const Network = () => {
     queryFn: async () => {
       const chunks: string[][] = [];
       for (let index = 0; index < connectionPeerIds.length; index += 100) chunks.push(connectionPeerIds.slice(index, index + 100));
-      const responses = await Promise.all(chunks.map((ids) => supabase.from("profiles").select("*").in("user_id", ids)));
+      const responses = await Promise.all(chunks.map((ids) => supabase.from("profiles").select(NETWORK_MEMBER_COLUMNS).in("user_id", ids)));
       const failed = responses.find((response) => response.error);
       if (failed?.error) throw failed.error;
       return responses.flatMap((response) => response.data ?? []);
@@ -82,7 +136,7 @@ const Network = () => {
     staleTime: 60_000,
   });
 
-  const networkMembers = useMemo(() => {
+  const networkMembers = useMemo<NetworkMember[]>(() => {
     const merged = new Map<string, any>();
     for (const member of [...(members ?? []), ...connectionMembers]) merged.set(member.user_id, member);
     return [...merged.values()];
@@ -204,8 +258,8 @@ const Network = () => {
 
   const discoverMembers = useMemo(() => {
     if (!members) return [];
-    return shuffled(members.filter((m: any) => getConnectionStatus(m.user_id) === "none"));
-  }, [members, getConnectionStatus]);
+    return shuffled(members);
+  }, [members]);
 
   const pendingMembers = useMemo(() => {
     if (!connections) return [];
@@ -229,13 +283,21 @@ const Network = () => {
     [getConnectionStatus, pendingMembers],
   );
 
-  const filteredMembers = useMemo(() => {
-    if (!search) return null;
-    const q = search.toLowerCase();
-    return networkMembers.filter((m: any) =>
-      m.name?.toLowerCase().includes(q) || m.headline?.toLowerCase().includes(q) || m.iit_name?.toLowerCase().includes(q)
-    );
-  }, [networkMembers, search]);
+  const filteredMembers = useMemo(() => hasSearch
+    ? searchCorpus.filter((member) => memberMatchesNetworkSearch(member, search))
+    : null, [hasSearch, search, searchCorpus]);
+  const searchPageMembers = filteredMembers?.slice(
+    memberPage * NETWORK_MEMBER_PAGE_SIZE,
+    (memberPage + 1) * NETWORK_MEMBER_PAGE_SIZE,
+  ) ?? null;
+
+  const activateDiscoveryFilters = (iit: boolean, year: boolean) => {
+    setSearch("");
+    setFilterByIit(iit);
+    setFilterByYear(year);
+    setMemberPage(0);
+    setActiveTab("discover");
+  };
 
   // Gate behind auth/verification AFTER all hooks
   if (!user) return <EmptyState icon={Users} title="Sign in to network" description="Connect with community members." />;
@@ -257,7 +319,7 @@ const Network = () => {
     );
   }
 
-  const tabs: { key: TabType; label: string }[] = [
+  const tabs: { key: ReturnType<typeof resolveNetworkTab>; label: string }[] = [
     { key: "explore", label: "Explore" },
     { key: "discover", label: "Discover" },
     { key: "pending", label: "Pending" },
@@ -274,13 +336,21 @@ const Network = () => {
 
         <div className="relative">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input placeholder="Search by name, skill, or location..." value={search} onChange={(e) => setSearch(e.target.value)}
+          <Input aria-label="Search members" placeholder="Search name, headline, IIT, location, or skill..." value={search} onChange={(e) => { setSearch(e.target.value); setMemberPage(0); }}
             className="pl-10 h-11 rounded-full bg-card border-border text-foreground placeholder:text-muted-foreground" />
         </div>
 
+        {(activeTab === "explore" || activeTab === "discover" || hasSearch) && (userIit || userYear) && (
+          <div className="flex flex-wrap items-center gap-2" aria-label="Member filters">
+            {userIit && <button type="button" aria-pressed={filterByIit} onClick={() => { setFilterByIit((value) => !value); setMemberPage(0); }} className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors ${filterByIit ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:bg-accent"}`}>{userIit}</button>}
+            {userYear && <button type="button" aria-pressed={filterByYear} onClick={() => { setFilterByYear((value) => !value); setMemberPage(0); }} className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors ${filterByYear ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:bg-accent"}`}>Class of {userYear}</button>}
+            {(filterByIit || filterByYear) && <button type="button" onClick={() => { setFilterByIit(false); setFilterByYear(false); setMemberPage(0); }} className="px-2 py-1 text-[11px] font-semibold text-primary hover:underline">Clear filters</button>}
+          </div>
+        )}
+
         <div className="flex gap-2">
           {tabs.map((t) => (
-            <button key={t.key} onClick={() => setActiveTab(t.key)}
+            <button key={t.key} onClick={() => { setSearch(""); setMemberPage(0); setActiveTab(t.key); }}
               className={`text-xs font-semibold px-4 py-2 rounded-full transition-all ${activeTab === t.key ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground bg-secondary hover:bg-accent"}`}>
               {t.label}
               {t.key === "pending" && receivedMembers.length > 0 && (
@@ -290,12 +360,21 @@ const Network = () => {
           ))}
         </div>
 
-        {filteredMembers ? (
+        {hasSearch && searchLoading ? (
+          <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Searching all members…</div>
+        ) : hasSearch && searchError ? (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-6 text-center"><p className="text-sm font-semibold text-foreground">Could not search members</p><Button variant="outline" size="sm" className="mt-3" onClick={() => void refetchSearch()}>Try again</Button></div>
+        ) : filteredMembers ? (
           <div className="space-y-2">
-            {filteredMembers.length ? filteredMembers.map((m: any) => (
+            {searchPageMembers?.length ? searchPageMembers.map((m: any) => (
               <PersonRow key={m.user_id} m={m} status={getConnectionStatus(m.user_id)} connection={getConnection(m.user_id)} onConnect={() => openInvite(m)} onRespond={respondRequest.mutate} onWithdraw={withdrawRequest.mutate} navigate={navigate} />
             )) : <EmptyState icon={Users} title="No members found" />}
+            <MemberPagination page={memberPage} total={filteredMembers.length} onChange={setMemberPage} />
           </div>
+        ) : membersError && (activeTab === "explore" || activeTab === "discover") ? (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-6 text-center"><p className="text-sm font-semibold text-foreground">Could not load members</p><Button variant="outline" size="sm" className="mt-3" onClick={() => void refetchMembers()}>Try again</Button></div>
+        ) : membersLoading && (activeTab === "explore" || activeTab === "discover") ? (
+          <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading members…</div>
         ) : (
           <>
             {activeTab === "explore" && (
@@ -304,27 +383,28 @@ const Network = () => {
                   <h3 className="font-bold text-sm text-foreground mb-2">🔥 Trending</h3>
                   <div className="flex gap-2 flex-wrap mb-4">
                     {["Tech Leaders", "Startup Founders", "AI/ML", "Product Managers", "Finance"].map((tag) => (
-                      <button key={tag} onClick={() => setSearch(tag)} className="text-[10px] font-semibold px-3 py-1.5 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors">{tag}</button>
+                      <button key={tag} onClick={() => { setSearch(tag); setMemberPage(0); }} className="text-[10px] font-semibold px-3 py-1.5 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors">{tag}</button>
                     ))}
                   </div>
                 </div>
                 {userIit && userYear && (
                   <PeopleSection title={`Same Cohort ${userYear}`} subtitle={`${userIit} · ${userStudentStatus}`} members={cohortMembers}
-                    onViewAll={() => { setActiveTab("discover"); setSearch(`${userIit} ${userYear}`); }} onConnect={openInvite} navigate={navigate} getConnectionStatus={getConnectionStatus} />
+                    onViewAll={() => activateDiscoveryFilters(true, true)} onConnect={openInvite} navigate={navigate} getConnectionStatus={getConnectionStatus} />
                 )}
                 {userIit && (
                   <PeopleSection title={userIit} subtitle="All students & alumni" members={campusMembers}
-                    onViewAll={() => { setActiveTab("discover"); setSearch(userIit); }} onConnect={openInvite} navigate={navigate} getConnectionStatus={getConnectionStatus} />
+                    onViewAll={() => activateDiscoveryFilters(true, false)} onConnect={openInvite} navigate={navigate} getConnectionStatus={getConnectionStatus} />
                 )}
                 <PeopleSection title="Global" subtitle="All community members" members={globalMembers}
-                  onViewAll={() => setActiveTab("discover")} onConnect={openInvite} navigate={navigate} getConnectionStatus={getConnectionStatus} />
+                  onViewAll={() => activateDiscoveryFilters(false, false)} onConnect={openInvite} navigate={navigate} getConnectionStatus={getConnectionStatus} />
               </div>
             )}
             {activeTab === "discover" && (
               <div className="space-y-2">
                 {discoverMembers.length ? discoverMembers.map((m: any) => (
-                  <PersonRow key={m.user_id} m={m} status="none" onConnect={() => openInvite(m)} onRespond={respondRequest.mutate} onWithdraw={withdrawRequest.mutate} navigate={navigate} />
-                )) : <p className="text-sm text-muted-foreground text-center py-8">No new people to discover</p>}
+                  <PersonRow key={m.user_id} m={m} status={getConnectionStatus(m.user_id)} connection={getConnection(m.user_id)} onConnect={() => openInvite(m)} onRespond={respondRequest.mutate} onWithdraw={withdrawRequest.mutate} navigate={navigate} />
+                )) : <p className="text-sm text-muted-foreground text-center py-8">No people on this page</p>}
+                <MemberPagination page={memberPage} total={memberTotal} onChange={setMemberPage} loading={membersFetching} />
               </div>
             )}
             {activeTab === "pending" && (
@@ -380,6 +460,18 @@ const RequestSection = ({ icon: Icon, title, subtitle, empty, children }: any) =
       </div>
       <div className="space-y-2">{hasItems ? children : <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">{empty}</p>}</div>
     </section>
+  );
+};
+
+const MemberPagination = ({ page, total, onChange, loading = false }: { page: number; total: number; onChange: (page: number) => void; loading?: boolean }) => {
+  const totalPages = pageCount(total);
+  if (totalPages <= 1) return null;
+  return (
+    <nav aria-label="Member result pages" className="flex items-center justify-between gap-3 pt-3">
+      <Button type="button" variant="outline" size="sm" disabled={loading || page <= 0} onClick={() => onChange(Math.max(0, page - 1))}>Previous</Button>
+      <span className="text-xs text-muted-foreground">Page {page + 1} of {totalPages}</span>
+      <Button type="button" variant="outline" size="sm" disabled={loading || page + 1 >= totalPages} onClick={() => onChange(Math.min(totalPages - 1, page + 1))}>Next</Button>
+    </nav>
   );
 };
 

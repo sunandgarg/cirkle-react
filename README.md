@@ -1,144 +1,157 @@
 # Cirkle
 
-Project: Cirkle.world (mobile-first community networking web app)
+Cirkle is a mobile-first, invite-only community network with scoped forums,
+member discovery, jobs, events, mentoring, direct chat, moderation, and admin
+workflows.
 
-Outcome:
-Build a functioning, production-lean MVP similar to LinkedIn but scoped to a single community. Core modules: Open Forum (with optional anonymous posting), member networking (search + connect), community jobs board, and events calendar. Must be mobile-first with a bottom tab bar.
+## Stack
 
-Tech stack requirements:
-- Frontend: React + TypeScript
-- Styling/UI: Tailwind + shadcn/ui components (mobile-first, accessible)
-- Backend: Supabase (Auth, Postgres, Row Level Security)
-- No paid integrations; keep it simple and fully working end-to-end.
+- Frontend: React 18, TypeScript, Vite, Tailwind CSS, shadcn/Radix
+- API: Node.js, TypeScript, Express
+- Database: MySQL with Prisma ORM
+- Authentication: short-lived JWT access tokens, rotating refresh sessions,
+  Google OpenID Connect, email OTP, and password recovery
+- Transactional email: Zoho ZeptoMail
+- AI: OpenAI Responses API and the Google Gemini API
+- Realtime: Socket.IO
+- Frontend hosting: Cloudflare Pages
+- API hosting: Nginx and PM2
 
-Global UX/UI:
-- Mobile-first layout. Bottom navigation with 5 tabs:
-  1) Forum
-  2) Home
-  3) Calendar
-  4) My Network
-  5) Jobs
-- Clean, modern card-based UI, large tap targets, sticky bottom nav, safe-area padding.
-- Use skeleton loaders for lists, empty states, and clear error toasts.
+The React pages, components, routes, and styling are intentionally preserved.
+`src/integrations/supabase/client.ts` is now only a compatibility export for the
+new Cirkle API client; it does not initialize or contact Supabase. This keeps the
+large existing UI stable while the data/security boundary lives in Node.
 
-Auth + access:
-- Allow anyone to view Landing page and read public parts (optional).
-- Require login for: posting, commenting, connecting, applying for jobs, RSVPing.
-- Supabase Auth (email/password). Add Google later only if easy.
-- Roles: user, moderator, admin (store in profiles.role).
-- Community scope: MVP supports one community_id (string), but design schema to support multiple communities later.
+The former PostgreSQL migrations and Edge Functions remain under `supabase/` as
+a read-only migration reference. They are not part of the running application.
 
-ROUTES / PAGES (must implement):
-1) / (Landing)
-   - App pitch + CTA: “Join community”
-   - Login / Signup links
+## Local development
 
-2) /forum (Tab: Forum)
-   - List of posts (newest first), filter: “All” and “Anonymous only”
-   - Composer:
-     - Textarea “What do you want to share?”
-     - Checkbox “Post as Anonymous”
-     - Post button
-   - Post card shows:
-     - Author display name OR “Anonymous”
-     - Timestamp
-     - Content
-     - Actions: Like, Comment, Share (share can be a simple copy link)
-     - Report button
-   - Comments (basic threaded not required; flat list ok)
-   - IMPORTANT: If is_anonymous=true, UI must never reveal author profile.
-   - Moderation: moderators/admin can delete any post/comment; users can delete their own.
+Requirements:
 
-3) /home (Tab: Home)
-   - Personalized feed mixing:
-     - Recent forum posts
-     - Upcoming events
-     - New jobs
-   - Simple “For you” ordering: newest + items related to skills (optional; can be v1)
-
-4) /calendar (Tab: Calendar)
-   - Month view OR agenda list (mobile friendly)
-   - Events list with RSVP toggle: Going / Not going
-   - Create event (admin/moderator only):
-     - title, description, start/end datetime, location (text), visibility (community)
-   - Event detail page or drawer
-
-5) /network (Tab: My Network)
-   - Search members by name/skill/location
-   - Member profile preview cards + “Connect” button
-   - Connection requests:
-     - Pending received: Accept / Decline
-     - Pending sent: Cancel
-   - Connections list
-
-6) /jobs (Tab: Jobs)
-   - Jobs list with filters: location (Delhi/Remote/etc), job type, experience (text ok)
-   - Job detail page with Apply flow
-   - Post a job (admin/moderator by default; later allow verified employers)
-   - Apply: store application record + optional cover note + link to resume (URL)
-
-7) /profile
-   - View/edit own profile: name, headline, bio, location, skills tags
-   - View other member profiles with Connect/Message placeholder (messaging can be v2)
-
-DATABASE (Supabase tables to create):
-- profiles: user_id (pk, references auth.users), name, headline, bio, location, skills (text[]), avatar_url, role (user/moderator/admin), community_id, created_at
-- posts: id uuid pk, community_id, author_id (fk), is_anonymous boolean, content text, created_at
-- comments: id uuid pk, post_id fk, author_id fk, content, created_at
-- reactions: id uuid pk, entity_type (post/comment), entity_id, user_id, created_at (unique on entity + user)
-- reports: id uuid pk, entity_type, entity_id, reporter_id, reason, created_at
-- connections: id uuid pk, community_id, requester_id, receiver_id, status (pending/accepted/declined), created_at (unique pair)
-- jobs: id uuid pk, community_id, created_by, title, company, location, job_type, experience, description, created_at
-- applications: id uuid pk, job_id fk, applicant_id fk, note, resume_url, created_at (unique job + applicant)
-- events: id uuid pk, community_id, created_by, title, description, start_time, end_time, location, created_at
-- rsvps: id uuid pk, event_id fk, user_id fk, status (going/not_going), created_at (unique event + user)
-
-SECURITY (RLS requirements):
-- profiles: users can read profiles in same community; user can update only their own profile; admins/moderators can read all and manage roles.
-- posts/comments: anyone logged-in in community can read; only author can edit/delete their own; moderators/admin can delete any.
-- Anonymous handling:
-  - posts.author_id is always stored.
-  - UI must hide identity when is_anonymous=true.
-  - Only moderators/admin can see author in moderation screens (create a simple /admin/moderation page).
-
-IMPLEMENTATION ORDER:
-- First generate UI pages + routing + components (mobile-first).
-- Then connect Supabase Auth + database + RLS.
-- Then wire CRUD for posts/comments, connections, jobs, events.
-- Add moderation + reporting last.
-
-Acceptance tests (must pass):
-- A logged-in user can create a named post and it shows their name.
-- A logged-in user can create an anonymous post and it shows “Anonymous” everywhere in UI.
-- A moderator can delete reported posts and (in moderation view) see the real author_id.
-- A user can search members and send a connection request; receiver can accept.
-- A user can view jobs and apply once; application record is created.
-
-Build this as a working MVP with clean code structure and reusable components.
-
-## Development
-
-Prefer working locally? You need Node.js 22 and pnpm 11.
+- Node.js 22
+- pnpm 11
+- MySQL 8.4+ (or Docker)
 
 ```sh
-git clone <this-repository-url>
-cd <repository-name>
 corepack enable
 pnpm install --frozen-lockfile
+cp .env.example .env
+docker compose up -d mysql
+pnpm db:generate
+pnpm db:migrate:deploy
+pnpm db:seed
 pnpm dev
 ```
 
-## Admin event scanning
+The combined development command starts:
 
-The Events control center supports manual creation and AI-assisted scanning with OpenAI, Gemini, or Claude. Scans import drafts only; an admin must review and publish every event.
+- Web app: `http://localhost:8080`
+- API: `http://localhost:3001`
+- API health: `http://localhost:3001/healthz`
+- API readiness: `http://localhost:3001/readyz`
 
-Deploy the database migration and Edge Function from an Owner or Administrator Supabase account:
+Vite proxies `/api` (including Socket.IO) to the local API, so the browser uses
+the same origin in development.
+
+The seed is opt-in. Set `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` (12+ chars),
+and the optional `SEED_ADMIN_*` profile fields before running `pnpm db:seed`.
+Defaults create a complete IIT Delhi/BTech demo identity so the verified owner
+never lands in an impossible partial-onboarding state.
+
+## Environment configuration
+
+Copy `.env.example` for the API and local frontend. Never prefix a secret with
+`VITE_`; Vite variables are public browser values.
+
+Core values:
+
+- `DATABASE_URL`
+- `JWT_ACCESS_SECRET`
+- `JWT_REFRESH_SECRET`
+- `FRONTEND_URL`
+- `VITE_API_URL` (empty locally; public API origin in production)
+
+External integrations are enabled only when configured:
+
+- Google: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+  `GOOGLE_REDIRECT_URI`
+- ZeptoMail: `ZEPTOMAIL_TOKEN`, `ZEPTOMAIL_API_URL`,
+  `ZEPTOMAIL_FROM_EMAIL`, `ZEPTOMAIL_FROM_NAME`
+- OpenAI: `OPENAI_API_KEY`, optionally `OPENAI_MODEL`
+- Gemini: `GEMINI_API_KEY`, optionally `GEMINI_MODEL`
+- Daily calls: `DAILY_API_KEY`
+- GIF search: `KLIPY_API_KEY`
+
+Production startup rejects placeholder or undersized secrets. Development OTP
+responses include a test code for local acceptance tests; production responses
+never expose that code.
+
+## Database commands
 
 ```sh
-supabase link --project-ref bugwubrwvlqayxwcazfd
-supabase db push --linked
-supabase secrets set OPENAI_API_KEY=... GEMINI_API_KEY=... ANTHROPIC_API_KEY=...
-supabase functions deploy scan-events
+pnpm db:generate       # generate Prisma Client
+pnpm db:validate       # validate the Prisma schema
+pnpm db:push           # synchronize a local/dev database
+pnpm db:migrate        # create/apply a migration in local development
+pnpm db:migrate:deploy # apply committed migrations in production
+pnpm db:seed           # create the explicitly configured owner account
+pnpm db:studio         # inspect local data
 ```
 
-Only the provider keys you intend to use are required. Never place provider secrets in frontend environment variables or commit them to Git.
+Do not point `db:push` at production. Production releases use reviewed Prisma
+migrations, a verified backup, and the rollback procedure in
+`docs/DEPLOYMENT.md`.
+
+Existing Supabase user passwords cannot be exported. Preserve user UUIDs and
+provider subjects during an approved data import, then require migrated
+password users to use the password-reset flow. A production import cannot be
+run until an owner-supplied database/storage export is available.
+
+## Verification
+
+```sh
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm test:server
+pnpm build
+pnpm verify
+```
+
+`pnpm verify` is the release gate. It validates Prisma, checks both TypeScript
+targets, runs frontend and backend tests, lints the repository, and builds both
+artifacts. Database integration and browser tests require a running local MySQL
+instance.
+
+## Deployment
+
+Cloudflare Pages settings:
+
+- Build command: `pnpm build:pages`
+- Output directory: `dist`
+- Production branch: `pages-production` (advance only after the same commit's API passes `/readyz`)
+- Public environment value: `VITE_API_URL=https://api.cirkle.world`
+- Public environment value: `VITE_CHAT_REALTIME_PROVIDER=socketio`
+- Public environment value: `VITE_DAILY_CALLS_ENABLED=true`
+- Build environment value: `PNPM_VERSION=11.19.0`
+
+The repository also includes `wrangler.jsonc`, SPA redirects, static security
+headers, a PM2 ecosystem file, an Nginx site template, MySQL backup helpers, and
+an atomic API deployment procedure under `deploy/`.
+
+Never place MySQL, JWT, Google client secret, ZeptoMail, OpenAI, or Gemini keys
+in Cloudflare Pages browser variables. Those belong only on the API server.
+
+## Safety and migration
+
+- Back up the Supabase database and storage before a production cutover.
+- Import into a separate MySQL environment and compare table counts, UUIDs,
+  ownership, anonymous-author visibility, and media references.
+- Keep the existing production system available until the documented parity
+  and browser acceptance checks pass.
+- Do not run a live load test against production data.
+
+The code does not silently fall back to Supabase. Missing database, email, AI,
+OAuth, storage, or realtime configuration is surfaced through startup checks,
+health/readiness responses, API errors, and logs.

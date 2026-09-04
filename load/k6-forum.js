@@ -1,185 +1,156 @@
 import http from "k6/http";
-import ws from "k6/ws";
 import { check, fail, sleep } from "k6";
-import { Counter, Trend } from "k6/metrics";
+import { Counter } from "k6/metrics";
 
-const required = ["SUPABASE_URL", "SUPABASE_ANON_KEY", "TEST_JWT", "TEST_USER_ID", "PERF_PROJECT_REF"];
+const ACK = "I_UNDERSTAND_THIS_WRITES_TEST_FORUM_POSTS";
+const PRODUCTION_ACK = "I_ACCEPT_PRODUCTION_LOAD_TEST_WRITES";
+const allowedTargets = ["local", "development", "test", "staging", "performance", "production"];
+const required = ["API_URL", "TEST_JWT", "TARGET_ENV"];
 const missing = required.filter((name) => !__ENV[name]);
-const projectRef = ((__ENV.SUPABASE_URL || "").match(/https:\/\/([^.]+)\.supabase\.co/) || [])[1];
-if (__ENV.FORUM_LOAD_TEST_ACK !== "ISOLATED_PROJECT_ONLY" || missing.length || projectRef !== __ENV.PERF_PROJECT_REF) {
-  fail(`Refusing forum load test. Use an isolated project, FORUM_LOAD_TEST_ACK=ISOLATED_PROJECT_ONLY, and set: ${missing.join(", ")}`);
-}
-if (["bugwubrwvlqayxwcazfd", "yzmqajpjzjgniciafsnk"].includes(projectRef)) {
-  fail("Refusing to run against a known application project. Supply a dedicated performance project.");
+
+if (__ENV.FORUM_LOAD_TEST_ACK !== ACK || missing.length > 0) {
+  fail(`Refusing forum load test. Set FORUM_LOAD_TEST_ACK=${ACK} and: ${missing.join(", ")}`);
 }
 
-const baseUrl = __ENV.SUPABASE_URL.replace(/\/$/, "");
+const targetEnvironment = String(__ENV.TARGET_ENV).toLowerCase();
+if (!allowedTargets.includes(targetEnvironment)) {
+  fail(`TARGET_ENV must be one of: ${allowedTargets.join(", ")}`);
+}
+
+const apiOriginMatch = String(__ENV.API_URL).trim().match(/^(https?):\/\/([^/?#]+)\/?$/i);
+if (!apiOriginMatch) {
+  fail("API_URL must be an HTTP(S) origin without a path, query, or fragment (for example http://localhost:3001).");
+}
+if (apiOriginMatch[2].includes("@")) {
+  fail("API_URL must not contain embedded credentials.");
+}
+const apiOrigin = String(__ENV.API_URL).trim().replace(/\/+$/, "");
+const hostname = apiOriginMatch[2].replace(/^\[|\]$/g, "").split(":")[0].replace(/\.$/, "").toLowerCase();
+const isKnownProductionHost = hostname === "cirkle.world" || hostname.endsWith(".cirkle.world");
+if (isKnownProductionHost && targetEnvironment !== "production") {
+  fail("Refusing a cirkle.world target unless TARGET_ENV=production is explicit.");
+}
+if ((targetEnvironment === "production" || isKnownProductionHost)
+    && (__ENV.ALLOW_PRODUCTION_LOAD_TEST !== "true" || __ENV.PRODUCTION_LOAD_TEST_ACK !== PRODUCTION_ACK)) {
+  fail(`Production is disabled. To opt in, set ALLOW_PRODUCTION_LOAD_TEST=true and PRODUCTION_LOAD_TEST_ACK=${PRODUCTION_ACK}.`);
+}
+if ((targetEnvironment === "production" || isKnownProductionHost) && apiOriginMatch[1].toLowerCase() !== "https") {
+  fail("Production load tests require an HTTPS API_URL.");
+}
+
+const endpoint = `${apiOrigin}/api/data/query`;
 const scopeType = __ENV.SCOPE_TYPE || "GLOBAL";
 const scopeKey = __ENV.SCOPE_KEY || "LOAD_TEST";
 const duration = __ENV.DURATION || "1m";
-const realtimeWarmup = __ENV.REALTIME_WARMUP || "3s";
 const writeRate = Number(__ENV.WRITE_RATE || 10);
 const readRate = Number(__ENV.READ_RATE || 2);
-const realtimeSubscribers = Number(__ENV.REALTIME_SUBSCRIBERS || 5);
-const realtimeJwt = __ENV.REALTIME_JWT || __ENV.TEST_JWT;
-const realtimeRampUp = __ENV.REALTIME_RAMP_UP;
-const durationToMs = (value) => {
-  const match = String(value).match(/^(\d+(?:\.\d+)?)(ms|s|m|h)$/);
-  if (!match) fail(`Unsupported duration: ${value}`);
-  const multiplier = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 }[match[2]];
-  return Number(match[1]) * multiplier;
-};
-const realtimeDuration = `${durationToMs(duration) + durationToMs(realtimeWarmup)}ms`;
+if (!Number.isFinite(writeRate) || writeRate < 0 || !Number.isFinite(readRate) || readRate < 0) {
+  fail("WRITE_RATE and READ_RATE must be non-negative numbers.");
+}
+if (writeRate === 0 && readRate === 0) {
+  fail("At least one of WRITE_RATE or READ_RATE must be greater than zero.");
+}
+
 const runId = __ENV.RUN_ID || `forum-k6-${Date.now()}`;
-const debugRealtime = __ENV.DEBUG_REALTIME === "1";
-if (__ENV.PLAN_PROFILE === "PRO_SPEND_CAP") {
-  const estimatedRealtimeEventsPerSecond = writeRate * (realtimeSubscribers + 1);
-  if (realtimeSubscribers > 500 || estimatedRealtimeEventsPerSecond > 500) {
-    fail(`Refusing to exceed the Supabase Pro Spend Cap profile: estimated ${estimatedRealtimeEventsPerSecond} Realtime events/s across ${realtimeSubscribers} subscribers.`);
-  }
-}
 const failedWrites = new Counter("forum_failed_writes");
-const realtimeEvents = new Counter("forum_realtime_events");
-const realtimeLag = new Trend("forum_realtime_lag_ms", true);
-const realtimeSubscriptions = new Counter("forum_realtime_subscriptions");
-const realtimeJoinFailures = new Counter("forum_realtime_join_failures");
-const realtimeSocketErrors = new Counter("forum_realtime_socket_errors");
-
-const realtimeScenario = realtimeRampUp
-  ? { executor: "ramping-vus", exec: "subscribeRealtime", startVUs: 0, stages: [{ duration: realtimeRampUp, target: realtimeSubscribers }, { duration: realtimeDuration, target: realtimeSubscribers }], gracefulRampDown: "0s" }
-  : { executor: "constant-vus", exec: "subscribeRealtime", vus: realtimeSubscribers, duration: realtimeDuration };
-const scenarios = { realtime: realtimeScenario };
-if (writeRate > 0) scenarios.posts = { executor: "constant-arrival-rate", exec: "writePost", rate: writeRate, timeUnit: "1s", duration, startTime: realtimeWarmup, preAllocatedVUs: 20, maxVUs: Number(__ENV.MAX_WRITE_VUS || 500) };
-if (readRate > 0) scenarios.history = { executor: "constant-arrival-rate", exec: "readPosts", rate: readRate, timeUnit: "1s", duration, startTime: realtimeWarmup, preAllocatedVUs: 5, maxVUs: 100 };
-
-const thresholds = {
-  forum_realtime_subscriptions: [`count>=${realtimeSubscribers}`],
-  forum_realtime_join_failures: ["count<1"],
-  forum_realtime_socket_errors: ["count<1"],
-};
-if (writeRate > 0 || readRate > 0) {
-  thresholds.http_req_failed = ["rate<0.01"];
-  thresholds.http_req_duration = ["p(95)<750", "p(99)<1500"];
-}
+const scenarios = {};
 if (writeRate > 0) {
-  thresholds.forum_failed_writes = ["count<1"];
-  thresholds.forum_realtime_events = ["count>0"];
-  thresholds.forum_realtime_lag_ms = ["p(95)<2000"];
+  scenarios.posts = {
+    executor: "constant-arrival-rate",
+    exec: "writePost",
+    rate: writeRate,
+    timeUnit: "1s",
+    duration,
+    preAllocatedVUs: Number(__ENV.WRITE_VUS || 20),
+    maxVUs: Number(__ENV.WRITE_MAX_VUS || 500),
+  };
+}
+if (readRate > 0) {
+  scenarios.history = {
+    executor: "constant-arrival-rate",
+    exec: "readPosts",
+    rate: readRate,
+    timeUnit: "1s",
+    duration,
+    preAllocatedVUs: Number(__ENV.READ_VUS || 5),
+    maxVUs: Number(__ENV.READ_MAX_VUS || 100),
+    startTime: writeRate > 0 ? "2s" : "0s",
+  };
 }
 
-export const options = { scenarios, thresholds };
+export const options = {
+  scenarios,
+  thresholds: {
+    http_req_failed: ["rate<0.01"],
+    http_req_duration: ["p(95)<750", "p(99)<1500"],
+    ...(writeRate > 0 ? { forum_failed_writes: ["count<1"] } : {}),
+  },
+};
 
-const headers = { apikey: __ENV.SUPABASE_ANON_KEY, Authorization: `Bearer ${__ENV.TEST_JWT}`, "Content-Type": "application/json" };
-const uuid = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-  const r = Math.floor(Math.random() * 16); return (c === "x" ? r : (r & 3) | 8).toString(16);
+const headers = {
+  Authorization: `Bearer ${__ENV.TEST_JWT}`,
+  "Content-Type": "application/json",
+};
+
+const uuid = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
+  const random = Math.floor(Math.random() * 16);
+  return (character === "x" ? random : (random & 0x3) | 0x8).toString(16);
 });
 
-// k6's goja runtime does not expose the browser TextDecoder global.
-const decodeUtf8 = (bytes) => {
-  let result = "";
-  for (let index = 0; index < bytes.length;) {
-    const first = bytes[index++];
-    let codePoint;
-    if (first < 0x80) {
-      codePoint = first;
-    } else if ((first & 0xe0) === 0xc0) {
-      codePoint = ((first & 0x1f) << 6) | (bytes[index++] & 0x3f);
-    } else if ((first & 0xf0) === 0xe0) {
-      codePoint = ((first & 0x0f) << 12) | ((bytes[index++] & 0x3f) << 6) | (bytes[index++] & 0x3f);
-    } else {
-      codePoint = ((first & 0x07) << 18) | ((bytes[index++] & 0x3f) << 12) | ((bytes[index++] & 0x3f) << 6) | (bytes[index++] & 0x3f);
-    }
-    if (codePoint <= 0xffff) {
-      result += String.fromCharCode(codePoint);
-    } else {
-      codePoint -= 0x10000;
-      result += String.fromCharCode(0xd800 + (codePoint >> 10), 0xdc00 + (codePoint & 0x3ff));
-    }
-  }
-  return result;
-};
-const decodeServerBroadcast = (raw) => {
-  const bytes = new Uint8Array(raw);
-  if (bytes.length < 5 || bytes[0] !== 0x04) return null;
-  const topicSize = bytes[1];
-  const eventSize = bytes[2];
-  const metadataSize = bytes[3];
-  const payloadEncoding = bytes[4];
-  let offset = 5;
-  const topic = decodeUtf8(bytes.slice(offset, offset += topicSize));
-  const event = decodeUtf8(bytes.slice(offset, offset += eventSize));
-  const metadataText = decodeUtf8(bytes.slice(offset, offset += metadataSize));
-  const payloadBytes = bytes.slice(offset);
-  let payload = payloadBytes;
-  if (payloadEncoding === 1) {
-    try { payload = JSON.parse(decodeUtf8(payloadBytes)); } catch (_) { return null; }
-  }
-  let meta = {};
-  try { meta = metadataText ? JSON.parse(metadataText) : {}; } catch (_) { return null; }
-  return { topic, event, meta, payload };
-};
-
-const recordRealtimePayload = (payload) => {
-  const content = payload?.record?.content || payload?.new?.content || payload?.payload?.record?.content || payload?.payload?.new?.content;
-  const match = content?.match(/\[load-test:[^:]+:(\d+)\]/);
-  if (match) {
-    realtimeEvents.add(1);
-    realtimeLag.add(Date.now() - Number(match[1]));
+const parseData = (response) => {
+  try {
+    return response.json("data");
+  } catch (_) {
+    return null;
   }
 };
 
 export function writePost() {
   const id = uuid();
   const sentAt = Date.now();
-  const response = http.post(`${baseUrl}/rest/v1/posts`, JSON.stringify({
-    id, community_id: "default", scope_type: scopeType, scope_key: scopeKey, channel: "load-test",
-    author_id: __ENV.TEST_USER_ID, content: `[load-test:${runId}:${sentAt}] ${id}`, is_anonymous: false,
-  }), { headers: { ...headers, Prefer: "return=minimal" }, tags: { operation: "forum_post_write" } });
-  if (!check(response, { "forum post persisted": (r) => r.status === 201 })) failedWrites.add(1);
+  const response = http.post(endpoint, JSON.stringify({
+    table: "posts",
+    operation: "insert",
+    values: {
+      id,
+      scope_type: scopeType,
+      scope_key: scopeKey,
+      channel: "load-test",
+      content: `[load-test:${runId}:${sentAt}] ${id}`,
+      is_anonymous: false,
+    },
+    filters: [],
+    order: [],
+    cardinality: "many",
+  }), { headers, tags: { operation: "forum_post_write" } });
+  const data = parseData(response);
+  const ok = check(response, {
+    "forum post persisted": (result) => result.status === 200,
+    "write returned the post": () => Array.isArray(data) && data.some((row) => row?.id === id),
+  });
+  if (!ok) failedWrites.add(1);
 }
 
 export function readPosts() {
-  const query = `select=id,content,created_at&scope_type=eq.${encodeURIComponent(scopeType)}&scope_key=eq.${encodeURIComponent(scopeKey)}&reply_to_id=is.null&order=created_at.desc,id.desc&limit=50`;
-  const response = http.get(`${baseUrl}/rest/v1/posts?${query}`, { headers, tags: { operation: "forum_history" } });
-  check(response, { "forum page returned": (r) => r.status === 200 });
-  sleep(0.05);
-}
-
-export function subscribeRealtime() {
-  // Array frames require Phoenix/Supabase protocol v2. A v1 URL accepts the
-  // WebSocket but silently ignores these frames, producing a false zero-event test.
-  const socketUrl = baseUrl.replace("https://", "wss://") + `/realtime/v1/websocket?apikey=${encodeURIComponent(__ENV.SUPABASE_ANON_KEY)}&vsn=2.0.0`;
-  const topic = `realtime:forum:${scopeType}:${scopeKey}`;
-  ws.connect(socketUrl, {}, (socket) => {
-    let joined = false;
-    socket.on("open", () => socket.send(JSON.stringify(["1", "1", topic, "phx_join", {
-      config: { private: true, broadcast: { self: false, ack: false, replication_ready: true }, presence: { enabled: false }, postgres_changes: [] },
-      access_token: realtimeJwt,
-    }])));
-    socket.on("message", (raw) => {
-      if (debugRealtime) console.log(`realtime-frame ${raw}`);
-      let frame;
-      try { frame = JSON.parse(raw); } catch (_) { return; }
-      if (!joined && frame?.[3] === "phx_reply" && frame?.[4]?.status === "ok") {
-        joined = true;
-        realtimeSubscriptions.add(1);
-      } else if (!joined && frame?.[3] === "phx_reply" && frame?.[4]?.status === "error") {
-        realtimeJoinFailures.add(1);
-        if (debugRealtime) console.error(`realtime-join-error ${JSON.stringify(frame?.[4]?.response || {})}`);
-      }
-      const payload = frame?.[4]?.payload || frame?.[4];
-      recordRealtimePayload(payload);
-    });
-    socket.on("binaryMessage", (raw) => {
-      const frame = decodeServerBroadcast(raw);
-      if (debugRealtime && frame) console.log(`realtime-binary event=${frame.event} topic=${frame.topic}`);
-      if (frame) recordRealtimePayload(frame.payload);
-    });
-    socket.on("error", (error) => {
-      realtimeSocketErrors.add(1);
-      if (debugRealtime) console.error(`realtime-error ${String(error)}`);
-    });
-    socket.setInterval(() => socket.send(JSON.stringify([null, "hb", "phoenix", "heartbeat", {}])), 25_000);
-    socket.setTimeout(() => socket.close(), Number(__ENV.REALTIME_SESSION_MS || 55_000));
+  const response = http.post(endpoint, JSON.stringify({
+    table: "posts",
+    operation: "select",
+    columns: ["id", "content", "created_at"],
+    filters: [
+      { column: "scope_type", operator: "eq", value: scopeType },
+      { column: "scope_key", operator: "eq", value: scopeKey },
+      { column: "reply_to_id", operator: "is", value: null },
+    ],
+    order: [
+      { column: "created_at", ascending: false },
+      { column: "id", ascending: false },
+    ],
+    limit: 50,
+    cardinality: "many",
+  }), { headers, tags: { operation: "forum_history" } });
+  check(response, {
+    "forum page returned": (result) => result.status === 200,
+    "forum page is an array": () => Array.isArray(parseData(response)),
   });
+  sleep(0.05);
 }

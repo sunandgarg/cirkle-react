@@ -11,16 +11,21 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { recordJobEngagement } from "@/lib/jobAnalytics";
+import { safeHttpUrl } from "@/lib/safeUrl";
 
 const FILTERS = ["All", "Easy Apply", "Internship", "Full-time", "Part-time", "Remote", "Saved"] as const;
+const jobFilterForPath = (pathname: string): (typeof FILTERS)[number] => pathname.endsWith("/internships") ? "Internship"
+  : pathname.endsWith("/full-time") ? "Full-time"
+    : pathname.endsWith("/part-time") ? "Part-time"
+      : pathname.endsWith("/remote") ? "Remote" : "All";
 
 const inferredSkills = (title: string): string[] => {
   const value = title.toLowerCase();
   if (value.includes("react") || value.includes("frontend")) return ["React", "TypeScript", "CSS"];
-  if (value.includes("backend") || value.includes("node")) return ["Node.js", "PostgreSQL", "APIs"];
+  if (value.includes("backend") || value.includes("node")) return ["Node.js", "MySQL", "APIs"];
   if (value.includes("ai") || value.includes("machine learning") || value.includes("ml")) return ["Python", "Machine learning", "Data"];
   if (value.includes("design")) return ["Product design", "Figma", "Research"];
   if (value.includes("product")) return ["Product strategy", "Analytics", "Execution"];
@@ -33,19 +38,27 @@ const safeDate = (value: string | null | undefined) => {
 };
 
 const safeHostname = (value: string | null | undefined) => {
-  try { return value ? new URL(value).hostname.replace(/^www\./, "") : ""; }
+  try { const safe = safeHttpUrl(value); return safe ? new URL(safe).hostname.replace(/^www\./, "") : ""; }
   catch { return ""; }
 };
 
 const Jobs = () => {
   const { user, profile } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const [activeFilter, setActiveFilter] = useState<(typeof FILTERS)[number]>("All");
+  const [activeFilter, setActiveFilter] = useState<(typeof FILTERS)[number]>(() => jobFilterForPath(location.pathname));
   const [search, setSearch] = useState("");
   const storageKey = `cirkle:saved-jobs:${user?.id || "guest"}`;
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const isVerified = !!user && !!profile?.is_verified;
+  const requestedJobId = searchParams.get("job") || "";
+  const focusedJobId = /^[a-zA-Z0-9_-]{1,100}$/.test(requestedJobId) ? requestedJobId : "";
+
+  useEffect(() => {
+    setActiveFilter(jobFilterForPath(location.pathname));
+  }, [location.pathname]);
 
   useEffect(() => {
     try {
@@ -77,6 +90,32 @@ const Jobs = () => {
     refetchOnWindowFocus: true,
   });
 
+  const { data: focusedJob, isFetched: focusedJobFetched } = useQuery({
+    queryKey: ["job-deep-link", focusedJobId],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).from("jobs")
+        .select("id,title,company,location,description,job_type,experience_level,category,easy_apply,apply_url,created_by,created_at,published_at,expires_at,salary_text,skills,source_type,source_url")
+        .eq("id", focusedJobId)
+        .maybeSingle();
+      if (error) throw error;
+      return data as any | null;
+    },
+    enabled: !!focusedJobId,
+    retry: false,
+  });
+
+  const displayedJobs = useMemo(() => focusedJob && !jobs.some((job) => job.id === focusedJob.id)
+    ? [focusedJob, ...jobs]
+    : jobs, [focusedJob, jobs]);
+
+  useEffect(() => {
+    if (!focusedJob?.id || isLoading) return;
+    setActiveFilter("All");
+    setSearch("");
+    const timer = window.setTimeout(() => document.getElementById(`job-${focusedJob.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+    return () => window.clearTimeout(timer);
+  }, [focusedJob?.id, isLoading]);
+
   const { data: myApplications = [] } = useQuery({
     queryKey: ["my-applications", user?.id],
     queryFn: async () => {
@@ -96,13 +135,6 @@ const Jobs = () => {
         job_id: job.id, applicant_id: user.id, note: "Easy Apply", resume_url: null,
       });
       if (error) throw error;
-      if (job.created_by && job.created_by !== user.id) {
-        await supabase.from("notifications").insert({
-          user_id: job.created_by, type: "job_application", title: "New job application",
-          message: `${profile?.name || "A verified member"} applied for ${job.title}`,
-          entity_id: job.id,
-        });
-      }
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["my-applications", user?.id] });
@@ -125,7 +157,7 @@ const Jobs = () => {
 
   const filteredJobs = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return jobs.filter((job) => {
+    return displayedJobs.filter((job) => {
       if (activeFilter === "Easy Apply" && !job.easy_apply) return false;
       if (activeFilter === "Internship" && !job.job_type?.toLowerCase().includes("intern")) return false;
       if (activeFilter === "Full-time" && !job.job_type?.toLowerCase().includes("full")) return false;
@@ -136,14 +168,15 @@ const Jobs = () => {
       return [job.title, job.company, job.location, job.category, ...(job.skills || [])]
         .filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
     });
-  }, [activeFilter, jobs, savedIds, search]);
+  }, [activeFilter, displayedJobs, savedIds, search]);
 
   const handleApply = (job: any) => {
     if (!user) { navigate("/auth"); return; }
     if (!isVerified) { navigate("/iit-verify"); return; }
-    if (!job.easy_apply && job.apply_url) {
-      void recordJobEngagement("job_view_click", job.id, { company: job.company, source: safeHostname(job.apply_url) });
-      window.open(job.apply_url, "_blank", "noopener,noreferrer");
+    const applyUrl = safeHttpUrl(job.apply_url);
+    if (!job.easy_apply && applyUrl) {
+      void recordJobEngagement("job_view_click", job.id, { company: job.company, source: safeHostname(applyUrl) });
+      window.open(applyUrl, "_blank", "noopener,noreferrer");
       return;
     }
     void recordJobEngagement("job_easy_apply_click", job.id, { company: job.company });
@@ -165,6 +198,7 @@ const Jobs = () => {
 
       <main className="native-scroll-region flex-1">
         <div className="mx-auto max-w-3xl pb-1 sm:px-6 sm:py-4">
+          {focusedJobId && focusedJobFetched && !focusedJob && !error ? <div role="status" className="mb-3 rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground">That job is no longer available.</div> : null}
           {error ? <div className="rounded-2xl border border-destructive/25 bg-destructive/5 p-6 text-center"><BriefcaseBusiness className="mx-auto h-8 w-8 text-destructive" /><h2 className="mt-3 text-sm font-bold">Jobs could not be loaded</h2><p className="mt-1 text-xs text-muted-foreground">Check your connection and try again. If this continues, the jobs database migration may still need deployment.</p><Button variant="outline" className="mt-4 rounded-xl" onClick={() => refetch()}><RefreshCw className="h-4 w-4" /> Try again</Button></div>
             : isLoading ? <div className="divide-y divide-border border-y border-border bg-card sm:overflow-hidden sm:rounded-2xl sm:border">{[1, 2, 3, 4].map((item) => <div key={item} className="flex animate-pulse gap-3 px-4 py-5"><div className="h-12 w-12 rounded-lg bg-secondary" /><div className="flex-1"><div className="h-4 w-2/3 rounded bg-secondary" /><div className="mt-2 h-3 w-1/3 rounded bg-secondary" /><div className="mt-3 h-3 w-1/2 rounded bg-secondary" /></div></div>)}</div>
               : filteredJobs.length ? <div className="divide-y divide-border border-y border-border bg-card sm:overflow-hidden sm:rounded-2xl sm:border">{filteredJobs.map((job) => {
@@ -172,8 +206,9 @@ const Jobs = () => {
                 const applied = myApplications.includes(job.id);
                 const saved = savedIds.has(job.id);
                 const publishedAt = safeDate(job.published_at || job.created_at);
-                const sourceHost = safeHostname(job.source_url);
-                return <article key={job.id} className="group overflow-hidden px-3 py-3 transition-colors hover:bg-secondary/20 sm:px-5 sm:py-4">
+                const sourceUrl = safeHttpUrl(job.source_url);
+                const sourceHost = safeHostname(sourceUrl);
+                return <article id={`job-${job.id}`} key={job.id} className={`group overflow-hidden px-3 py-3 transition-colors hover:bg-secondary/20 sm:px-5 sm:py-4 ${focusedJobId === job.id ? "bg-primary/5 ring-2 ring-inset ring-primary/35" : ""}`}>
                   <div className="flex min-w-0 items-start gap-2.5 sm:gap-3">
                     <CompanyLogo company={job.company} className="h-10 w-10 sm:h-12 sm:w-12" />
                     <div className="min-w-0 flex-1">
@@ -185,7 +220,7 @@ const Jobs = () => {
                       {job.description && <p className="mt-2 hidden break-words text-xs leading-relaxed text-muted-foreground sm:line-clamp-2">{job.description}</p>}
                       {!!skills.length && <div className="mt-1.5 flex max-h-6 flex-nowrap gap-1 overflow-hidden sm:mt-2 sm:max-h-none sm:flex-wrap sm:gap-1.5">{skills.slice(0, 3).map((skill: string) => <span key={skill} className="shrink-0 rounded-full bg-secondary px-2 py-1 text-[9px] font-medium leading-none text-foreground sm:text-[10px]">{skill}</span>)}</div>}
                       <div className="mt-2 flex min-w-0 items-center justify-between gap-2 sm:mt-3 sm:flex-wrap"><div className="flex min-w-0 flex-nowrap gap-1 overflow-hidden sm:flex-wrap sm:gap-1.5">{job.job_type && <span className="shrink-0 rounded-full bg-secondary px-2 py-1 text-[9px] font-semibold leading-none sm:text-[10px]">{job.job_type}</span>}{job.experience_level && <span className="shrink-0 rounded-full bg-secondary px-2 py-1 text-[9px] font-semibold leading-none sm:text-[10px]">{job.experience_level}</span>}{job.salary_text && <span className="truncate text-[10px] font-bold text-foreground sm:text-[11px]">{job.salary_text}</span>}</div>{applied ? <span className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg bg-emerald-500/10 px-2.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-300 sm:h-9 sm:px-3 sm:text-xs"><CheckCircle2 className="h-3.5 w-3.5" />Applied</span> : <Button size="sm" className="h-8 shrink-0 rounded-lg px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs" disabled={apply.isPending && job.easy_apply} onClick={() => handleApply(job)}>{job.easy_apply ? <Zap className="h-3.5 w-3.5" /> : <ExternalLink className="h-3.5 w-3.5" />}{job.easy_apply ? "Easy Apply" : "View job"}</Button>}</div>
-                      {sourceHost && <a href={job.source_url} target="_blank" rel="noreferrer" className="mt-2 hidden truncate text-[10px] text-muted-foreground underline-offset-2 hover:text-primary hover:underline sm:block">Source: {sourceHost}</a>}
+                      {sourceHost && sourceUrl && <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="mt-2 hidden truncate text-[10px] text-muted-foreground underline-offset-2 hover:text-primary hover:underline sm:block">Source: {sourceHost}</a>}
                     </div>
                   </div>
                 </article>;

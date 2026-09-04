@@ -1,0 +1,3 @@
+# Cloudflare Pages automatically enables SPA fallback when a deployment has a
+# root index.html and no root 404.html. Do not add `/* /index.html 200`: current
+# Pages rejects it as an infinite loop because it canonicalizes /index.html to /.

@@ -26,21 +26,23 @@ const PostComposer = () => {
   const createPost = useMutation({
     mutationFn: async () => {
       if (!user) return;
-      let imageUrl: string | null = null;
+      let imagePath: string | null = null;
       if (imageFile) {
         const optimized = await convertToWebP(imageFile, 0.78, 1600);
         const path = `${user.id}/${Date.now()}.webp`;
         const { error: uploadError } = await supabase.storage.from("post-images").upload(path, optimized, { contentType: "image/webp", cacheControl: "31536000" });
         if (uploadError) throw uploadError;
-        const { data: urlData } = supabase.storage.from("post-images").getPublicUrl(path);
-        imageUrl = urlData.publicUrl;
+        imagePath = path;
       }
       const { error } = await supabase.from("posts").insert({
-        content: content || (imageUrl ? "📷" : ""),
+        content: content || (imagePath ? "📷" : ""),
         is_anonymous: false,
         author_id: user.id,
         community_id: "default",
-        image_url: imageUrl,
+        image_path: imagePath,
+        // post-images is private. Readers receive a short-lived URL only after
+        // the API has checked that they can see this post.
+        image_url: null,
       } as any);
       if (error) throw error;
     },

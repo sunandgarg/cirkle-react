@@ -2,7 +2,7 @@ import { useState, useEffect, createContext, useContext, useCallback, ReactNode,
 import { clearSupabaseAuthSession, supabase } from "@/integrations/supabase/client";
 import { clearChatCache } from "@/lib/chatCache";
 import type { Tables } from "@/integrations/supabase/types";
-import type { User } from "@supabase/supabase-js";
+import type { ApiUser as User } from "@/integrations/api/types";
 import { isInvalidRefreshTokenError, isMissingAuthIdentityError } from "@/lib/authSessionRecovery";
 import { reportError } from "@/lib/errorTelemetry";
 

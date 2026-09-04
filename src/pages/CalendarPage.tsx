@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Calendar as CalendarIcon, Check, ChevronLeft, ChevronRight, Clock, ExternalLink, Globe2, MapPin, Settings2, Sparkles, Users } from "lucide-react";
 import { eachDayOfInterval, endOfMonth, format, getDay, isSameDay, isSameMonth, isToday, startOfMonth } from "date-fns";
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import type { Database } from "@/integrations/supabase/types";
 import { isEventFromInstitute, rankEventsForViewer } from "@/lib/eventRanking";
+import { safeHttpUrl } from "@/lib/safeUrl";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 
@@ -22,26 +23,56 @@ const audienceLabel = (event: EventRow) => {
 const CalendarPage = () => {
   const { user, isAdmin, profile } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [view, setView] = useState<"upcoming" | "going" | "past">("upcoming");
+  const requestedEventId = searchParams.get("event") || "";
+  const focusedEventId = /^[a-zA-Z0-9_-]{1,100}$/.test(requestedEventId) ? requestedEventId : "";
 
   const { data: events = [], isLoading } = useQuery({
     queryKey: ["events", user?.id],
-    queryFn: async () => {
+    queryFn: async (): Promise<EventRow[]> => {
       if (!user) return [];
       const current = await supabase.from("events").select("*").eq("status", "published").order("start_time", { ascending: true }).limit(500);
-      if (!current.error) return current.data ?? [];
+      if (!current.error) return (current.data ?? []) as EventRow[];
       // Keep the existing Events page available while a new frontend waits for
       // its corresponding database migration to be applied.
       const legacy = await supabase.from("events").select("*").order("start_time", { ascending: true }).limit(500);
       if (legacy.error) throw current.error;
-      return legacy.data ?? [];
+      return (legacy.data ?? []) as EventRow[];
     },
     enabled: !!user,
     staleTime: 60_000,
   });
+
+  const { data: focusedEvent, isFetched: focusedEventFetched } = useQuery({
+    queryKey: ["event-deep-link", user?.id, focusedEventId],
+    queryFn: async (): Promise<EventRow | null> => {
+      const { data, error } = await supabase.from("events").select("*").eq("id", focusedEventId).maybeSingle();
+      if (error) throw error;
+      return (data as EventRow | null) ?? null;
+    },
+    enabled: !!user && !!focusedEventId,
+    retry: false,
+  });
+
+  const displayedEvents = useMemo(() => focusedEvent && !events.some((event) => event.id === focusedEvent.id)
+    ? [focusedEvent, ...events]
+    : events, [events, focusedEvent]);
+
+  useEffect(() => {
+    if (!focusedEvent) return;
+    const startsAt = new Date(focusedEvent.start_time);
+    if (Number.isNaN(startsAt.getTime())) return;
+    setCurrentMonth(startsAt);
+    setSelectedDate(startsAt);
+    setView(new Date(focusedEvent.end_time || focusedEvent.start_time).getTime() < Date.now() ? "past" : "upcoming");
+    if (isLoading) return;
+    const timer = window.setTimeout(() => document.getElementById(`event-${focusedEvent.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+    return () => window.clearTimeout(timer);
+  }, [focusedEvent, isLoading]);
 
   const { data: myRsvps = {} } = useQuery({
     queryKey: ["my-rsvps", user?.id],
@@ -75,7 +106,7 @@ const CalendarPage = () => {
   });
 
   const now = Date.now();
-  const filteredByView = events.filter((event) => {
+  const filteredByView = displayedEvents.filter((event) => {
     const isPast = new Date(event.end_time || event.start_time).getTime() < now;
     if (view === "past") return isPast;
     if (view === "going") return !isPast && myRsvps[event.id] === "going";
@@ -85,14 +116,14 @@ const CalendarPage = () => {
   const viewerIit = profile?.iit_name;
   const rankingSeed = `${user?.id || "member"}:${format(currentMonth, "yyyy-MM")}`;
   const upcoming = useMemo(() => rankEventsForViewer(
-    events.filter((event) => new Date(event.end_time || event.start_time).getTime() >= now),
+    displayedEvents.filter((event) => new Date(event.end_time || event.start_time).getTime() >= now),
     viewerIit,
     rankingSeed,
-  ), [events, now, rankingSeed, viewerIit]);
+  ), [displayedEvents, now, rankingSeed, viewerIit]);
   const nextEvent = upcoming[0];
   const monthStart = startOfMonth(currentMonth);
   const days = eachDayOfInterval({ start: monthStart, end: endOfMonth(currentMonth) });
-  const eventsOnDate = (date: Date) => events.filter((event) => isSameDay(new Date(event.start_time), date));
+  const eventsOnDate = (date: Date) => displayedEvents.filter((event) => isSameDay(new Date(event.start_time), date));
   const listEvents = rankEventsForViewer(selectedDate
     ? filteredByView.filter((event) => isSameDay(new Date(event.start_time), selectedDate))
     : filteredByView.filter((event) => isSameMonth(new Date(event.start_time), currentMonth)), viewerIit, rankingSeed);
@@ -110,6 +141,7 @@ const CalendarPage = () => {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-4 pb-24 space-y-5">
+        {focusedEventId && focusedEventFetched && !focusedEvent ? <div role="status" className="rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground">That event is no longer available to your profile.</div> : null}
         {nextEvent && (
           <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-primary via-primary/90 to-violet-600 text-primary-foreground p-5 shadow-lg shadow-primary/15">
             <div className="absolute -right-12 -top-12 w-40 h-40 rounded-full bg-white/10" />
@@ -155,7 +187,7 @@ const CalendarPage = () => {
         <section className="space-y-3">
           <div className="flex items-center justify-between"><div><h3 className="text-sm font-bold">{selectedDate ? format(selectedDate, "EEEE, MMMM d") : `${format(currentMonth, "MMMM")} events`}</h3><p className="text-[11px] text-muted-foreground">{viewerIit ? `${viewerIit} first, then adjacent campus groups.` : "Only events available to your verified profile are shown."}</p></div>{selectedDate && <button onClick={() => setSelectedDate(null)} className="text-xs font-semibold text-primary">Clear date</button>}</div>
           {isLoading ? [1, 2].map((item) => <div key={item} className="h-36 rounded-2xl bg-muted animate-pulse" />) : listEvents.length ? listEvents.map((event) => (
-            <article key={event.id} className="rounded-2xl border border-border bg-card p-4 shadow-sm">
+            <article id={`event-${event.id}`} key={event.id} className={`rounded-2xl border bg-card p-4 shadow-sm ${focusedEventId === event.id ? "border-primary ring-2 ring-primary/25" : "border-border"}`}>
               <div className="flex gap-3">
                 <div className="w-12 h-12 rounded-xl bg-primary/10 flex flex-col items-center justify-center shrink-0"><span className="text-[10px] font-bold uppercase text-primary">{format(new Date(event.start_time), "MMM")}</span><span className="text-lg font-black text-primary leading-none">{format(new Date(event.start_time), "d")}</span></div>
                 <div className="flex-1 min-w-0"><h4 className="font-bold text-sm text-foreground">{event.title}</h4>{event.organizer && <p className="text-[11px] text-muted-foreground mt-0.5">By {event.organizer}</p>}<div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[11px] text-muted-foreground"><span className="flex items-center gap-1"><Clock className="w-3 h-3" />{format(new Date(event.start_time), "h:mm a")}</span>{event.location && <span className="flex items-center gap-1"><MapPin className="w-3 h-3" />{event.location}</span>}</div></div>
@@ -164,7 +196,7 @@ const CalendarPage = () => {
               <div className="mt-3 flex flex-wrap items-center gap-2">{event.source_iit && <span className="inline-flex items-center gap-1 text-[10px] font-bold rounded-full bg-violet-500/10 text-violet-700 dark:text-violet-300 px-2.5 py-1">{event.source_iit}</span>}<span className="inline-flex items-center gap-1 text-[10px] font-semibold rounded-full bg-primary/10 text-primary px-2.5 py-1">{event.audience_mode === "everyone" ? <Globe2 className="w-3 h-3" /> : <Users className="w-3 h-3" />}{audienceLabel(event)}</span></div>
               <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-border/60">
                 <Button size="sm" variant={myRsvps[event.id] === "going" ? "default" : "outline"} className="rounded-xl h-10" disabled={rsvp.isPending} onClick={() => rsvp.mutate({ eventId: event.id, status: "going" })}>{myRsvps[event.id] === "going" ? <><Check className="w-4 h-4" /> Going</> : "I'm going"}</Button>
-                {event.registration_url ? <a href={event.registration_url} target="_blank" rel="noreferrer" className="h-10 rounded-xl bg-secondary text-foreground text-xs font-semibold flex items-center justify-center gap-1.5">Register <ExternalLink className="w-3.5 h-3.5" /></a> : <Button size="sm" variant={myRsvps[event.id] === "not_going" ? "secondary" : "ghost"} className="rounded-xl h-10" disabled={rsvp.isPending} onClick={() => rsvp.mutate({ eventId: event.id, status: "not_going" })}>Not for me</Button>}
+                {safeHttpUrl(event.registration_url) ? <a href={safeHttpUrl(event.registration_url)!} target="_blank" rel="noopener noreferrer" className="h-10 rounded-xl bg-secondary text-foreground text-xs font-semibold flex items-center justify-center gap-1.5">Register <ExternalLink className="w-3.5 h-3.5" /></a> : <Button size="sm" variant={myRsvps[event.id] === "not_going" ? "secondary" : "ghost"} className="rounded-xl h-10" disabled={rsvp.isPending} onClick={() => rsvp.mutate({ eventId: event.id, status: "not_going" })}>Not for me</Button>}
               </div>
             </article>
           )) : <EmptyState icon={CalendarIcon} title={view === "going" ? "Nothing saved yet" : "No events here"} description={selectedDate ? "Try another date or clear the date filter." : view === "going" ? "Mark an event as going and it will stay easy to find." : "New relevant events will appear here after an admin publishes them."} />}

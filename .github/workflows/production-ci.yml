@@ -3,7 +3,7 @@ name: Production CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, pages-production]
 
 permissions:
   contents: read
@@ -15,7 +15,42 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: cirkle_ci
+          MYSQL_USER: cirkle
+          MYSQL_PASSWORD: ci-database-password
+          MYSQL_ROOT_PASSWORD: ci-root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -pci-root-password --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://cirkle:ci-database-password@127.0.0.1:3306/cirkle_ci
+      CORS_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+      APP_BASE_URL: http://localhost:3001
+      FRONTEND_URL: http://localhost:8080
+      JWT_ACCESS_SECRET: ci-access-secret-at-least-thirty-two-characters
+      JWT_REFRESH_SECRET: ci-refresh-secret-at-least-thirty-two-characters
+      STORAGE_SIGNING_SECRET: ci-storage-signing-secret
+      IP_HASH_SECRET: ci-ip-hash-secret
+      OTP_PEPPER: ci-otp-pepper-secret
+      COOKIE_SECURE: "false"
+      MOBILE_TEST_MODE: "false"
+      ENABLE_SEED_DATA: "true"
+      SEED_ADMIN_EMAIL: ci-owner@cirkle.local
+      SEED_ADMIN_PASSWORD: ci-owner-password-2026
+      SEED_ADMIN_NAME: Cirkle CI Owner
+      VITE_API_URL: https://api.cirkle.world
+      VITE_CHAT_REALTIME_PROVIDER: socketio
+      VITE_DAILY_CALLS_ENABLED: "true"
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,11 +70,17 @@ jobs:
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Audit production dependencies
-        run: pnpm audit --prod --audit-level=moderate
+      - name: Validate Prisma schema
+        run: pnpm db:validate
 
-      - name: Audit development toolchain
-        run: pnpm audit --audit-level=high
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Apply database migrations
+        run: pnpm db:migrate:deploy
+
+      - name: Seed CI owner
+        run: pnpm db:seed
 
       - name: Type-check
         run: pnpm typecheck
@@ -50,5 +91,82 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Build production bundle
-        run: pnpm build
+      - name: Build the exact Cloudflare Pages bundle
+        env:
+          NODE_ENV: production
+        run: pnpm build:pages
+
+      - name: Build the Node API
+        run: pnpm build:api
+
+      - name: Exercise the built API against MySQL
+        shell: bash
+        env:
+          SMOKE_EMAIL: ci-owner@cirkle.local
+          SMOKE_PASSWORD: ci-owner-password-2026
+        run: |
+          set -Eeuo pipefail
+          api_log="${RUNNER_TEMP}/cirkle-api.log"
+          node server/dist/index.js >"${api_log}" 2>&1 &
+          api_pid=$!
+          cleanup() {
+            kill "${api_pid}" >/dev/null 2>&1 || true
+            wait "${api_pid}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          ready=false
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:3001/readyz >/dev/null; then
+              ready=true
+              break
+            fi
+            if ! kill -0 "${api_pid}" 2>/dev/null; then
+              cat "${api_log}"
+              exit 1
+            fi
+            sleep 1
+          done
+          if [[ "${ready}" != true ]]; then
+            cat "${api_log}"
+            exit 1
+          fi
+
+          pnpm smoke:local
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.19.0
+          run_install: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit dependencies
+        shell: bash
+        run: |
+          set +e
+          pnpm audit --prod --audit-level=moderate
+          production_status=$?
+          pnpm audit --audit-level=high
+          toolchain_status=$?
+          set -e
+
+          if (( production_status != 0 || toolchain_status != 0 )); then
+            echo "Dependency audit failed. Review both reports above."
+            exit 1
+          fi
