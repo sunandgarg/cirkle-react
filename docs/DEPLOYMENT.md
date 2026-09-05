@@ -8,7 +8,7 @@ This runbook describes the selected production topology and the ordered move of
 ```text
 Browser -> Cloudflare Pages project cirkle-react
            -> https://cirkle.world (canonical after cutover)
-           -> https://www.cirkle.world (redirects to canonical)
+           -> https://www.cirkle.world (serves the same canonical-tagged artifact)
            -> https://cirkle-react.cirkle.world (rollback/diagnostic origin)
         -> https://api-react.cirkle.world
            -> Nginx -> one Node 22 systemd service on Lightsail

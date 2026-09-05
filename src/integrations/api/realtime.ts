@@ -16,8 +16,18 @@ type SocketLike = {
 };
 
 let socket: SocketLike | null = null;
-let socketPromise: Promise<SocketLike | null> | null = null;
+let socketAuthToken = "";
 const activeChannels = new Set<ApiRealtimeChannel>();
+
+const disconnectSocketWhenIdle = (): void => {
+  if (activeChannels.size > 0 || !socket) return;
+  const idleSocket = socket;
+  // Clear the shared reference before disconnecting because Socket.IO emits
+  // `disconnect` synchronously and a foreground resubscribe must create a new
+  // transport instead of reusing this intentionally closed one.
+  socket = null;
+  idleSocket.disconnect?.();
+};
 
 const applySocketAuth = (active: SocketLike, token: string): void => {
   if (active.auth?.token === token) return;
@@ -42,18 +52,14 @@ const socketPath = (): string => {
 
 const getSocket = async (): Promise<SocketLike | null> => {
   if (socket) return socket;
-  if (socketPromise) return socketPromise;
-  socketPromise = (async () => {
-    const accessToken = readSession()?.access_token;
-    socket = io(API_ORIGIN || undefined, {
-      path: socketPath(),
-      withCredentials: true,
-      transports: ["websocket", "polling"],
-      auth: accessToken ? { token: accessToken } : {},
-    }) as unknown as SocketLike;
-    return socket;
-  })().finally(() => { socketPromise = null; });
-  return socketPromise;
+  const accessToken = socketAuthToken || readSession()?.access_token;
+  socket = io(API_ORIGIN || undefined, {
+    path: socketPath(),
+    withCredentials: true,
+    transports: ["websocket", "polling"],
+    auth: accessToken ? { token: accessToken } : {},
+  }) as unknown as SocketLike;
+  return socket;
 };
 
 type ChannelHandler = { type: string; filter: Record<string, unknown>; callback: RealtimeCallback };
@@ -123,6 +129,12 @@ export class ApiRealtimeChannel {
     if (this.subscribed) return;
     this.subscribed = true;
     const active = await getSocket();
+    // A visibility/page lifecycle cleanup can unsubscribe while the async
+    // continuation above is queued. Do not attach a stale channel afterward.
+    if (!this.subscribed || !activeChannels.has(this)) {
+      disconnectSocketWhenIdle();
+      return;
+    }
     if (!active) {
       this.statusCallback?.("CHANNEL_ERROR", new Error("socket.io-client is unavailable"));
       return;
@@ -216,6 +228,7 @@ export class ApiRealtimeChannel {
       this.activeSocket.off?.(`realtime:${this.topic}`, this.dispatch);
     }
     this.activeSocket = null;
+    disconnectSocketWhenIdle();
     this.statusCallback?.("CLOSED");
     return "ok";
   }
@@ -237,10 +250,11 @@ export class ApiRealtimeChannel {
 
 export class ApiRealtimeClient {
   async setAuth(token?: string): Promise<void> {
-    const active = await getSocket();
-    if (!active) return;
     const nextToken = token || readSession()?.access_token || "";
-    applySocketAuth(active, nextToken);
+    socketAuthToken = nextToken;
+    // Updating auth must not create an otherwise idle connection. A channel
+    // subscription will open the transport with this prepared token.
+    if (socket) applySocketAuth(socket, nextToken);
   }
 }
 
@@ -249,7 +263,7 @@ export const resetRealtimeSocket = (): void => {
   activeChannels.forEach((channel) => channel.resetSocket());
   socket?.disconnect?.();
   socket = null;
-  socketPromise = null;
+  socketAuthToken = "";
 };
 
 subscribeToAuthChanges((event, session) => {
@@ -257,5 +271,8 @@ subscribeToAuthChanges((event, session) => {
     resetRealtimeSocket();
     return;
   }
-  if (socket && session?.access_token) applySocketAuth(socket, session.access_token);
+  if (session?.access_token) {
+    socketAuthToken = session.access_token;
+    if (socket) applySocketAuth(socket, session.access_token);
+  }
 });

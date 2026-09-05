@@ -174,8 +174,11 @@ The intended low-traffic base is approximately **USD 23.30-23.70/month before ta
 The account currently has five Cirkle secrets: the three active Lightsail
 secrets plus retained `cirkle/staging/api` and `cirkle-react/application`, so
 Secrets Manager is currently about USD 2/month before requests. The running
-legacy EC2 deployment, retained RDS snapshots, and old buckets also make the
-AWS invoice temporarily higher than the target table. In particular,
+legacy `t4g.small` EC2 deployment, its 20-GiB gp3 volume and public IPv4,
+retained RDS snapshots, and old buckets make the temporary whole-account
+run-rate approximately **USD 37.70-42/month** before tax, credits, and traffic.
+That is not the intended production-stack cost in the table above. In
+particular,
 `cirkle-react-deploymentbucket-vs0hxjf6smax` is still the new database-backup
 destination even though the older `cirkle-react` CloudFormation stack owns it;
 do not delete that stack wholesale. Decommission resources only after explicit
@@ -183,40 +186,46 @@ approval, dependency review, and a proven rollback window. Upgrade the API to
 the 2 GiB bundle if sustained memory is above 70-75%, swap activity is
 persistent, or latency/error alarms trigger.
 
-Current cost/health guardrails are the USD 40/month
+Current cost/health guardrails are the USD 23/month
 `Cirkle-Monthly-Cost` budget (80% forecast and 100% actual notifications) and
-three Lightsail alarms: `cirkle-react-api-burst-low`,
-`cirkle-react-api-status-failed`, and `cirkle-react-api-cpu-high`. All three
-alarms were `OK` at the last audit, but the Lightsail email contact was still
-`PendingVerification`; alarms cannot reliably notify anyone until that email is
-confirmed. A budget alerts after spend; it is not a hard service limit.
+six Lightsail API/database alarms. All six alarms were `OK` at the 6 September
+audit. The Gmail Lightsail contact confirmation link was accepted, although
+the Lightsail API still reported `PendingVerification` afterward. A budget
+sends notifications; it is not a hard service limit. The retained rollback
+resources are expected to trigger the USD 23 budget until they are explicitly
+decommissioned.
 
 ## Completed provider checks and remaining operational items
 
-Completed on 5 September 2026: a fresh ZeptoMail India send token, Google OAuth
-client secret, and KLIPY key were stored only in the Lightsail application
-secret; the API was restarted through a validated environment preflight. Google
-OAuth completed end to end on the live custom domain. ZeptoMail India delivery
-also completed end to end to the deliverable `sunandgarg@gmail.com` mailbox:
+Completed on 5-6 September 2026: replacement ZeptoMail India and Google OAuth
+credentials were confirmed in the Lightsail application secret, and the
+credentials pasted into development chat were no longer active. Google OAuth
+completed end to end on the live custom domain. ZeptoMail India delivery also
+completed end to end to the deliverable `sunandgarg@gmail.com` mailbox:
 Gmail received the branded sign-in-code message from `noreply@cirkle.world`
 with its inline logo. A separate test to `sunandgarg@cirkle.world` hard-bounced
-because that custom-domain mailbox was not deliverable. KLIPY search works with
-the configured key, which remains in the
-provider's TESTING state until its production-review form and product video are
-submitted. The three database identities were also rolled out with verified
+because that custom-domain mailbox was not deliverable. The exposed original
+KLIPY key was revoked and replaced inside the already-approved `cirkle.world`
+PRODUCTION platform; provider search/share and the live Cirkle GIF picker passed
+with the replacement before the TESTING credential left the live environment.
+The three database identities were also rolled out with verified
 AWS-CA TLS, `require_secure_transport=1` was activated by a controlled managed
 database reboot, and both the pre-change and post-change encrypted/checksummed
 S3 backups succeeded. Lightsail returned to `available`/`in-sync`, every scoped
 identity reported `TLS_AES_256_GCM_SHA384`, and API database/storage readiness
-passed afterward.
+passed afterward. The unused `aws.cirkle.world` ACM certificate is now
+`ISSUED`: two stale NameBright child-zone NS records were removed after their
+values were recorded, allowing the retained Cloudflare validation CNAME to
+resolve authoritatively.
 
 1. Create/fix the `sunandgarg@cirkle.world` mailbox if that address should receive mail; the ZeptoMail India transport and branded login template are already live-verified with a deliverable Gmail recipient.
-2. Submit KLIPY's production request with category, monthly-active-user estimate, product video, and required attribution.
-3. Ask AWS Support to verify the account for CloudFront, deploy the conditional distribution, then test signed/private/public media behavior and cache headers.
+2. Monitor the open CloudFront account-verification case. After AWS removes the account hold, deploy the conditional distribution and test signed/private/public media behavior and cache headers.
+3. Monitor Amazon SES production-access reconsideration. The `cirkle.world` SES identity and DKIM are verified, but do not use SES until AWS approves regional production access and delivery/bounce/complaint acceptance passes.
 4. Configure and live-test OpenAI, Gemini, and Daily credentials where those features are required.
-5. Confirm the AWS alert email, allow the API burst balance to recover after release builds, and restore one fresh S3 backup into an isolated MySQL instance before declaring disaster recovery rehearsed.
-6. Retain the complete version-2 manifest, digest, reconciliation output, source-freeze/change-control evidence, and object-hash report in restricted storage. The digest and reconciliation result alone do not prove that every source writer was frozen.
-7. Keep the legacy Pages project, Supabase project, prior API release, old EC2 resources, retained buckets, and rollback secrets until the rollback window is explicitly closed. Review ownership first: the older `cirkle-react` CloudFormation stack still owns the active database-backup bucket, so the stack must not be deleted wholesale.
+5. Confirm that Lightsail changes the Gmail contact from `PendingVerification` to `Valid`, allow the API burst balance to recover after release builds, and restore one fresh S3 backup into an isolated MySQL instance before declaring disaster recovery rehearsed.
+6. Enroll root MFA/passkey, configure IAM Identity Center with a scoped operator permission set, switch routine CLI use to `aws configure sso`, and stop using the browser-backed root CLI session. Do not create a permanent root access key.
+7. Retain the complete version-2 manifest, digest, reconciliation output, source-freeze/change-control evidence, and object-hash report in restricted storage. The digest and reconciliation result alone do not prove that every source writer was frozen.
+8. Keep the legacy Pages project, Supabase project, prior API release, old EC2 resources, retained buckets, and rollback secrets until the rollback window is explicitly closed. Review ownership first: the older `cirkle-react` CloudFormation stack still owns the active database-backup bucket, so the stack must not be deleted wholesale.
 
 ## Apex cutover and rollback
 
