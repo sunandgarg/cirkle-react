@@ -4,17 +4,17 @@ The `cirkle-react` deployment is intentionally independent from the existing Clo
 
 ## Architecture
 
-- An AWS Application Load Balancer terminates TLS for the React SPA, `/api/*`, and `/socket.io/*`; Nginx serves the built SPA and proxies API/realtime traffic to one hardened Node 22 systemd service.
+- A stable Elastic IP routes directly to Nginx on one EC2 instance. Nginx terminates Let's Encrypt TLS for the React SPA, `/api/*`, and `/socket.io/*`, then proxies API/realtime traffic to one hardened Node 22 systemd service.
 - A private, encrypted, versioned S3 deployment bucket retains source/build artifacts for 30 days. CloudFront is intentionally absent because this account currently rejects new distributions pending AWS Support verification.
-- RDS MySQL is encrypted, private, deletion-protected, and reachable only from the API security group.
+- MySQL 8.4 runs in a memory-bounded Docker container bound only to EC2 loopback. Its data resides on the instance's encrypted gp3 volume.
 - Uploaded bytes are private, encrypted and versioned in S3. Authorization and signed application URLs remain enforced by the Node API.
 - EC2 uses an IAM role; there are no long-lived AWS access keys on the host.
 - Database credentials and application/provider configuration are held in Secrets Manager. Never store provider secrets in MySQL or `VITE_*` variables.
 - The host is administered with Systems Manager Session Manager; SSH is not exposed.
 
-## Create the isolated stack
+## Create or update the isolated stack
 
-The first infrastructure attempt retained its encrypted/deletion-protected RDS database and two subnets. `cirkle-react.yaml` deliberately references those existing resources and creates only the independent application layer; it never deletes or replaces the database.
+`cirkle-react.yaml` represents the budget application layer. The Elastic IP is allocated separately with a retention tag so stack replacement cannot silently discard the public address.
 
 ```bash
 aws cloudformation deploy \
@@ -26,18 +26,16 @@ aws cloudformation deploy \
     ExistingVpcId='vpc-...' \
     ExistingPublicSubnetA='subnet-...' \
     ExistingPublicSubnetB='subnet-...' \
-    ExistingDatabaseSecurityGroupId='sg-...' \
-    ExistingDatabaseEndpoint='database.ap-south-1.rds.amazonaws.com' \
-    ExistingDatabaseSecretArn='arn:aws:secretsmanager:ap-south-1:ACCOUNT:secret:rds!...' \
+    StaticPublicIp='15.252.62.154' \
     ApplicationDomain=cirkle-react.cirkle.world \
-    CertificateArn='arn:aws:acm:ap-south-1:ACCOUNT:certificate/CERTIFICATE_ID'
+    InstanceType=t4g.small
 ```
 
-The current AWS India free plan caps automated RDS backup retention at one day. Upgrade the account plan and raise `BackupRetentionPeriod` to at least seven days before production cutover. Also configure encrypted cross-region/off-account backups and prove a restore.
+`migrate-rds-to-local.sh` performs a consistent source dump, restores it to loopback MySQL, switches the API only after readiness succeeds, and retains the dump. `backup-local-mysql.sh` runs daily through a hardened systemd timer and keeps 35 days of encrypted S3 backups. The encrypted RDS snapshots `cirkle-react-initial-20260905` and `cirkle-react-rds-final-20260905` remain available for disaster recovery.
 
 ## Build frontend
 
-The AWS load balancer is same-origin, so the browser receives no infrastructure secret and no separate API hostname is required.
+The direct Nginx topology is same-origin, so the browser receives no infrastructure secret and no separate API hostname is required.
 
 ```bash
 VITE_API_URL='' \
@@ -77,27 +75,24 @@ This copy is not a cutover: Supabase remains intact and writable. Compare exact 
 - URL: `https://cirkle-react.cirkle.world`
 - CloudFormation stack: `cirkle-react` in `ap-south-1`
 - Compute: one Graviton `t4g.small` EC2 instance, 20 GiB encrypted gp3, Nginx and Node 22
-- Database: the retained private/deletion-protected MySQL `db.t4g.micro` instance from the first non-destructive stack attempt
+- Database: loopback-only MySQL 8.4 on encrypted EC2 storage, with a 768 MiB container memory ceiling and 2 GiB swap protection
 - Object storage: private, encrypted and versioned S3
 - Realtime: Socket.IO only; AppSync is deliberately excluded from this AWS account
-- Backup: one-day automated RDS retention under the current AWS plan plus manual snapshot `cirkle-react-initial-20260905`
+- Backup: daily encrypted S3 MySQL dumps retained for 35 days, plus encrypted manual RDS snapshots `cirkle-react-initial-20260905` and `cirkle-react-rds-final-20260905`
 
 The verified source copy contained 35 auth users, 638 public rows, and eight Storage objects (1,368,387 bytes). Destination reconciliation found 35 users, 17 profiles, 106 posts, seven connections, 40 jobs, 126 events, two RSVPs, 338 legacy records, and eight S3 objects with the same total byte size. Supabase was read only and remains unchanged.
 
 ## Estimated monthly AWS cost
 
-The low-traffic, single-instance estimate for Mumbai is approximately **USD 57-63 per month**, before tax, outbound data transfer and third-party provider usage:
+The low-traffic, single-instance estimate for Mumbai is approximately **USD 15-18 per month**, before tax, outbound data transfer and third-party provider usage:
 
 | Service | Assumption | Approx. USD/month |
 | --- | --- | ---: |
 | EC2 | one `t4g.small`, 730 hours | 8.18 |
-| RDS MySQL | one Single-AZ `db.t4g.micro`, 730 hours | 15.33 |
-| Application Load Balancer | 730 hours | 17.45 |
-| ALB capacity | low traffic, up to one average LCU | 0-5.84 |
 | EC2 gp3 | 20 GiB | 1.82 |
-| RDS gp3 | 20 GiB | 2.62 |
-| Public IPv4 | approximately three address-hours | 10.95 |
-| Secrets Manager | two secrets | 0.80 plus requests |
-| S3 | current objects and deployment artifacts | less than 0.10 plus requests |
+| Elastic IPv4 | one attached address, 730 hours | 3.65 |
+| Secrets Manager | one application secret | 0.40 plus requests |
+| S3 | uploads, artifacts and 35-day database backups | approximately 0.10-0.50 initially |
+| Retained RDS snapshot | approximately 20 GiB snapshot storage | approximately 1.90-2.60 |
 
 Usage, backups, logs, object growth and internet egress increase this estimate. AWS credits may reduce the invoice while eligible, but are not treated as a durability or architecture dependency.

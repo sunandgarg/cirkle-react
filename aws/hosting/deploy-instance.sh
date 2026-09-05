@@ -4,48 +4,39 @@ set -euo pipefail
 : "${AWS_REGION:?AWS_REGION is required}"
 : "${DEPLOYMENT_BUCKET:?DEPLOYMENT_BUCKET is required}"
 : "${APP_SECRET_ID:?APP_SECRET_ID is required}"
-: "${DATABASE_SECRET_ID:?DATABASE_SECRET_ID is required}"
-: "${DATABASE_ENDPOINT:?DATABASE_ENDPOINT is required}"
 
 release_id="${RELEASE_ID:-initial}"
 release_dir="/srv/cirkle/releases/${release_id}"
 import_dir="/srv/cirkle/import/${release_id}"
+import_supabase="${IMPORT_SUPABASE:-false}"
 
 chmod 0755 /srv/cirkle
 install -d -o cirkle -g cirkle -m 0750 "$release_dir" "$import_dir"
 install -d -o root -g cirkle -m 0750 /etc/cirkle
 aws s3 cp "s3://${DEPLOYMENT_BUCKET}/releases/cirkle-react-source.tar.gz" /tmp/cirkle-react-source.tar.gz --region "$AWS_REGION"
 aws s3 cp "s3://${DEPLOYMENT_BUCKET}/releases/cirkle-react-frontend.tar.gz" /tmp/cirkle-react-frontend.tar.gz --region "$AWS_REGION"
-aws s3 cp "s3://${DEPLOYMENT_BUCKET}/migrations/supabase-export.tar.gz" /tmp/cirkle-react-supabase-export.tar.gz --region "$AWS_REGION"
 tar --warning=no-unknown-keyword -xzf /tmp/cirkle-react-source.tar.gz -C "$release_dir"
-tar --warning=no-unknown-keyword -xzf /tmp/cirkle-react-supabase-export.tar.gz -C "$import_dir"
+if [[ "$import_supabase" == "true" ]]; then
+  aws s3 cp "s3://${DEPLOYMENT_BUCKET}/migrations/supabase-export.tar.gz" /tmp/cirkle-react-supabase-export.tar.gz --region "$AWS_REGION"
+  tar --warning=no-unknown-keyword -xzf /tmp/cirkle-react-supabase-export.tar.gz -C "$import_dir"
+fi
 chown -R cirkle:cirkle "$release_dir" "$import_dir"
 
 app_config="$(aws secretsmanager get-secret-value --region "$AWS_REGION" --secret-id "$APP_SECRET_ID" --query SecretString --output text)"
-database_config="$(aws secretsmanager get-secret-value --region "$AWS_REGION" --secret-id "$DATABASE_SECRET_ID" --query SecretString --output text)"
-database_user="$(jq -r '.username' <<<"$database_config")"
-database_password="$(jq -r '.password' <<<"$database_config")"
-database_host="$DATABASE_ENDPOINT"
-database_port="$(jq -r '.port // 3306' <<<"$database_config")"
-database_user_uri="$(jq -rn --arg value "$database_user" '$value | @uri')"
-database_password_uri="$(jq -rn --arg value "$database_password" '$value | @uri')"
-database_url="mysql://${database_user_uri}:${database_password_uri}@${database_host}:${database_port}/cirkle"
+database_url="$(jq -er '.DATABASE_URL' <<<"$app_config")"
+s3_bucket="$(jq -er '.S3_BUCKET' <<<"$app_config")"
 
 umask 0077
-{
-  printf 'DATABASE_URL=%s\n' "$database_url"
-  jq -r 'to_entries[] | "\(.key)=\(.value | tostring)"' <<<"$app_config"
-} > /etc/cirkle/api.env
+jq -r 'del(.LOCAL_MYSQL_PASSWORD,.LOCAL_MYSQL_ROOT_PASSWORD) | to_entries[] | "\(.key)=\(.value | tostring)"' \
+  <<<"$app_config" >/etc/cirkle/api.env
 chown root:cirkle /etc/cirkle/api.env
 chmod 0640 /etc/cirkle/api.env
 
 sudo -H -u cirkle bash -lc "cd '$release_dir' && pnpm install --frozen-lockfile && pnpm db:generate && pnpm build:api"
-set -a
-# shellcheck disable=SC1091
-source /etc/cirkle/api.env
-set +a
-sudo -H -u cirkle env DATABASE_URL="$DATABASE_URL" bash -lc "cd '$release_dir' && pnpm db:migrate:deploy"
-sudo -H -u cirkle env DATABASE_URL="$DATABASE_URL" NODE_ENV=production HOST=127.0.0.1 PORT=3001 TRUST_PROXY_HOPS=2 CORS_ORIGINS=https://cirkle-react.cirkle.world APP_BASE_URL=https://cirkle-react.cirkle.world FRONTEND_URL=https://cirkle-react.cirkle.world JWT_ACCESS_SECRET="$JWT_ACCESS_SECRET" JWT_REFRESH_SECRET="$JWT_REFRESH_SECRET" IP_HASH_SECRET="$IP_HASH_SECRET" OTP_PEPPER="$OTP_PEPPER" STORAGE_SIGNING_SECRET="$STORAGE_SIGNING_SECRET" COOKIE_SECURE=true REQUIRE_PROVIDER_CONFIG=false APPSYNC_ENABLED=false STORAGE_DRIVER=s3 AWS_REGION="$AWS_REGION" S3_BUCKET="$S3_BUCKET" bash -lc "cd '$release_dir' && pnpm supabase:import:full --file='$import_dir/manifest.json' --apply --upload-objects"
+sudo -H -u cirkle env DATABASE_URL="$database_url" bash -lc "cd '$release_dir' && pnpm db:migrate:deploy"
+if [[ "$import_supabase" == "true" ]]; then
+  sudo -H -u cirkle env DATABASE_URL="$database_url" NODE_ENV=production HOST=127.0.0.1 PORT=3001 TRUST_PROXY_HOPS=1 CORS_ORIGINS=https://cirkle-react.cirkle.world APP_BASE_URL=https://cirkle-react.cirkle.world FRONTEND_URL=https://cirkle-react.cirkle.world JWT_ACCESS_SECRET="$(jq -er '.JWT_ACCESS_SECRET' <<<"$app_config")" JWT_REFRESH_SECRET="$(jq -er '.JWT_REFRESH_SECRET' <<<"$app_config")" IP_HASH_SECRET="$(jq -er '.IP_HASH_SECRET' <<<"$app_config")" OTP_PEPPER="$(jq -er '.OTP_PEPPER' <<<"$app_config")" STORAGE_SIGNING_SECRET="$(jq -er '.STORAGE_SIGNING_SECRET' <<<"$app_config")" COOKIE_SECURE=true REQUIRE_PROVIDER_CONFIG=false APPSYNC_ENABLED=false STORAGE_DRIVER=s3 AWS_REGION="$AWS_REGION" S3_BUCKET="$s3_bucket" bash -lc "cd '$release_dir' && pnpm supabase:import:full --file='$import_dir/manifest.json' --apply --upload-objects"
+fi
 
 frontend_next="/srv/cirkle/frontend-next-${release_id}"
 install -d -o root -g root -m 0755 "$frontend_next"
@@ -87,6 +78,8 @@ WantedBy=multi-user.target
 SYSTEMD
 systemctl daemon-reload
 systemctl enable --now cirkle-api
+install -o root -g root -m 0750 "$release_dir/aws/hosting/backup-local-mysql.sh" /usr/local/sbin/cirkle-mysql-backup
+AWS_REGION="$AWS_REGION" BACKUP_BUCKET="$s3_bucket" "$release_dir/aws/hosting/install-budget-services.sh"
 nginx -t
 systemctl reload nginx
 
