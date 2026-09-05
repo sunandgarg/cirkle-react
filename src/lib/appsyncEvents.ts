@@ -15,7 +15,6 @@ type Listener = {
 const provider = import.meta.env.VITE_CHAT_REALTIME_PROVIDER;
 const realtimeEndpoint = import.meta.env.VITE_APPSYNC_REALTIME_ENDPOINT;
 const httpEndpoint = import.meta.env.VITE_APPSYNC_HTTP_ENDPOINT;
-const BACKGROUND_IDLE_MS = 30_000;
 const DEFAULT_KEEP_ALIVE_TIMEOUT_MS = 300_000;
 const MAX_SUBSCRIPTIONS = 50;
 const MAX_SUBSCRIPTION_RETRIES = 6;
@@ -55,7 +54,6 @@ class AppSyncEventsClient {
   private readySocket: WebSocket | null = null;
   private listeners = new Map<string, Listener>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private hiddenTimer: ReturnType<typeof setTimeout> | null = null;
   private subscriptionRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectAttempt = 0;
   private connecting: Promise<void> | null = null;
@@ -67,13 +65,11 @@ class AppSyncEventsClient {
   constructor() {
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", () => {
-        if (document.hidden) this.scheduleBackgroundClose();
+        if (document.hidden) this.closeSocket();
         else this.resumeForeground();
       });
       // Mobile browsers can freeze JavaScript as soon as the page is moved to
-      // the background. Close synchronously for lifecycle events where a
-      // delayed timer is not guaranteed to run. A normal hidden tab still gets
-      // the 30-second grace period above.
+      // the background, so every hidden lifecycle closes synchronously.
       document.addEventListener("freeze", () => this.closeSocket());
       window.addEventListener("pagehide", () => this.closeSocket());
       window.addEventListener("pageshow", () => this.resumeForeground());
@@ -333,17 +329,7 @@ class AppSyncEventsClient {
     this.readySocket = null;
   }
 
-  private scheduleBackgroundClose() {
-    if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
-    this.hiddenTimer = setTimeout(() => {
-      this.hiddenTimer = null;
-      this.closeSocket();
-    }, BACKGROUND_IDLE_MS);
-  }
-
   private resumeForeground() {
-    if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
-    this.hiddenTimer = null;
     if (this.listeners.size) this.ensureConnection();
   }
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { generateKeyPairSync } from "node:crypto";
 import { config, productionConfigIssues } from "../src/config.js";
 import { requestPathForLog, responseForLog } from "../src/security/logging.js";
 
@@ -126,6 +127,25 @@ describe("production configuration", () => {
       .toContain("S3_BUCKET is required when STORAGE_DRIVER=s3");
     expect(productionConfigIssues({ ...production, STORAGE_DRIVER: "s3", S3_BUCKET: "cirkle-uploads-example" }))
       .toEqual([]);
+  });
+
+  it("requires a complete, AWS-hosted CloudFront signer configuration", () => {
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const encodedPrivateKey = Buffer.from(privateKey.export({ format: "pem", type: "pkcs8" })).toString("base64");
+    expect(productionConfigIssues({ ...production, CLOUDFRONT_DOMAIN: "example.cloudfront.net" }))
+      .toContain("CLOUDFRONT_DOMAIN, CLOUDFRONT_KEY_PAIR_ID, and CLOUDFRONT_PRIVATE_KEY_BASE64 must be configured together");
+    expect(productionConfigIssues({
+      ...production,
+      CLOUDFRONT_DOMAIN: "media.example.com",
+      CLOUDFRONT_KEY_PAIR_ID: "KEXAMPLE123",
+      CLOUDFRONT_PRIVATE_KEY_BASE64: encodedPrivateKey,
+    })).toContain("CLOUDFRONT_DOMAIN must be an AWS CloudFront distribution hostname");
+    expect(productionConfigIssues({
+      ...production,
+      CLOUDFRONT_DOMAIN: "d123example.cloudfront.net",
+      CLOUDFRONT_KEY_PAIR_ID: "KEXAMPLE123",
+      CLOUDFRONT_PRIVATE_KEY_BASE64: encodedPrivateKey,
+    })).toEqual([]);
   });
 });
 

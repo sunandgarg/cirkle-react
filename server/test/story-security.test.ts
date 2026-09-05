@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertUploadOverwriteAllowed, isOwnedReadyFile, messageReferencesObject, publicStorageObjectUrl, storyIsActive, verificationEvidenceIsLocked } from "../src/services/storage.js";
+import { assertUploadOverwriteAllowed, cloudFrontObjectUrlFor, isOwnedReadyFile, messageReferencesObject, publicStorageObjectUrl, storyIsActive, verificationEvidenceIsLocked } from "../src/services/storage.js";
 
 describe("friends-only story lifetime", () => {
   const now = new Date("2026-09-04T12:00:00.000Z");
@@ -25,6 +25,11 @@ describe("friends-only story lifetime", () => {
     expect(messageReferencesObject(legacy, "chat-media", "member/image.webp")).toBe(false);
     expect(messageReferencesObject({ ...legacy, media_bucket: "chat-media" }, "chat-media", "member/image.webp")).toBe(true);
     expect(messageReferencesObject({ voice_path: "member/voice.webm" }, "voice-notes", "member/voice.webm")).toBe(true);
+  });
+
+  it("builds encoded CloudFront object URLs without exposing query credentials", () => {
+    expect(cloudFrontObjectUrlFor("d123.cloudfront.net", "tenant-a/", "post-images", "member one/photo #1.webp"))
+      .toBe("https://d123.cloudfront.net/tenant-a/post-images/member%20one/photo%20%231.webp");
   });
 
   it("never permits verification evidence to be overwritten in place", () => {

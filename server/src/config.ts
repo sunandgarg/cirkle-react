@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
 
 const booleanString = z.enum(["true", "false"]).default("false").transform((v) => v === "true");
@@ -59,6 +60,9 @@ const schema = z.object({
   AWS_REGION: z.string().regex(/^[a-z]{2}-[a-z]+-\d$/).default("ap-south-1"),
   S3_BUCKET: z.string().min(3).max(63).optional(),
   S3_KEY_PREFIX: z.string().regex(/^[A-Za-z0-9!_.*'()/-]*$/).default(""),
+  CLOUDFRONT_DOMAIN: z.string().regex(/^[a-z0-9.-]+$/i).optional(),
+  CLOUDFRONT_KEY_PAIR_ID: z.string().min(8).max(128).optional(),
+  CLOUDFRONT_PRIVATE_KEY_BASE64: z.string().min(100).optional(),
   STORAGE_SIGNING_SECRET: z.string().min(16),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().max(20 * 1024 * 1024).default(20 * 1024 * 1024),
   MOBILE_TEST_MODE: booleanString,
@@ -152,6 +156,20 @@ export function productionConfigIssues(value: ServerConfig): string[] {
     }
   }
   if (value.STORAGE_DRIVER === "s3" && !value.S3_BUCKET) issues.push("S3_BUCKET is required when STORAGE_DRIVER=s3");
+  const cloudFrontValues = [value.CLOUDFRONT_DOMAIN, value.CLOUDFRONT_KEY_PAIR_ID, value.CLOUDFRONT_PRIVATE_KEY_BASE64];
+  if (cloudFrontValues.some(Boolean) && !cloudFrontValues.every(Boolean)) {
+    issues.push("CLOUDFRONT_DOMAIN, CLOUDFRONT_KEY_PAIR_ID, and CLOUDFRONT_PRIVATE_KEY_BASE64 must be configured together");
+  }
+  if (value.CLOUDFRONT_DOMAIN && !/^[a-z0-9-]+\.cloudfront\.net$/i.test(value.CLOUDFRONT_DOMAIN)) {
+    issues.push("CLOUDFRONT_DOMAIN must be an AWS CloudFront distribution hostname");
+  }
+  if (value.CLOUDFRONT_PRIVATE_KEY_BASE64) {
+    try {
+      const pem = Buffer.from(value.CLOUDFRONT_PRIVATE_KEY_BASE64, "base64").toString("utf8");
+      const key = createPrivateKey(pem);
+      if (key.asymmetricKeyType !== "rsa") throw new Error("not RSA");
+    } catch { issues.push("CLOUDFRONT_PRIVATE_KEY_BASE64 must contain a valid base64-encoded RSA private key"); }
+  }
   if (value.COOKIE_DOMAIN) issues.push("COOKIE_DOMAIN must be unset in production so the refresh cookie remains host-only");
   if (value.DAILY_DOMAIN) {
     try {

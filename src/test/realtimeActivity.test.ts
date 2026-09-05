@@ -1,11 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createRealtimeActivityController } from "@/hooks/useRealtimeActivity";
 
 describe("cost-aware realtime activity", () => {
-  afterEach(() => vi.useRealTimers());
-
-  it("keeps a hidden tab connected for 30 seconds, then suspends it", () => {
-    vi.useFakeTimers();
+  it("suspends immediately when a browser tab becomes hidden and resumes on return", () => {
     const windowTarget = new EventTarget();
     const documentTarget = Object.assign(new EventTarget(), {
       hidden: false,
@@ -21,9 +18,6 @@ describe("cost-aware realtime activity", () => {
     documentTarget.hidden = true;
     documentTarget.visibilityState = "hidden";
     documentTarget.dispatchEvent(new Event("visibilitychange"));
-    vi.advanceTimersByTime(29_999);
-    expect(onActiveChange).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
     expect(onActiveChange).toHaveBeenLastCalledWith(false);
 
     documentTarget.hidden = false;
@@ -33,8 +27,7 @@ describe("cost-aware realtime activity", () => {
     controller.dispose();
   });
 
-  it("cancels suspension when the user returns before 30 seconds", () => {
-    vi.useFakeTimers();
+  it("does not emit duplicate lifecycle states", () => {
     const windowTarget = new EventTarget();
     const documentTarget = Object.assign(new EventTarget(), {
       hidden: false,
@@ -46,13 +39,14 @@ describe("cost-aware realtime activity", () => {
     documentTarget.hidden = true;
     documentTarget.visibilityState = "hidden";
     documentTarget.dispatchEvent(new Event("visibilitychange"));
-    vi.advanceTimersByTime(10_000);
+    documentTarget.dispatchEvent(new Event("visibilitychange"));
     documentTarget.hidden = false;
     documentTarget.visibilityState = "visible";
     documentTarget.dispatchEvent(new Event("visibilitychange"));
-    vi.advanceTimersByTime(30_000);
 
-    expect(onActiveChange).not.toHaveBeenCalled();
+    expect(onActiveChange).toHaveBeenCalledTimes(2);
+    expect(onActiveChange).toHaveBeenNthCalledWith(1, false);
+    expect(onActiveChange).toHaveBeenNthCalledWith(2, true);
     expect(controller.isActive()).toBe(true);
     controller.dispose();
   });

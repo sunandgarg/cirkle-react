@@ -12,26 +12,21 @@ type VisibilityTarget = EventTargetLike & {
 
 type RealtimeActivityControllerOptions = {
   onActiveChange: (active: boolean) => void;
-  idleMs?: number;
   windowTarget?: EventTargetLike;
   documentTarget?: VisibilityTarget;
 };
 
-export const REALTIME_BACKGROUND_IDLE_MS = 30_000;
-
 /**
  * Keeps expensive room subscriptions alive only while the realtime screen is
- * usable. pagehide/freeze close immediately because mobile browsers can pause
- * JavaScript before a delayed timer gets another chance to run.
+ * visible. Browsers may throttle or freeze background JavaScript immediately,
+ * so visibilitychange, pagehide and freeze all suspend synchronously.
  */
 export const createRealtimeActivityController = ({
   onActiveChange,
-  idleMs = REALTIME_BACKGROUND_IDLE_MS,
   windowTarget = typeof window === "undefined" ? undefined : window,
   documentTarget = typeof document === "undefined" ? undefined : document,
 }: RealtimeActivityControllerOptions) => {
   let disposed = false;
-  let hiddenTimer: ReturnType<typeof setTimeout> | null = null;
   let active = !(documentTarget?.hidden || documentTarget?.visibilityState === "hidden");
 
   const setActive = (next: boolean) => {
@@ -39,27 +34,11 @@ export const createRealtimeActivityController = ({
     active = next;
     onActiveChange(next);
   };
-  const clearHiddenTimer = () => {
-    if (hiddenTimer !== null) clearTimeout(hiddenTimer);
-    hiddenTimer = null;
-  };
-  const suspendAfterIdle = () => {
-    clearHiddenTimer();
-    hiddenTimer = setTimeout(() => {
-      hiddenTimer = null;
-      setActive(false);
-    }, idleMs);
-  };
   const handleVisibility: EventListener = () => {
     const hidden = documentTarget?.hidden || documentTarget?.visibilityState === "hidden";
-    if (hidden) suspendAfterIdle();
-    else {
-      clearHiddenTimer();
-      setActive(true);
-    }
+    setActive(!hidden);
   };
   const handlePageHide: EventListener = () => {
-    clearHiddenTimer();
     setActive(false);
   };
   const handlePageShow: EventListener = () => {
@@ -76,7 +55,6 @@ export const createRealtimeActivityController = ({
     isActive: () => active,
     dispose: () => {
       disposed = true;
-      clearHiddenTimer();
       documentTarget?.removeEventListener("visibilitychange", handleVisibility);
       documentTarget?.removeEventListener("freeze", handlePageHide);
       windowTarget?.removeEventListener("pagehide", handlePageHide);
@@ -85,15 +63,15 @@ export const createRealtimeActivityController = ({
   };
 };
 
-export const useRealtimeActivity = (idleMs = REALTIME_BACKGROUND_IDLE_MS) => {
+export const useRealtimeActivity = () => {
   const [active, setActive] = useState(() =>
     typeof document === "undefined" || !(document.hidden || document.visibilityState === "hidden"));
 
   useEffect(() => {
-    const controller = createRealtimeActivityController({ onActiveChange: setActive, idleMs });
+    const controller = createRealtimeActivityController({ onActiveChange: setActive });
     setActive(controller.isActive());
     return controller.dispose;
-  }, [idleMs]);
+  }, []);
 
   return active;
 };

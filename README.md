@@ -13,9 +13,10 @@ workflows.
   Google OpenID Connect, email OTP, and password recovery
 - Transactional email: Zoho ZeptoMail
 - AI: OpenAI Responses API and the Google Gemini API
-- Realtime: AWS AppSync Events in production, with authorized Socket.IO fallback
+- Realtime: Socket.IO on the current budget deployment; optional AWS AppSync
+  invalidations for a separately operated topology
 - Frontend hosting: Cloudflare Pages
-- API hosting: Nginx and PM2
+- API hosting: AWS Lightsail, Nginx, and a hardened systemd service
 
 The React pages, components, routes, and styling are intentionally preserved.
 `src/integrations/supabase/client.ts` is now only a compatibility export for the
@@ -110,8 +111,9 @@ migrations, a verified backup, and the rollback procedure in
 
 Existing Supabase user passwords cannot be exported. Preserve user UUIDs and
 provider subjects during an approved data import, then require migrated
-password users to use the password-reset flow. A production import cannot be
-run until an owner-supplied database/storage export is available.
+password users to use the password-reset flow. A production import must always
+use an owner-authorized database/storage export and reconcile UUID,
+provider-subject, ownership, row-count, and object-count parity before cutover.
 
 ## Verification
 
@@ -137,10 +139,8 @@ Cloudflare Pages settings:
 - Build command: `pnpm build:pages`
 - Output directory: `dist`
 - Production branch: `pages-production` (advance only after the same commit's API passes `/readyz`)
-- Public environment value: `VITE_API_URL=https://api.cirkle.world`
-- Public environment value: `VITE_CHAT_REALTIME_PROVIDER=appsync`
-- Public environment value: `VITE_APPSYNC_HTTP_ENDPOINT=<stack HTTP output>`
-- Public environment value: `VITE_APPSYNC_REALTIME_ENDPOINT=<stack WebSocket output>`
+- Public environment value: `VITE_API_URL=https://api-react.cirkle.world`
+- Public environment value: `VITE_CHAT_REALTIME_PROVIDER=socketio`
 - Public environment value: `VITE_DAILY_CALLS_ENABLED=true`
 - Build environment value: `PNPM_VERSION=11.19.0`
 
@@ -148,11 +148,12 @@ The repository also includes `wrangler.jsonc`, SPA redirects, static security
 headers, a PM2 ecosystem file, an Nginx site template, MySQL backup helpers, and
 an atomic API deployment procedure under `deploy/`.
 
-Never place MySQL, JWT, Google client secret, ZeptoMail, OpenAI, Gemini, or the
-AppSync publisher/authorizer secrets in Cloudflare Pages browser variables.
-Those belong only on the API server. AWS is used only for the AppSync Event API
-and its minimal Lambda authorizer; frontend, API, and database hosting do not
-move to AWS. See `aws/realtime/README.md`.
+Never place MySQL, JWT, Google client secret, ZeptoMail, OpenAI, Gemini, or any
+AppSync publisher/authorizer secret in Cloudflare Pages browser variables.
+Those belong only on the API server. The current `cirkle-react` deployment uses
+a Lightsail API, private Lightsail managed MySQL, private S3, and Socket.IO; it
+does not enable AppSync. See `docs/AWS_HOSTING.md`. The optional AppSync-only
+topology remains documented separately in `aws/realtime/README.md`.
 
 ## Safety and migration
 

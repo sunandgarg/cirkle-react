@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { getSignedUrl as getCloudFrontSignedUrl } from "@aws-sdk/cloudfront-signer";
 import type { Express } from "express";
 import { config } from "../config.js";
 import { ApiError } from "../lib/errors.js";
@@ -46,6 +47,28 @@ function policy(bucket: string): BucketPolicy {
 
 function signature(bucket: string, objectPath: string, expires: number): string {
   return createHmac("sha256", config.STORAGE_SIGNING_SECRET).update(`${bucket}\n${objectPath}\n${expires}`).digest("base64url");
+}
+
+export function cloudFrontObjectUrlFor(domain: string, keyPrefix: string, bucket: string, objectPath: string): string {
+  const prefix = keyPrefix ? `${keyPrefix.replace(/\/+$/, "")}/` : "";
+  const key = `${prefix}${bucket}/${objectPath}`.split("/").map(encodeURIComponent).join("/");
+  return `https://${domain}/${key}`;
+}
+
+function cloudFrontObjectUrl(bucket: string, objectPath: string): string | null {
+  if (!config.CLOUDFRONT_DOMAIN) return null;
+  return cloudFrontObjectUrlFor(config.CLOUDFRONT_DOMAIN, config.S3_KEY_PREFIX, bucket, objectPath);
+}
+
+function signedCloudFrontObjectUrl(bucket: string, objectPath: string, expires: number): string | null {
+  const url = cloudFrontObjectUrl(bucket, objectPath);
+  if (!url || !config.CLOUDFRONT_KEY_PAIR_ID || !config.CLOUDFRONT_PRIVATE_KEY_BASE64) return null;
+  return getCloudFrontSignedUrl({
+    url,
+    keyPairId: config.CLOUDFRONT_KEY_PAIR_ID,
+    privateKey: Buffer.from(config.CLOUDFRONT_PRIVATE_KEY_BASE64, "base64").toString("utf8"),
+    dateLessThan: new Date(expires * 1000).toISOString(),
+  });
 }
 
 const opaqueHandlePattern = /^opaque\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
@@ -104,7 +127,7 @@ export function verificationEvidenceIsLocked(row: Record<string, unknown>, objec
 }
 
 export function publicStorageObjectUrl(bucket: string, objectPath: string): string {
-  return new URL(
+  return cloudFrontObjectUrl(bucket, objectPath) || new URL(
     `/api/storage/public/${encodeURIComponent(bucket)}/${objectPath.split("/").map(encodeURIComponent).join("/")}`,
     config.APP_BASE_URL,
   ).toString();
@@ -352,6 +375,13 @@ export async function createSignedUrl(bucket: string, objectPathValue: string, e
   if (!(await canReadPrivate(bucket, objectPath, ctx))) throw new ApiError(403, "file_access_denied", "You cannot access this file");
   const ttl = Math.max(30, Math.min(expiresIn, 3600));
   const expires = Math.floor(Date.now() / 1000) + ttl;
+  // Opaque handles intentionally hide an anonymous author's user-prefixed S3
+  // key. Keep those on the authorized API path until media keys themselves are
+  // opaque; all ordinary private media can bypass Node through CloudFront.
+  if (!reference.signedPath.startsWith("opaque/")) {
+    const cloudFrontUrl = signedCloudFrontObjectUrl(bucket, objectPath, expires);
+    if (cloudFrontUrl) return cloudFrontUrl;
+  }
   const url = new URL(`/api/storage/private/${encodeURIComponent(bucket)}/${reference.signedPath.split("/").map(encodeURIComponent).join("/")}`, config.APP_BASE_URL);
   url.searchParams.set("expires", String(expires));
   url.searchParams.set("sig", signature(bucket, reference.signedPath, expires));
