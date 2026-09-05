@@ -1,5 +1,5 @@
 {
-  "name": "cirkle-world",
+  "name": "cirkle-react",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -45,7 +45,7 @@
     "mysql:start": "./scripts/local-mysql.sh start",
     "mysql:stop": "./scripts/local-mysql.sh stop",
     "mysql:status": "./scripts/local-mysql.sh status",
-    "pages:deploy": "node scripts/predeploy-pages.mjs && pnpm build:pages && wrangler pages deploy dist --project-name=cirkle-world --branch=pages-production",
+    "pages:deploy": "node scripts/predeploy-pages.mjs && pnpm build:pages && wrangler pages deploy dist --project-name=cirkle-react --branch=pages-production",
     "verify": "pnpm db:validate && pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   },
   "dependencies": {

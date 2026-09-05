@@ -99,8 +99,18 @@ The existing EC2 deployment, retained RDS snapshots, old buckets, and old secret
 
 ## Remaining production acceptance gates
 
-1. Rotate the ZeptoMail token that was pasted into chat, store only its replacement in Secrets Manager, then send and verify every live email template from `noreply@cirkle.world` through `https://api.zeptomail.in/v1.1/email`.
-2. Ask AWS Support to verify the account for CloudFront, deploy the conditional distribution, then test signed/private/public media behavior and cache headers.
-3. Configure and live-test Google, OpenAI, Gemini, KLIPY, and Daily credentials where those features are required.
-4. Decide whether the budget constraint or encrypted primary MySQL storage wins: keep the private USD 15 tier with encrypted off-boundary dumps, or upgrade to the USD 30 encrypted tier.
-5. Watch the Lightsail alarms, MySQL backup timer, certificate renewal timer, S3 backup arrival, API logs, and restore one backup into an isolated MySQL instance before declaring the disaster-recovery process rehearsed.
+Completed on 5 September 2026: a fresh ZeptoMail India send token, Google OAuth
+client secret, and KLIPY key were stored only in the Lightsail application
+secret; the API was restarted through a validated environment preflight. Google
+OAuth completed end to end on the live custom domain. ZeptoMail accepted the
+live OTP request, but `sunandgarg@cirkle.world` hard-bounced because that mailbox
+was not deliverable. KLIPY search works with the new key, which remains in the
+provider's TESTING state until its production-review form and product video are
+submitted.
+
+1. Create/fix the `sunandgarg@cirkle.world` mailbox (or explicitly choose a valid test recipient), then verify every live email template and delivery outcome.
+2. Submit KLIPY's production request with category, monthly-active-user estimate, product video, and required attribution.
+3. Ask AWS Support to verify the account for CloudFront, deploy the conditional distribution, then test signed/private/public media behavior and cache headers.
+4. Configure and live-test OpenAI, Gemini, and Daily credentials where those features are required.
+5. Decide whether the budget constraint or encrypted primary MySQL storage wins: keep the private USD 15 tier with encrypted off-boundary dumps, or upgrade to the USD 30 encrypted tier.
+6. Confirm the AWS alert email, allow the API burst balance to recover after release builds, and restore one fresh S3 backup into an isolated MySQL instance before declaring disaster recovery rehearsed.

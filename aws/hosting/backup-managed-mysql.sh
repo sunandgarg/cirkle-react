@@ -31,7 +31,7 @@ flock -n /run/lock/cirkle-mysql-backup.lock bash -c '
   password="$(printf %s "${encoded[3]}" | base64 -d)"
   database="$(printf %s "${encoded[4]}" | base64 -d)"
   MYSQL_PWD="$password" mariadb-dump --no-defaults --ssl --protocol=tcp --host="$host" --port="$port" --user="$user" \
-    --single-transaction --hex-blob --skip-lock-tables --skip-routines --skip-events --triggers --databases "$database" \
+    --single-transaction --hex-blob --skip-lock-tables --no-tablespaces --skip-routines --skip-events --triggers --databases "$database" \
     | gzip -9 >"$output"
   test -s "$output"
   gzip -t "$output"

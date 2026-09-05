@@ -135,7 +135,8 @@ instance.
 
 Cloudflare Pages settings:
 
-- Project: `cirkle-world` (`https://cirkle-world.pages.dev`)
+- Project: `cirkle-react` in Sunand's Cloudflare account (`https://cirkle-react.pages.dev`)
+- Custom domain: `https://cirkle-react.cirkle.world`
 - Build command: `pnpm build:pages`
 - Output directory: `dist`
 - Production branch: `pages-production` (advance only after the same commit's API passes `/readyz`)

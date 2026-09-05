@@ -368,9 +368,10 @@ operator approval.
 
 ## Cloudflare Pages
 
-Use the separate Pages project named `cirkle-world`; its production URL is
-`https://cirkle-world.pages.dev`. The legacy `cirkle` project and its domains
-must remain untouched until the API and data cutover is complete. Use:
+Use the separate Pages project named `cirkle-react` in Sunand's Cloudflare
+account; its production URLs are `https://cirkle-react.pages.dev` and
+`https://cirkle-react.cirkle.world`. The legacy `cirkle` project and its
+domains remain untouched. Use:
 
 ```text
 Production branch: pages-production
@@ -385,10 +386,8 @@ Set only these public build variables unless another reviewed frontend value is
 needed:
 
 ```dotenv
-VITE_API_URL=https://api.cirkle.world
-VITE_CHAT_REALTIME_PROVIDER=appsync
-VITE_APPSYNC_HTTP_ENDPOINT=https://API_ID.appsync-api.ap-south-1.amazonaws.com/event
-VITE_APPSYNC_REALTIME_ENDPOINT=wss://API_ID.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime
+VITE_API_URL=https://api-react.cirkle.world
+VITE_CHAT_REALTIME_PROVIDER=socketio
 VITE_DAILY_CALLS_ENABLED=true
 PNPM_VERSION=11.19.0
 ```
@@ -399,13 +398,14 @@ secret to Pages. AppSync endpoints are public identifiers and are safe there;
 the browser authenticates them with its short-lived Cirkle access JWT. Vite
 embeds every `VITE_` value in downloadable browser JavaScript.
 
-Connect both `cirkle.world` and `www.cirkle.world` as Pages custom domains and
-choose the apex as canonical. Do not configure `main` as the Pages production
-branch: the API migration and healthy backend must land before its matching UI.
+Do not attach `cirkle.world` or `www.cirkle.world` to this independent project.
+Keep `cirkle-react.cirkle.world` as its custom domain. Do not configure `main`
+as the Pages production branch: the API migration and healthy backend must land
+before its matching UI.
 
-In the Cloudflare dashboard, give `www.cirkle.world` a proxied DNS record, then
-create an account-level Bulk Redirect list entry with source
-`www.cirkle.world` and target `https://cirkle.world`. Enable **Subpath
+Only during a separately approved future apex cutover, give `www.cirkle.world`
+a proxied DNS record and create an account-level Bulk Redirect list entry with
+source `www.cirkle.world` and target `https://cirkle.world`. Enable **Subpath
 matching**, **Preserve path suffix**, and **Preserve query string**; leave
 **Include subdomains** off unless that broader redirect is intentional. Bulk
 Redirects are static and do not accept `${path}` replacement expressions. Test
