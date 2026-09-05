@@ -1,380 +1,257 @@
-# Cirkle deployment runbook
+# Cirkle production deployment and apex cutover
 
-This runbook deploys the React/Vite frontend to Cloudflare Pages and the Node
-API to one Linux host behind Nginx and PM2. MySQL 8.4 is private to the API
-host. Commands assume the production domains below:
+This runbook describes the selected production topology and the ordered move of
+`cirkle.world` from the retained legacy Pages project to `cirkle-react`.
 
-- Canonical frontend: `https://cirkle.world`
-- Alternate frontend: `https://www.cirkle.world`
-- API and authorized Socket.IO fallback: `https://api.cirkle.world`
-- Realtime fan-out: one AWS AppSync Event API in `ap-south-1`
-
-The `api.cirkle.world` record must be **DNS-only (grey cloud)** in Cloudflare.
-The production API deliberately trusts exactly one proxy hop: Nginx.
-
-Change all domain-specific configuration together if these names change. Do
-not deploy a partially changed set.
-
-## Request path
+## Production topology
 
 ```text
-Browser -> Cloudflare Pages (React dist/)
-        <-> AWS AppSync Events (realtime transport only)
-        -> api.cirkle.world (HTTPS)
-        -> Nginx
-        -> 127.0.0.1:3001 (one PM2 Node process)
-        -> MySQL 8.4 on 127.0.0.1:3306
+Browser -> Cloudflare Pages project cirkle-react
+           -> https://cirkle.world (canonical after cutover)
+           -> https://www.cirkle.world (redirects to canonical)
+           -> https://cirkle-react.cirkle.world (rollback/diagnostic origin)
+        -> https://api-react.cirkle.world
+           -> Nginx -> one Node 22 systemd service on Lightsail
+           -> private Lightsail managed MySQL 8.4
+           -> private encrypted/versioned S3
 
-Node API -> AppSync HTTP publish endpoint
-AppSync Lambda authorizer -> Node API channel authorization endpoint
+Foreground realtime: authorized Socket.IO at /api/socket.io
+Durable truth: MySQL; clients refetch after reconnect
+AppSync: disabled
 ```
 
-AWS hosts only AppSync and its minimal Lambda authorizer—not the frontend, API,
-database, uploads, or background jobs. MySQL is durable truth; AppSync is
-low-latency delivery. Socket.IO at `/api/socket.io` remains the local/outage
-fallback. The PM2 count stays at one because that fallback keeps subscriptions
-in process memory; do not add API workers until a shared fallback adapter and
-sticky-session plan are tested.
+The legacy Cloudflare `cirkle` project, its `cirkle.pages.dev` hostname, and the
+Supabase source remain intact during the rollback window. A cutover changes
+routing; it does not authorize deletion from Supabase, the legacy Pages project,
+or AWS.
 
 ## Release gates
 
-Never cut production over unless all of these are true:
+Do not move a production hostname until all gates are satisfied:
 
-1. The existing Supabase database and object storage have independent,
-   restorable backups.
-2. A migration rehearsal has preserved user UUIDs, identity provider subjects,
-   ownership, anonymous-author visibility, timestamps, and media references.
-3. The repository contains reviewed Prisma migrations under
-   `prisma/migrations/`. Production never runs `prisma db push`.
-4. `pnpm verify` succeeds on the exact commit being released.
-5. Email/password, email OTP, password reset, Google login, uploads, core data
-   writes, AppSync authorization/delivery/recovery, Socket.IO fallback, and
-   owner/admin access have passed staging tests.
-6. A rollback-compatible release and a fresh MySQL backup are available.
+1. `pnpm verify` succeeds on the exact commit selected for both API and Pages.
+2. The API release is deployed first and its loopback `/readyz` passes.
+3. Public `/healthz`, Socket.IO handshake, CORS, OAuth callback, email, GIF,
+   storage, and two-browser forum/chat tests pass on
+   `https://cirkle-react.cirkle.world`.
+4. The final Supabase export has been applied idempotently and destination UUID,
+   ownership, row-count, and S3 object-count parity is recorded.
+5. A fresh encrypted database backup exists outside the managed database's
+   primary failure boundary and its checksum is valid.
+6. The old Pages project, previous `cirkle-react` deployment, and prior API
+   release remain available for rollback.
 
-MySQL DDL can be non-transactional. Every schema migration must be backward
-compatible with the immediately previous application release. The automated
-rollback changes application code only; it never guesses how to reverse data.
+MySQL schema changes must be backward-compatible with the immediately previous
+API release. Frontend rollback never reverses database migrations.
 
-## Local development
+## API configuration
 
-Requirements are Node.js 22, pnpm 11, and Docker with Compose:
+The protected API environment is installed on the Lightsail host. Keep all
+provider keys, database credentials, JWT secrets, storage signing material, and
+OAuth client secrets out of Git and out of every `VITE_*` variable.
 
-```sh
-corepack enable
-pnpm install --frozen-lockfile
-cp .env.example .env
-docker compose up -d mysql
-docker compose ps
-pnpm db:generate
-pnpm db:migrate:deploy
-pnpm db:seed
-pnpm dev
-```
-
-Local endpoints:
-
-- Frontend: `http://localhost:8080`
-- API liveness: `http://localhost:3001/healthz`
-- API/database/storage readiness: `http://localhost:3001/readyz`
-
-Vite proxies `/api`, including `/api/socket.io`, to port 3001. Keep
-`VITE_API_URL` empty locally so browser requests stay same-origin. Use
-`docker compose down` to stop MySQL; do not add `--volumes` unless permanent
-deletion of the local database is genuinely intended.
-
-## Production secrets
-
-Secrets belong on the API host, never in Cloudflare Pages variables or Git.
-Before these commands, install Docker Engine with its Compose plugin as well
-as Node.js 22, pnpm 11, PM2, Nginx, logrotate, a MySQL 8.4 client, `git`,
-`curl`, `tar`, `gzip`, and `flock`. Verify `docker compose version` succeeds.
-
-Create a dedicated service account and protected directories, then clone the
-reviewed repository into a service-owned source directory. The remaining
-relative paths in this runbook assume the shell is in that checkout:
-
-```sh
-sudo useradd --system --user-group --create-home --shell /bin/bash cirkle
-# The top-level directory is traversable so the administrator can inspect the
-# non-secret source checkout; releases, uploads, and logs remain mode 0750.
-sudo install -d -o cirkle -g cirkle -m 0755 /srv/cirkle
-sudo install -d -o cirkle -g cirkle -m 0750 /srv/cirkle/releases
-sudo install -d -o cirkle -g cirkle -m 0750 /srv/cirkle/shared
-sudo install -d -o cirkle -g cirkle -m 0750 /srv/cirkle/shared/storage
-sudo install -d -o cirkle -g cirkle -m 0750 /srv/cirkle/shared/logs
-sudo install -d -o cirkle -g cirkle -m 0750 /var/backups/cirkle/mysql
-sudo -H -u cirkle git clone https://github.com/sunandgarg/cirkle-react.git /srv/cirkle/source
-cd /srv/cirkle/source
-sudo install -d -o root -g cirkle -m 0750 /etc/cirkle
-sudo install -o root -g cirkle -m 0640 .env.production.example /etc/cirkle/api.env
-sudo install -o root -g cirkle -m 0640 deploy/backup.env.example /etc/cirkle/backup.env
-sudo install -o root -g root -m 0600 deploy/mysql.env.example /etc/cirkle/mysql.env
-sudoedit /etc/cirkle/api.env
-sudoedit /etc/cirkle/backup.env
-sudoedit /etc/cirkle/mysql.env
-```
-
-`/etc/cirkle/api.env` contains only Node runtime values;
-`/etc/cirkle/backup.env` contains only a least-privilege dump account; and
-root-only `/etc/cirkle/mysql.env` contains Docker bootstrap credentials,
-including the MySQL root password. The first two remain root-owned and
-group-readable by `cirkle`; the MySQL file must remain root:root mode 0600.
-All are sourced by trusted scripts, so quote shell metacharacters.
-
-Generate independent high-entropy values for every JWT, hashing, pepper,
-storage, AppSync authorizer, and AppSync publisher secret. Do not reuse
-database, Google, ZeptoMail, OpenAI, Gemini, or AppSync credentials. A password
-inside `DATABASE_URL` must be URL-encoded.
-
-Production-critical values include:
+The domain-sensitive non-secret contract is:
 
 ```dotenv
 NODE_ENV=production
 HOST=127.0.0.1
 PORT=3001
 TRUST_PROXY_HOPS=1
-CORS_ORIGINS=https://cirkle.world,https://www.cirkle.world
-APP_BASE_URL=https://api.cirkle.world
+DATABASE_URL=mysql://cirkle_app:<URL_ENCODED_PASSWORD>@<PRIVATE_DB_HOST>:3306/cirkle?sslcert=%2Fetc%2Fcirkle%2Fmysql-ca.pem&sslaccept=strict&connection_limit=5
+CORS_ORIGINS=https://cirkle.world,https://www.cirkle.world,https://cirkle-react.cirkle.world,https://cirkle-react.pages.dev
+APP_BASE_URL=https://api-react.cirkle.world
 FRONTEND_URL=https://cirkle.world
+GOOGLE_REDIRECT_URI=https://api-react.cirkle.world/api/auth/google/callback
 COOKIE_SECURE=true
-MOBILE_TEST_MODE=false
-ENABLE_SEED_DATA=false
-GOOGLE_REDIRECT_URI=https://api.cirkle.world/api/auth/google/callback
-APPSYNC_ENABLED=true
-APPSYNC_HTTP_ENDPOINT=https://API_ID.appsync-api.ap-south-1.amazonaws.com/event
+APPSYNC_ENABLED=false
+STORAGE_DRIVER=s3
 ```
 
-Leave `COOKIE_DOMAIN` unset. That creates a narrower, host-only refresh cookie
-for `api.cirkle.world`. The cookie is `Secure`, `HttpOnly`, and scoped by the
-API to `/api/auth`.
+Leave `COOKIE_DOMAIN` unset so the refresh cookie remains host-only. Nginx is
+the one trusted proxy hop and must replace, not append to, untrusted inbound
+forwarded-address headers. `api-react.cirkle.world` remains DNS-only so Nginx
+terminates publicly trusted TLS directly.
 
-The deploy script refuses placeholders and requires the Google, ZeptoMail,
-OpenAI, Gemini, KLIPY, and Daily credentials. This is deliberate: a release
-must not appear healthy while a visible production integration is silently
-absent.
+Provider credentials are optional only when the corresponding product feature
+fails closed. The current API has no `DAILY_API_KEY`, so Pages must keep
+`VITE_DAILY_CALLS_ENABLED=false`. Calls can be enabled later only when both
+conditions are true:
 
-### External provider setup
+1. The protected API environment contains a valid `DAILY_API_KEY` and
+   `GET /api/features` reports `{ "daily_calls": true }`.
+2. The reviewed Pages build sets `VITE_DAILY_CALLS_ENABLED=true`.
 
-- Google Cloud: register exactly
-  `https://api.cirkle.world/api/auth/google/callback` as an authorized redirect
-  URI. Use `https://cirkle.world` as the application origin and consent-screen
-  home page.
-- Zoho ZeptoMail: verify `cirkle.world` and `noreply@cirkle.world`, configure its
-  current SPF/DKIM records and bounce subdomain, publish a DMARC policy, and use
-  a rotated server-side Send Mail API key. The current India Agent requires
-  `ZEPTOMAIL_API_URL=https://api.zeptomail.in/v1.1/email`; SMTP credentials are
-  not used by the Node service. A successful send response proves provider
-  acceptance only. ZeptoMail delivery/bounce webhooks are not yet persisted by
-  this application, so inspect processed-email logs during acceptance testing.
-- OpenAI and Gemini: use separate restricted production keys with billing and
-  usage alerts. These keys are server-only; no key name may start with `VITE_`.
-- KLIPY: use a production API key and verify search, trending, and share
-  attribution behavior with a normal member account.
-- Daily: use a production API key. `DAILY_DOMAIN` is optional and should contain
-  only the assigned room hostname (for example, `your-team.daily.co`) when a
-  fallback URL is needed.
-- AWS AppSync Events: activate the AWS account, deploy only
-  `aws/realtime/template.yaml` in `ap-south-1`, and copy its endpoints to the
-  API/Pages settings exactly as documented in `aws/realtime/README.md`. Keep
-  `APPSYNC_PUBLISH_TOKEN` and `APPSYNC_AUTHORIZER_SECRET` only in the protected
-  API environment; they are never `VITE_` values. The Node host requires no AWS
-  access key for runtime publishing.
+The UI defaults to disabled if either gate is false, the feature endpoint is
+unavailable, or its response is malformed. The endpoint exposes capability
+booleans only and never returns provider credentials.
 
-Provider dashboards and DNS records change independently of this repository.
-Verify them directly before launch and after any credential rotation.
+## Managed MySQL TLS and credential split
 
-## MySQL 8.4
+Production accepts only the private AWS managed-database hostname with verified
+TLS. Install the AWS database CA at `/etc/cirkle/mysql-ca.pem`; the file is
+public trust material and must be readable by the `cirkle` service account.
+Runtime, migration, and backup credentials must be distinct:
 
-For a single-host launch, start the MySQL 8.4 LTS major series through Compose while
-keeping its port bound to loopback:
+- `/etc/cirkle/api.env` uses `cirkle_app`, which has data read/write grants but
+  no schema-change grants.
+- `/etc/cirkle/migration.env` uses `cirkle_migrate`, is `root:root` mode `0600`,
+  and is read only during a release.
+- `/etc/cirkle/backup.env` uses read-only `cirkle_backup`, is `root:root` mode
+  `0600`, and is read only by the backup service.
+
+All Prisma URLs require `sslcert=%2Fetc%2Fcirkle%2Fmysql-ca.pem` and
+`sslaccept=strict`. URL-encode passwords. Do not put the master or migration
+credential in the runtime file, and do not store provider or database secrets
+in MySQL.
+
+Use this live rollout order; changing it can break backups or the running API:
+
+1. Preserve the current API environment and release for rollback. Install and
+   inspect the AWS CA bundle, then confirm the `cirkle` account can read it.
+2. Create four protected password files: existing master plus newly generated,
+   independent runtime, migration, and backup values. Keep every file mode
+   `0600`; `openssl rand -hex 32` produces a compatible new value.
+3. Copy `aws/hosting/database-provision.env.example` outside the checkout,
+   replace only its host/user/file-path placeholders, protect it mode `0600`,
+   export its values, and run `setup-lightsail-db.sh` as root. The script stops
+   unless every account negotiates a non-empty TLS cipher.
+4. Build `/root/cirkle-managed-backup.env` from
+   `managed-backup.env.example`, then run:
+
+   ```sh
+   sudo env BACKUP_ENV_FILE=/root/cirkle-managed-backup.env \
+     ./aws/hosting/install-managed-backup.sh
+   ```
+
+   Installation must finish a real dump and verify its encrypted S3 object and
+   SHA-256 metadata. Do not continue after a failed backup.
+5. Install the real migration file from `migration.env.example` as
+   `/etc/cirkle/migration.env` with owner `root:root` and mode `0600`. Prepare a
+   root-only candidate API environment using only `cirkle_app`.
+6. Run the release helper with the reviewed archive, candidate API environment,
+   and migration environment:
+
+   ```sh
+   sudo ./aws/hosting/deploy-lightsail-release.sh \
+     /tmp/cirkle-react-source.tar.gz \
+     /root/cirkle-react-api.env \
+     /etc/cirkle/migration.env
+   ```
+
+   It requires another verified backup, applies migrations with
+   `cirkle_migrate`, validates database and storage with staged `cirkle_app`,
+   atomically switches code and configuration, and restores both on a failed
+   readiness check.
+7. Run the host and public checks below, inspect grants and TLS-session status,
+   then complete the two-browser acceptance suite. Retain the old broad
+   database user throughout the rollback window; disabling it is a later,
+   explicitly approved decommission step.
+8. After every active and rollback client has a strict-TLS URL, enable the
+   managed database's global backstop:
+
+   ```sh
+   aws lightsail update-relational-database-parameters \
+     --region ap-south-1 \
+     --relational-database-name cirkle-react-mysql \
+     --parameters parameterName=require_secure_transport,parameterValue=1,applyMethod=pending-reboot
+   aws lightsail reboot-relational-database \
+     --region ap-south-1 \
+     --relational-database-name cirkle-react-mysql
+   ```
+
+   `REQUIRE SSL` on the three users is effective immediately and needs no
+   reboot. The Lightsail `require_secure_transport` parameter is explicitly
+   `pending-reboot`, so enabling it does require a controlled database restart
+   and a brief API outage. Wait for database state `available`, then require
+   `SELECT @@GLOBAL.require_secure_transport` to return `1`, a non-empty
+   `Ssl_cipher` for all three identities, `/readyz`, a fresh backup, and the
+   browser write/reconnect checks before apex cutover.
+
+The following verification reads passwords from protected files and never puts
+them on the command line or prints them:
 
 ```sh
-sudo docker compose --env-file /etc/cirkle/mysql.env up -d mysql
-sudo docker compose --env-file /etc/cirkle/mysql.env ps
-```
-
-The named `cirkle_mysql_data` volume survives normal container replacement.
-Changing `MYSQL_USER`, `MYSQL_PASSWORD`, or `MYSQL_ROOT_PASSWORD` after the
-volume is initialized does not rotate existing database credentials.
-
-Create a least-privilege backup account. On MySQL 8.4, the dump options in the
-repository need read access to tables, views, and triggers:
-
-```sql
-CREATE USER 'cirkle_backup'@'%' IDENTIFIED BY 'a-separate-long-random-password';
-GRANT SELECT, SHOW VIEW, TRIGGER ON cirkle.* TO 'cirkle_backup'@'%';
-```
-
-The current Prisma schema defines no stored routines or MySQL events, so the
-backup deliberately does not request them. If either is introduced later, add
-the corresponding dump flags and global privileges in the same reviewed change.
-
-Put that account only in the `MYSQL_BACKUP_*` settings. Test a backup before
-the first release:
-
-```sh
-sudo -H -u cirkle CIRKLE_ENV_FILE=/etc/cirkle/backup.env bash deploy/scripts/backup-mysql.sh
-```
-
-Each successful dump is written atomically, gzip-tested, and accompanied by a
-SHA-256 file. A failed or unverified backup stops deployment. Set
-`MYSQL_BACKUP_RETENTION_DAYS=0` to disable automatic expiry. When retention is
-positive, the script prints every expired file it removes.
-
-Copy backups to encrypted off-host storage and perform recurring restore drills
-on an isolated non-production MySQL instance or container. The dump contains a
-`CREATE DATABASE`/`USE` statement for the production database name, so an empty
-schema on the production server is not a safe restore target. Never test a
-restore against the live MySQL instance and never treat a Docker volume as the
-only backup.
-
-## API host, TLS, and Nginx
-
-The host prerequisites, including Docker Engine and the Compose plugin, were
-installed and verified before the checkout above. Point the `api.cirkle.world`
-DNS record at this host as a Cloudflare **DNS-only (grey-cloud)** record. Nginx
-is the sole proxy between public clients and Node, matching
-`TRUST_PROXY_HOPS=1`.
-
-Nginx expects these files:
-
-```text
-/etc/cirkle/tls/fullchain.pem
-/etc/cirkle/tls/privkey.pem
-```
-
-Install a publicly trusted certificate. A Cloudflare Origin CA certificate is
-not valid for this DNS-only API origin. For Let's Encrypt HTTP validation,
-obtain the first certificate before enabling the TLS site, then point the two
-paths above at the managed certificate. The port 80 server already exposes
-`/.well-known/acme-challenge/` from `/var/www/certbot` for renewal. Test the
-configured renewal method; do not assume it works.
-
-Protect the private key and enable the site:
-
-```sh
-sudo install -d -o root -g root -m 0755 /etc/cirkle/tls /var/www/certbot
-sudo chmod 0600 /etc/cirkle/tls/privkey.pem
-sudo install -o root -g root -m 0644 deploy/nginx/cirkle.conf /etc/nginx/sites-available/cirkle.conf
-sudo install -o root -g root -m 0644 deploy/logrotate/cirkle /etc/logrotate.d/cirkle
-sudo ln -s /etc/nginx/sites-available/cirkle.conf /etc/nginx/sites-enabled/cirkle.conf
-sudo nginx -t
-sudo logrotate --debug /etc/logrotate.d/cirkle
-sudo systemctl enable --now logrotate.timer
-sudo systemctl status logrotate.timer
-sudo systemctl reload nginx
-```
-
-If the enabled-site symlink already exists, inspect it instead of overwriting
-it. Permit public inbound TCP 80/443 only; never expose ports 3001 or 3306.
-Restrict SSH. Because the API is DNS-only, public clients must reach Nginx on
-HTTPS directly; ports 3001 and 3306 remain loopback-only.
-
-Nginx overwrites inbound `X-Forwarded-For` with `$remote_addr`, preventing a
-caller from injecting a trusted proxy chain. Its dedicated access-log format
-uses `$uri` (pathname) and never `$request`, `$request_uri`, `$args`, or the
-referrer, so OAuth codes and signed-storage query credentials are not written
-to access logs. Nginx error logging is critical-only because upstream errors can
-embed a full request line; sanitized application errors remain available in
-PM2. `/readyz` is loopback-only because it exercises MySQL and storage, while
-the cheap `/healthz` liveness endpoint may remain public.
-
-Nginx does not emit `Access-Control-Allow-Origin`. Node owns CORS so there is
-exactly one credential-aware policy. Adding a second CORS layer can create
-duplicate headers and break refresh cookies.
-
-## Deploy the API
-
-The deployment helper exports the current committed `HEAD`; it never copies
-working-tree edits, `.env`, or `.env.production`. It then installs locked
-dependencies, validates and generates Prisma, builds the server, runs server
-tests, creates a verified database backup, applies committed migrations,
-atomically switches `/srv/cirkle/current`, reloads PM2, and waits for database
-readiness. A failed readiness check restores the prior application release.
-
-Update the service-owned checkout and deploy from it. Run Git and the release
-script as `cirkle`; an administrator account must not write files into this
-checkout under its own ownership:
-
-```sh
-sudo -H -u cirkle git -C /srv/cirkle/source fetch --prune origin
-sudo -H -u cirkle git -C /srv/cirkle/source switch main
-sudo -H -u cirkle git -C /srv/cirkle/source pull --ff-only origin main
-sudo -H -u cirkle bash -lc 'cd /srv/cirkle/source && CIRKLE_ENV_FILE=/etc/cirkle/api.env CIRKLE_OPS_ENV_FILE=/etc/cirkle/backup.env bash deploy/scripts/deploy-backend.sh'
-```
-
-Do not set `CIRKLE_RUN_SERVER_TESTS=false` for a normal production release. It
-exists only for a documented incident response when the exact tests have
-already passed on the same commit.
-
-After the first healthy release, configure PM2 resurrection while logged in as
-the `cirkle` user:
-
-```sh
-pm2 status
-pm2 save
-pm2 startup
-```
-
-Run the exact privileged command printed by `pm2 startup`, then verify a reboot
-in a maintenance window. PM2 loads secrets directly from
-`/etc/cirkle/api.env` through Node's `--env-file` support; no secret is copied
-into a release. PM2 writes to `/srv/cirkle/shared/logs`; the installed logrotate
-policy rotates daily or at 25 MiB, retains 14 compressed rotations, and prevents
-unbounded growth. Monitor disk usage and alert well before capacity.
-
-Old releases are intentionally not deleted automatically. Remove them only
-after backup verification, rollback-window expiry, and disk-space review.
-
-To create the first owner, stop the API, temporarily expose the bootstrap file
-only to the dedicated service group, run all repository code as `cirkle`, then
-delete the file before restarting:
-
-```sh
-(
+sudo bash <<'VERIFY_DATABASE_TLS'
 set -Eeuo pipefail
-sudo -H -u cirkle pm2 stop cirkle-api
-bootstrap_file=/etc/cirkle/bootstrap.env
-sudo install -o root -g cirkle -m 0640 deploy/bootstrap.env.example "${bootstrap_file}"
-trap 'sudo rm -f -- "${bootstrap_file}"' EXIT
-sudoedit "${bootstrap_file}"
-sudo -H -u cirkle CIRKLE_ENV_FILE=/etc/cirkle/api.env CIRKLE_BOOTSTRAP_ENV_FILE="${bootstrap_file}" bash /srv/cirkle/current/deploy/scripts/seed-owner.sh
-sudo rm -- "${bootstrap_file}"
-trap - EXIT
-sudo -H -u cirkle CIRKLE_ENV_FILE=/etc/cirkle/api.env CIRKLE_LOG_DIR=/srv/cirkle/shared/logs pm2 startOrReload /srv/cirkle/current/ecosystem.config.cjs --env production --update-env
+host=ls-54013416ec518334a0e5cfd04c3ff56124885af1.c9k2y2q446df.ap-south-1.rds.amazonaws.com
+ca=/etc/cirkle/mysql-ca.pem
+accounts=(
+  "cirkle_app:/root/cirkle-db-app.password"
+  "cirkle_migrate:/root/cirkle-db-migration.password"
+  "cirkle_backup:/root/cirkle-db-backup.password"
 )
+for account in "${accounts[@]}"; do
+  user="${account%%:*}"
+  password_file="${account#*:}"
+  result="$(MYSQL_PWD="$(<"${password_file}")" mysql --no-defaults \
+    --protocol=tcp --host="${host}" --port=3306 --user="${user}" \
+    --database=cirkle --ssl --ssl-ca="${ca}" --ssl-verify-server-cert \
+    --batch --skip-column-names \
+    --execute="SELECT CURRENT_USER(); SHOW SESSION STATUS LIKE 'Ssl_cipher';")"
+  cipher="$(awk '$1 == "Ssl_cipher" { print $2 }' <<<"${result}")"
+  [[ -n "${cipher}" ]] || { echo "${user}: TLS verification failed" >&2; exit 1; }
+  echo "${user}: verified TLS (${cipher})"
+done
+global_setting="$(MYSQL_PWD="$(</root/cirkle-db-app.password)" mysql --no-defaults \
+  --protocol=tcp --host="${host}" --port=3306 --user=cirkle_app \
+  --database=cirkle --ssl --ssl-ca="${ca}" --ssl-verify-server-cert \
+  --batch --skip-column-names --execute="SELECT @@GLOBAL.require_secure_transport;")"
+[[ "${global_setting}" == "1" ]] || { echo "Global secure transport is not active" >&2; exit 1; }
+VERIFY_DATABASE_TLS
 ```
 
-No service process runs while the temporary seed password is group-readable,
-and no service-user-writable release file is ever executed as root. The script
-exports only `DATABASE_URL` and seed fields to Prisma.
+## API release
 
-### Roll back application code
+Use the immutable Lightsail release helper in
+`aws/hosting/deploy-lightsail-release.sh`. It installs locked dependencies,
+validates and generates Prisma, builds the API, applies committed migrations,
+checks database/storage readiness, atomically switches `/srv/cirkle/current`,
+and restores the previous release if readiness fails.
 
-By default the rollback helper selects `/srv/cirkle/previous`. An explicit
-target must be a release basename from `/srv/cirkle/releases`:
+Before activation:
 
 ```sh
-sudo -H -u cirkle CIRKLE_ENV_FILE=/etc/cirkle/api.env bash deploy/scripts/rollback-backend.sh
-sudo -H -u cirkle CIRKLE_ENV_FILE=/etc/cirkle/api.env bash deploy/scripts/rollback-backend.sh 20260904T120000Z-abcdef123456
+pnpm install --frozen-lockfile
+pnpm db:validate
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
 ```
 
-The helper atomically switches the symlink, reloads PM2, checks `/readyz`, and
-restores the current release if the rollback target fails. It does not reverse
-MySQL migrations. A database restore is a separate, destructive incident
-procedure requiring an outage, an independently verified backup, and explicit
-operator approval.
+Take and verify the managed-MySQL backup before migrations. Do not use
+`prisma db push` against production. Do not put a plaintext export or protected
+environment file in a source archive.
 
-## Cloudflare Pages
+After activation, verify on the host:
 
-Use the separate Pages project named `cirkle-react` in Sunand's Cloudflare
-account; its production URLs are `https://cirkle-react.pages.dev` and
-`https://cirkle-react.cirkle.world`. The legacy `cirkle` project and its
-domains remain untouched. Use:
+```sh
+curl --fail --show-error http://127.0.0.1:3001/healthz
+curl --fail --show-error http://127.0.0.1:3001/readyz
+sudo systemctl is-active cirkle-api
+sudo journalctl -u cirkle-api --no-pager -n 100
+sudo nginx -t
+```
+
+Then verify from the public network:
+
+```sh
+curl --fail --show-error https://api-react.cirkle.world/healthz
+curl --fail --show-error 'https://api-react.cirkle.world/api/socket.io/?EIO=4&transport=polling'
+curl --fail --show-error https://api-react.cirkle.world/api/features
+```
+
+`/readyz` is intentionally restricted at Nginx and should not be treated as a
+public endpoint.
+
+## Cloudflare Pages configuration
+
+Use the existing `cirkle-react` project in Sunand's Cloudflare account:
 
 ```text
-Production branch: pages-production
+Project: cirkle-react
+Default production URL: https://cirkle-react.pages.dev
+Production branch: main
 Build command: pnpm build:pages
 Build output directory: dist
 Root directory: repository root
@@ -382,152 +259,130 @@ Node version: 22
 PNPM_VERSION: 11.19.0
 ```
 
-Set only these public build variables unless another reviewed frontend value is
-needed:
+The reviewed public build variables for the current release are:
 
 ```dotenv
 VITE_API_URL=https://api-react.cirkle.world
 VITE_CHAT_REALTIME_PROVIDER=socketio
-VITE_DAILY_CALLS_ENABLED=true
+VITE_DAILY_CALLS_ENABLED=false
 PNPM_VERSION=11.19.0
 ```
 
-Never add `DATABASE_URL`, JWT secrets, Google client secret, ZeptoMail token,
-OpenAI/Gemini keys, AppSync publisher/authorizer secrets, or the storage signing
-secret to Pages. AppSync endpoints are public identifiers and are safe there;
-the browser authenticates them with its short-lived Cirkle access JWT. Vite
-embeds every `VITE_` value in downloadable browser JavaScript.
+Leave `VITE_APPSYNC_HTTP_ENDPOINT` and
+`VITE_APPSYNC_REALTIME_ENDPOINT` absent. Vite embeds every `VITE_*` value in
+downloadable JavaScript, so no secret can use that prefix.
 
-Do not attach `cirkle.world` or `www.cirkle.world` to this independent project.
-Keep `cirkle-react.cirkle.world` as its custom domain. Do not configure `main`
-as the Pages production branch: the API migration and healthy backend must land
-before its matching UI.
-
-Only during a separately approved future apex cutover, give `www.cirkle.world`
-a proxied DNS record and create an account-level Bulk Redirect list entry with
-source `www.cirkle.world` and target `https://cirkle.world`. Enable **Subpath
-matching**, **Preserve path suffix**, and **Preserve query string**; leave
-**Include subdomains** off unless that broader redirect is intentional. Bulk
-Redirects are static and do not accept `${path}` replacement expressions. Test
-a nested path and OAuth return parameter. Adding both Pages custom domains
-alone does not create this canonical redirect. Follow Cloudflare's [Bulk
-Redirect guide](https://developers.cloudflare.com/rules/url-forwarding/bulk-redirects/create-dashboard/).
-
-For each release, require green CI on the exact commit, deploy that commit to
-the API host first, and wait for `/readyz`. Only then fast-forward the protected
-`pages-production` branch to the same commit (or perform the direct upload below
-from that exact checkout). This ordering is safe during the migration because
-the old frontend continues using the untouched legacy production service until
-the new Node API is healthy. Future API changes must remain backward-compatible
-for at least one frontend release.
-
-Direct-upload releases use the same checked-in configuration. The command
-refuses tracked, staged, or untracked project changes, prints the exact Git
-revision, validates the production build variables, and explicitly targets the
-Pages production branch:
+`wrangler.jsonc`, `package.json`, and the Pages dashboard all use the same
+project name and `main` production branch. A direct upload from a clean,
+committed checkout is:
 
 ```sh
-VITE_API_URL=https://api.cirkle.world \
-VITE_CHAT_REALTIME_PROVIDER=appsync \
-VITE_APPSYNC_HTTP_ENDPOINT=https://API_ID.appsync-api.ap-south-1.amazonaws.com/event \
-VITE_APPSYNC_REALTIME_ENDPOINT=wss://API_ID.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime \
-VITE_DAILY_CALLS_ENABLED=true pnpm pages:deploy
+VITE_API_URL=https://api-react.cirkle.world \
+VITE_CHAT_REALTIME_PROVIDER=socketio \
+VITE_DAILY_CALLS_ENABLED=false \
+pnpm pages:deploy
 ```
 
-If frontend publication fails, leave the healthy backward-compatible API in
-place and redeploy the prior Pages commit. Never publish a frontend that expects
-an API migration which has not passed readiness.
+The command rejects a dirty checkout, unreviewed public variables, the old API
+origin, AppSync endpoints, and ambiguous Daily flag values.
 
-Cloudflare Pages supplies its native SPA fallback because this build contains
-root `index.html` and no root `404.html`. `public/_redirects` records why no
-catch-all rewrite is present: current Pages rejects `/* /index.html 200` as an
-infinite loop. `public/_headers` supplies static security and cache headers.
-Vite copies both files into `dist` during the build. See Cloudflare's current
-[Serving Pages documentation](https://developers.cloudflare.com/pages/configuration/serving-pages/)
-for this fallback behavior.
+## Ordered apex and www rollout
 
-Pages preview origins are not accepted by production CORS by default. If a
-preview must use the production API, add that exact HTTPS origin temporarily
-to `CORS_ORIGINS`; never use `*` with credentialed requests. A separate staging
-API and database is safer.
+Cloudflare Pages custom-domain ownership and DNS must move together. Do not
+point a CNAME at `cirkle-react.pages.dev` while the hostname is still associated
+with the legacy Pages project.
 
-## Browser policy
+1. Confirm the API CORS allowlist contains apex, `www`, rollback subdomain, and
+   Pages default origins. Test both accepted origins and an attacker origin.
+2. Record the legacy project/deployment and current DNS values for rollback.
+3. In the legacy `cirkle` Pages project, remove only the `www.cirkle.world`
+   custom-domain association. Do not delete the project or deployment.
+4. Add `www.cirkle.world` to `cirkle-react`, wait until Cloudflare reports the
+   domain and certificate Active, and verify DNS points to the new Pages
+   project.
+5. Use `www` as a canary: hard-refresh, open a deep link, complete login and
+   refresh, exercise an authenticated API read/write, upload/download media,
+   and test two-browser Socket.IO delivery/recovery.
+6. Repeat the custom-domain move for `cirkle.world`; wait for Active status and
+   rerun the browser suite on the apex.
+7. After the apex is proven, configure a Cloudflare redirect from `www` to the
+   apex that preserves path and query string. Verify a nested URL with query
+   parameters. Until that redirect is active, serving the same release on both
+   domains is acceptable but not canonical.
 
-Production CORS must contain the two explicit origins:
+Never remove `cirkle-react.cirkle.world` during rollout. It separates frontend
+or API diagnosis from apex DNS and provides a stable acceptance origin.
 
-```text
-https://cirkle.world
-https://www.cirkle.world
-```
+## CORS checks
 
-Additional origins, if any, must be explicit HTTPS origins with no path and no
-wildcard. The Pages CSP permits:
-
-- API/fallback traffic only to `https://api.cirkle.world` and
-  `wss://api.cirkle.world`.
-- AppSync Event API traffic only to the `ap-south-1` HTTPS and realtime AWS
-  domains emitted by the reviewed stack.
-- Daily call connections/frames only on `*.daily.co`.
-- HTTPS images and media because user avatars, posts, GIFs, company logos, and
-  call media can have externally hosted URLs.
-- Local/data fonts, local/blob workers, and inline styles used by the current
-  React component stack.
-
-Legacy Supabase origins are intentionally absent. Tightening the
-broad HTTPS image/media allowance requires first proxying or migrating all
-external user content; doing it prematurely would visibly break existing
-posts and profiles.
-
-## Production verification
-
-Check the service path from both the host and the public network:
+Each approved preflight must return its exact origin plus credentials support;
+the unapproved origin must be rejected:
 
 ```sh
-curl --fail --show-error http://127.0.0.1:3001/healthz
-curl --fail --show-error http://127.0.0.1:3001/readyz
-curl --fail --show-error https://api.cirkle.world/healthz
-test "$(curl --silent --output /dev/null --write-out '%{http_code}' https://api.cirkle.world/readyz)" = 403
-curl --fail --show-error 'https://api.cirkle.world/api/socket.io/?EIO=4&transport=polling'
-pm2 status
-pm2 logs cirkle-api --lines 100
-sudo nginx -t
-```
-
-Verify allowed and rejected CORS behavior. The first request should return the
-exact allowed origin and credentials header; the second must not:
-
-```sh
-curl -i -X OPTIONS https://api.cirkle.world/api/auth/me \
+curl -i -X OPTIONS https://api-react.cirkle.world/api/auth/me \
   -H 'Origin: https://cirkle.world' \
   -H 'Access-Control-Request-Method: GET'
 
-curl -i -X OPTIONS https://api.cirkle.world/api/auth/me \
+curl -i -X OPTIONS https://api-react.cirkle.world/api/auth/me \
+  -H 'Origin: https://www.cirkle.world' \
+  -H 'Access-Control-Request-Method: GET'
+
+curl -i -X OPTIONS https://api-react.cirkle.world/api/auth/me \
   -H 'Origin: https://attacker.example' \
   -H 'Access-Control-Request-Method: GET'
 ```
 
-Complete a real-browser acceptance pass on desktop and mobile:
+Do not use `*` with credentialed requests. A preview deployment may use the
+production API only after its exact HTTPS origin is temporarily allowlisted.
 
-1. Open a deep link directly and refresh it to verify the SPA fallback.
-2. Register with email/password, receive a ZeptoMail message, verify the OTP,
-   log out, log in, refresh the page, and reset the password.
-3. Complete Google login and confirm the callback returns only to the allowed
-   frontend origin.
-4. Create, update, and delete test content; verify permissions with a second
-   non-admin account.
-5. Send forum and direct messages in two browsers; confirm AppSync denies an
-   unauthorized room, reconnects after JWT refresh/network loss, and recovers
-   missed MySQL rows. Then force the AppSync endpoint unavailable and verify the
-   authorized Socket.IO fallback instead of silent message loss.
-6. Upload and retrieve an image, audio attachment, and permitted document near
-   (but below) the configured size limit.
-7. Exercise the product flows that invoke OpenAI and Gemini and confirm errors
-   are surfaced without exposing provider payloads or keys.
-8. Start and end an audio/video call and check camera/microphone permission and
-   Daily iframe behavior against the deployed CSP.
-9. Review API, Nginx, PM2, MySQL, Cloudflare, AppSync/Lambda, ZeptoMail, OpenAI,
-   and Gemini logs or dashboards for errors and unexpected cost.
+## Rollback
 
-Do not mark the release complete merely because `/healthz` is green. Liveness
-proves the Node process is running; loopback-only `/readyz` adds database and
-storage readiness; the browser pass proves the integrated product behavior.
+### Frontend/domain rollback
+
+If the canary fails, move `www` back to the legacy `cirkle` Pages project
+through the custom-domain UI and wait for DNS/certificate Active status. The
+apex remains untouched.
+
+If the apex fails after cutover:
+
+1. Preserve logs and the failing deployment identifier.
+2. Reattach the apex to the legacy `cirkle` Pages project through the
+   custom-domain workflow; verify DNS and TLS.
+3. Reattach or redirect `www` consistently with the restored apex.
+4. Keep the AWS API/database/S3 and imported Supabase source unchanged unless a
+   separate, explicitly authorized data incident requires action.
+
+A frontend rollback can also redeploy the previous known-good `cirkle-react`
+commit when the fault is limited to its newest bundle. Never delete the legacy
+project until the rollback window has formally closed.
+
+### API rollback
+
+Atomically switch `/srv/cirkle/current` to the recorded previous release,
+restart `cirkle-api`, and require loopback `/readyz` before declaring recovery.
+Do not reverse MySQL migrations automatically. A database restore is a separate
+destructive incident procedure requiring an outage, an independently verified
+backup, and explicit approval.
+
+## Integrated browser acceptance
+
+Test at least these flows on desktop and mobile before declaring completion:
+
+1. Apex, `www`, rollback-domain, deep-link refresh, canonical metadata, CSP,
+   and service-worker update behavior.
+2. Email/password login, email OTP, password reset, Google OAuth, logout, token
+   refresh, and two-tab session recovery.
+3. Forum post/comment/reaction/poll and direct-message writes with a second
+   non-admin member; denied room access must remain denied.
+4. Foreground Socket.IO delivery, immediate disconnect on page hide, and MySQL
+   refetch/reconciliation on visibility return.
+5. Private/public image, voice, and document upload/download authorization;
+   object bytes must remain in S3 rather than MySQL.
+6. GIF search and attribution. OpenAI/Gemini/Daily controls must be absent or
+   explicitly unavailable while their server providers are unconfigured.
+7. API, Nginx, systemd, MySQL, S3, Cloudflare, and provider logs plus alarms,
+   backup timer status, and one isolated restore drill.
+
+`/healthz` alone is not a release gate. It proves only that Node is running;
+`/readyz` adds database/storage readiness, and the browser suite proves the
+integrated product.

@@ -11,11 +11,13 @@ import {
   getNotificationNavigationTarget,
   type CirkleNotification,
 } from "@/lib/notifications";
+import { useDailyCallsEnabled } from "@/hooks/useRuntimeFeatures";
 
 const NotificationBell = () => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const callsEnabled = useDailyCallsEnabled();
   const [open, setOpen] = useState(false);
 
   const { data: notifications = [] } = useQuery({
@@ -67,7 +69,7 @@ const NotificationBell = () => {
   };
 
   const openNotification = async (notification: CirkleNotification) => {
-    const target = getNotificationNavigationTarget(notification);
+    const target = getNotificationNavigationTarget(notification, { dailyCallsEnabled: callsEnabled });
     if (!target) return;
     if (!notification.is_read) await markRead(notification.id);
     setOpen(false);
@@ -111,7 +113,7 @@ const NotificationBell = () => {
           </div>
           <div className="max-h-72 overflow-y-auto">
             {notifications.length ? notifications.map((notification) => {
-              const action = getNotificationActionLabel(notification);
+              const action = getNotificationActionLabel(notification, { dailyCallsEnabled: callsEnabled });
               return (
                 <div key={notification.id} className={`border-b border-border px-4 py-3 last:border-0 ${!notification.is_read ? "bg-primary/5" : ""}`}>
                   <p className="text-sm font-medium text-foreground">{notification.title || "Notification"}</p>

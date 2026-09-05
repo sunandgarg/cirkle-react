@@ -3,7 +3,7 @@ name: Production CI
 on:
   pull_request:
   push:
-    branches: [main, pages-production]
+    branches: [main]
 
 permissions:
   contents: read
@@ -50,7 +50,7 @@ jobs:
       SEED_ADMIN_NAME: Cirkle CI Owner
       VITE_API_URL: https://api-react.cirkle.world
       VITE_CHAT_REALTIME_PROVIDER: socketio
-      VITE_DAILY_CALLS_ENABLED: "true"
+      VITE_DAILY_CALLS_ENABLED: "false"
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

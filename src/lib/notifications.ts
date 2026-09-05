@@ -31,9 +31,14 @@ export const safeInternalNotificationPath = (value: unknown): string | null => {
   }
 };
 
-export const getNotificationNavigationTarget = (notification: CirkleNotification): string | null => {
+type NotificationFeatures = { dailyCallsEnabled?: boolean };
+
+export const getNotificationNavigationTarget = (
+  notification: CirkleNotification,
+  features: NotificationFeatures = {},
+): string | null => {
   const callInvite = parseCallInviteNotification(notification);
-  if (callInvite) return getCallInvitePath(callInvite);
+  if (callInvite && features.dailyCallsEnabled === true) return getCallInvitePath(callInvite);
   if (notification.type === "call_invite") return null;
 
   if (notification.type === "connection_request") return "/network?tab=pending";
@@ -49,13 +54,16 @@ export const getNotificationNavigationTarget = (notification: CirkleNotification
   return safeInternalNotificationPath(notification.link);
 };
 
-export const getNotificationActionLabel = (notification: CirkleNotification): string | null => {
-  if (parseCallInviteNotification(notification)) return "Join call";
+export const getNotificationActionLabel = (
+  notification: CirkleNotification,
+  features: NotificationFeatures = {},
+): string | null => {
+  if (parseCallInviteNotification(notification) && features.dailyCallsEnabled === true) return "Join call";
   if (notification.type === "call_invite") return null;
   if (notification.type === "connection_request") return "Review request";
   if (notification.type === "connection_response") return "View network";
   if (notification.type === "connection") {
     return notification.title?.toLocaleLowerCase().includes("accepted") ? "View network" : "Review request";
   }
-  return getNotificationNavigationTarget(notification) ? "Open" : null;
+  return getNotificationNavigationTarget(notification, features) ? "Open" : null;
 };

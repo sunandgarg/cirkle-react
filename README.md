@@ -136,13 +136,14 @@ instance.
 Cloudflare Pages settings:
 
 - Project: `cirkle-react` in Sunand's Cloudflare account (`https://cirkle-react.pages.dev`)
-- Custom domain: `https://cirkle-react.cirkle.world`
+- Canonical custom domain after cutover: `https://cirkle.world`
+- Rollout/rollback domain: `https://cirkle-react.cirkle.world`
 - Build command: `pnpm build:pages`
 - Output directory: `dist`
-- Production branch: `pages-production` (advance only after the same commit's API passes `/readyz`)
+- Production branch: `main` (matches the existing Pages project)
 - Public environment value: `VITE_API_URL=https://api-react.cirkle.world`
 - Public environment value: `VITE_CHAT_REALTIME_PROVIDER=socketio`
-- Public environment value: `VITE_DAILY_CALLS_ENABLED=true`
+- Public environment value: `VITE_DAILY_CALLS_ENABLED=false` until Daily is configured on the API
 - Build environment value: `PNPM_VERSION=11.19.0`
 
 The repository also includes `wrangler.jsonc`, SPA redirects, static security
@@ -155,6 +156,13 @@ Those belong only on the API server. The current `cirkle-react` deployment uses
 a Lightsail API, private Lightsail managed MySQL, private S3, and Socket.IO; it
 does not enable AppSync. See `docs/AWS_HOSTING.md`. The optional AppSync-only
 topology remains documented separately in `aws/realtime/README.md`.
+
+Audio/video call controls are fail-closed. Pages must explicitly set
+`VITE_DAILY_CALLS_ENABLED=true`, and the API must independently report
+`daily_calls=true` from `GET /api/features`, which it does only when its
+protected environment contains `DAILY_API_KEY`. A missing endpoint, failed
+request, malformed response, absent key, or false Pages flag keeps every call
+entry point disabled without exposing the key.
 
 ## Safety and migration
 

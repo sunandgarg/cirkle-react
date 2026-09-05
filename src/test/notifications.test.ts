@@ -23,4 +23,17 @@ describe("notification navigation", () => {
       expires_at: "2026-01-01T00:01:00.000Z", link: "/chats/room?call=video",
     })).toBeNull();
   });
+
+  it("does not expose a valid call action unless runtime calls are enabled", () => {
+    const call = {
+      id: "call", user_id: "u1", type: "call_invite", created_at: new Date().toISOString(),
+      room_id: "11111111-1111-4111-8111-111111111111",
+      call_session_id: "22222222-2222-4222-8222-222222222222",
+      call_mode: "video", expires_at: "2999-01-01T00:00:00.000Z",
+    };
+    expect(getNotificationNavigationTarget(call)).toBeNull();
+    expect(getNotificationActionLabel(call)).toBeNull();
+    expect(getNotificationNavigationTarget(call, { dailyCallsEnabled: true })).toContain("/chats/");
+    expect(getNotificationActionLabel(call, { dailyCallsEnabled: true })).toBe("Join call");
+  });
 });

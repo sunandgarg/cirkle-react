@@ -25,9 +25,10 @@
     "start": "node server/dist/index.js",
     "start:api": "node server/dist/index.js",
     "preview": "vite preview",
-    "test": "pnpm test:web && pnpm test:server",
+    "test": "pnpm test:web && pnpm test:server && pnpm test:deployment-config",
     "test:web": "vitest run",
     "test:server": "vitest run --config server/vitest.config.ts",
+    "test:deployment-config": "node --test scripts/lib/*.test.mjs",
     "test:chat-load": "vitest run src/test/forumLoad.test.ts --reporter verbose",
     "test:chat-load:live": "k6 run load/k6-forum.js",
     "test:forum:live50": "node load/live-forum-50.mjs",
@@ -45,7 +46,7 @@
     "mysql:start": "./scripts/local-mysql.sh start",
     "mysql:stop": "./scripts/local-mysql.sh stop",
     "mysql:status": "./scripts/local-mysql.sh status",
-    "pages:deploy": "node scripts/predeploy-pages.mjs && pnpm build:pages && wrangler pages deploy dist --project-name=cirkle-react --branch=pages-production",
+    "pages:deploy": "node scripts/predeploy-pages.mjs && pnpm build:pages && wrangler pages deploy dist --project-name=cirkle-react --branch=main",
     "verify": "pnpm db:validate && pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   },
   "dependencies": {

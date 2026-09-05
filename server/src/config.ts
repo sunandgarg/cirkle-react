@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { createPrivateKey } from "node:crypto";
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 
 const booleanString = z.enum(["true", "false"]).default("false").transform((v) => v === "true");
@@ -88,6 +89,22 @@ export function productionConfigIssues(value: ServerConfig): string[] {
     if (/replace|change-before|local-only|placeholder|example|^test-/i.test(secret)) issues.push(`${key} still contains a placeholder value`);
   }
   if (new Set(secrets.map((key) => value[key])).size !== secrets.length) issues.push("Production security secrets must be distinct");
+  try {
+    const databaseUrl = new URL(value.DATABASE_URL);
+    const sslCert = databaseUrl.searchParams.getAll("sslcert");
+    const sslAccept = databaseUrl.searchParams.getAll("sslaccept");
+    const sslCertPath = sslCert[0] ?? "";
+    const sslAcceptMode = sslAccept[0] ?? "";
+    let username = "";
+    try { username = decodeURIComponent(databaseUrl.username); } catch { /* invalid below */ }
+    if (databaseUrl.protocol !== "mysql:" || username !== "cirkle_app" || !databaseUrl.password
+      || !/^[a-z0-9.-]+\.rds\.amazonaws\.com$/i.test(databaseUrl.hostname)
+      || (databaseUrl.port || "3306") !== "3306" || databaseUrl.pathname !== "/cirkle" || databaseUrl.hash
+      || sslCert.length !== 1 || !isAbsolute(sslCertPath)
+      || sslAccept.length !== 1 || sslAcceptMode.toLowerCase() !== "strict") throw new Error("invalid");
+  } catch {
+    issues.push("DATABASE_URL must use cirkle_app on the AWS managed cirkle database with an absolute sslcert and sslaccept=strict");
+  }
   if (value.REQUIRE_PROVIDER_CONFIG) {
     const providers = [
       "ZEPTOMAIL_TOKEN", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI",

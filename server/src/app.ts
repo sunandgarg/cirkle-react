@@ -11,6 +11,7 @@ import { ApiError, errorHandler, notFound } from "./lib/errors.js";
 import { authRouter } from "./routes/auth.js";
 import { dataRouter } from "./routes/data.js";
 import { functionsRouter } from "./routes/functions.js";
+import { featuresRouter } from "./routes/features.js";
 import { healthRouter } from "./routes/health.js";
 import { rpcRouter } from "./routes/rpc.js";
 import { realtimeRouter } from "./routes/realtime.js";
@@ -72,6 +73,7 @@ export function createApp(): Express {
 
   app.use(healthRouter);
   app.use("/api/auth", rateLimit({ windowMs: 15 * 60_000, limit: config.NODE_ENV === "test" ? 10_000 : 100, standardHeaders: "draft-7", legacyHeaders: false }), authRouter);
+  app.use("/api/features", featuresRouter);
   app.use("/api/data", dataRouter);
   app.use("/api/rpc", rpcRouter);
   app.use("/api/realtime", realtimeRouter);

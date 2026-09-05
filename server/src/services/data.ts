@@ -49,19 +49,19 @@ export const legacyTables = new Set([
   "client_error_logs", "consultations", "course_verification_requests", "custom_options", "custom_skills", "document_verifications", "education",
   "email_provider_daily_usage", "event_scan_runs", "forum_deleted_for_user", "forum_room_state", "iit_recruiters", "job_engagement_events",
   "job_scan_runs", "job_scan_sources", "messages", "nav_config", "notifications", "onboarding_progress", "pending_profile_options", "pinned_messages",
-  "poll_votes", "polls", "professional_experience", "realtime_channel_registry", "realtime_delivery_outbox", "saved_views", "stories",
-  "user_activity_daily", "user_activity_sessions", "user_pinned_messages", "user_roles", "verification_audit_log", "verification_codes", "verifications",
+  "poll_votes", "polls", "professional_experience", "realtime_channel_registry", "saved_views", "stories",
+  "user_activity_daily", "user_activity_sessions", "user_pinned_messages", "user_roles", "verification_audit_log", "verifications",
   "verified_academic_affiliations",
 ]);
 
 const legacyPublicRead = new Set(["academic_degrees", "academic_institutes", "academic_networks", "academic_specialisations", "app_settings", "custom_options", "custom_skills", "nav_config", "blogs", "blog_comments", "blog_likes", "polls", "poll_votes"]);
 const legacyCommunityRead = new Set(["ad_messages"]);
-const legacyAdminOnly = new Set(["client_error_logs", "email_provider_daily_usage", "event_scan_runs", "iit_recruiters", "job_scan_runs", "job_scan_sources", "realtime_channel_registry", "realtime_delivery_outbox", "user_activity_daily", "verification_audit_log"]);
+const legacyAdminOnly = new Set(["client_error_logs", "email_provider_daily_usage", "event_scan_runs", "iit_recruiters", "job_scan_runs", "job_scan_sources", "realtime_channel_registry", "user_activity_daily", "verification_audit_log"]);
 const legacyUserOwned = new Set(["blog_bookmarks", "course_verification_requests", "document_verifications", "forum_deleted_for_user", "forum_room_state", "job_engagement_events", "notifications", "onboarding_progress", "pending_profile_options", "saved_views", "user_pinned_messages", "verifications"]);
 const legacyRpcWriteOnly = new Set([
   "chat_members", "chat_rooms", "client_error_logs", "consultations", "email_provider_daily_usage", "event_scan_runs", "iit_recruiters",
-  "job_engagement_events", "job_scan_runs", "pending_profile_options", "realtime_channel_registry", "realtime_delivery_outbox",
-  "user_activity_daily", "user_activity_sessions", "user_roles", "verification_audit_log", "verification_codes", "verifications", "verified_academic_affiliations",
+  "job_engagement_events", "job_scan_runs", "pending_profile_options", "realtime_channel_registry",
+  "user_activity_daily", "user_activity_sessions", "user_roles", "verification_audit_log", "verifications", "verified_academic_affiliations",
 ]);
 
 const isAdmin = (ctx: RequestContext): boolean => ctx.auth.role === "admin" || ctx.auth.role === "owner";

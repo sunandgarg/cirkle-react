@@ -32,10 +32,10 @@ import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { getDirectChatBackTarget, getDirectChatProfileTarget } from "@/lib/directMessages";
 import { parseCallInviteQuery } from "@/lib/callInvites";
 import NotificationBell from "@/components/NotificationBell";
+import { useDailyCallAvailability } from "@/hooks/useRuntimeFeatures";
 
 const PAGE_SIZE = 50;
 const inboxCacheKey = (userId: string) => `cirkle:chat-inbox:${userId}`;
-const CALLS_ENABLED = import.meta.env.VITE_DAILY_CALLS_ENABLED === "true";
 const CallModal = lazy(() => import("@/components/CallModal"));
 
 type ChatMessage = {
@@ -137,6 +137,7 @@ const Chats = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { enabled: callsEnabled, resolved: callsResolved } = useDailyCallAvailability();
   const realtimeActive = useRealtimeActivity();
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
   const [newMessage, setNewMessage] = useState("");
@@ -234,11 +235,11 @@ const Chats = () => {
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {
-    if (!hasCallInviteParams) return;
-    if (CALLS_ENABLED && incomingCallInvite) return;
+    if (!hasCallInviteParams || !callsResolved) return;
+    if (callsEnabled && incomingCallInvite) return;
     clearCallInviteParams();
-    toast.error(CALLS_ENABLED ? "This call invitation is invalid or has expired" : "Audio and video calls are not available");
-  }, [clearCallInviteParams, hasCallInviteParams, incomingCallInvite]);
+    toast.error(callsEnabled ? "This call invitation is invalid or has expired" : "Audio and video calls are not available");
+  }, [callsEnabled, callsResolved, clearCallInviteParams, hasCallInviteParams, incomingCallInvite]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -790,8 +791,8 @@ const Chats = () => {
             <p className="text-sm font-semibold text-foreground truncate">{activeRoom.displayName}</p>
             <p className="text-[11px] text-muted-foreground">{typingUsers.length ? `${typingUsers.join(", ")} typing…` : activeRoom.is_group ? "Group chat" : "Connected"}</p>
           </button>
-          {CALLS_ENABLED && <button onClick={() => { setCallSessionId(null); setCallMode("video"); }} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Video call"><Video className="w-5 h-5" /></button>}
-          {CALLS_ENABLED && <button onClick={() => { setCallSessionId(null); setCallMode("audio"); }} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Audio call"><Phone className="w-5 h-5" /></button>}
+          {callsEnabled && <button onClick={() => { setCallSessionId(null); setCallMode("video"); }} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Video call"><Video className="w-5 h-5" /></button>}
+          {callsEnabled && <button onClick={() => { setCallSessionId(null); setCallMode("audio"); }} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Audio call"><Phone className="w-5 h-5" /></button>}
           <NotificationBell />
           <button onClick={() => setShowConversationInfo(true)} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Conversation options"><MoreVertical className="w-5 h-5" /></button>
         </header>
@@ -857,7 +858,7 @@ const Chats = () => {
           <Input placeholder="Type a message" value={newMessage} onChange={(event) => { setNewMessage(event.target.value); handleTyping(); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} className="flex-1 h-10 rounded-full bg-secondary border-0" />
           {newMessage.trim() ? <button onClick={() => void sendMessage()} className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground" aria-label="Send"><Send className="w-4 h-4" /></button> : <button onClick={() => { setShowVoiceRecorder((value) => !value); setShowEmojiPicker(false); }} className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground" aria-label="Voice message"><Mic className="w-4 h-4" /></button>}
         </div>
-        {CALLS_ENABLED && incomingCallInvite?.roomId === activeRoom.id && (
+        {callsEnabled && incomingCallInvite?.roomId === activeRoom.id && (
           <Dialog open onOpenChange={(open) => { if (!open) clearCallInviteParams(); }}>
             <DialogContent className="max-w-sm">
               <DialogHeader><DialogTitle>Incoming {incomingCallInvite.mode} call</DialogTitle></DialogHeader>
@@ -879,7 +880,7 @@ const Chats = () => {
             </DialogContent>
           </Dialog>
         )}
-        {callMode && <Suspense fallback={null}><CallModal roomId={activeRoom.id} mode={callMode} sessionId={callSessionId || undefined} onClose={() => { setCallMode(null); setCallSessionId(null); }} /></Suspense>}
+        {callsEnabled && callMode && <Suspense fallback={null}><CallModal roomId={activeRoom.id} mode={callMode} sessionId={callSessionId || undefined} onClose={() => { setCallMode(null); setCallSessionId(null); }} /></Suspense>}
         <Dialog open={showConversationInfo} onOpenChange={setShowConversationInfo}>
           <DialogContent className="max-w-sm"><DialogHeader><DialogTitle>Conversation details</DialogTitle></DialogHeader>
             <button onClick={() => { setShowConversationInfo(false); openMemberProfile(); }} disabled={activeRoom.is_group || !activeRoom.peerId} className="flex w-full items-center gap-3 rounded-xl py-2 text-left hover:bg-accent disabled:cursor-default disabled:hover:bg-transparent"><div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-primary/10">{activeRoom.displayAvatar ? <img src={activeRoom.displayAvatar} alt="" className="h-full w-full object-cover" /> : <span className="font-bold text-primary">{getInitials(activeRoom.displayName)}</span>}</div><div><p className="font-semibold">{activeRoom.displayName}</p><p className="text-xs text-muted-foreground">{activeRoom.is_group ? "System-managed group" : "View member profile"}</p></div></button>

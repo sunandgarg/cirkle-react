@@ -1,6 +1,6 @@
 # Cirkle API
 
-The API is an Express/TypeScript service backed by Prisma and MySQL. It keeps the existing frontend's Supabase-shaped interface while enforcing authorization in the server. The production entry point is `server/dist/index.js`; it binds to `HOST` (default `127.0.0.1`) and `PORT` (default `3001`). AWS AppSync Events is the production realtime fan-out transport; Socket.IO at `/api/socket.io` remains the authorized local/failure fallback.
+The API is an Express/TypeScript service backed by Prisma and MySQL. It keeps the existing frontend's Supabase-shaped interface while enforcing authorization in the server. The production entry point is `server/dist/index.js`; it binds to `HOST` (default `127.0.0.1`) and `PORT` (default `3001`). Socket.IO at `/api/socket.io` is the production realtime transport. AppSync is disabled in the current budget topology.
 
 ## Local startup
 
@@ -17,17 +17,21 @@ Required: `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, and `STORAG
 
 Production settings: `NODE_ENV`, `HOST`, `PORT`, `TRUST_PROXY_HOPS`, `CORS_ORIGINS`, `APP_BASE_URL`, `FRONTEND_URL`, `DEFAULT_COMMUNITY_ID`, `COOKIE_SECURE`, `IP_HASH_SECRET`, `OTP_PEPPER`, `ACCESS_TOKEN_TTL_SECONDS`, `REFRESH_TOKEN_TTL_DAYS`, `STORAGE_ROOT`, `MAX_UPLOAD_BYTES`, and `LOG_LEVEL`. Keep `COOKIE_DOMAIN` unset so refresh cookies remain host-only.
 
-The API process must bind to loopback behind Nginx. Keep the `api.cirkle.world` DNS record in DNS-only mode (not Cloudflare-proxied), leave `TRUST_PROXY_HOPS=1`, and have Nginx overwrite `X-Forwarded-For` with `$remote_addr`. This keeps Express IP rate limits keyed to the actual client rather than a shared edge address. Request logs intentionally record only the URL pathname; OAuth codes, state values, storage signatures, and all other query parameters are excluded.
+The API process must bind to loopback behind Nginx. Keep the `api-react.cirkle.world` DNS record in DNS-only mode (not Cloudflare-proxied), leave `TRUST_PROXY_HOPS=1`, and have Nginx overwrite `X-Forwarded-For` with `$remote_addr`. This keeps Express IP rate limits keyed to the actual client rather than a shared edge address. Request logs intentionally record only the URL pathname; OAuth codes, state values, storage signatures, and all other query parameters are excluded.
 
-Provider integrations are optional in development and test. Production startup fails fast when credentials for any visible provider below are missing; `DAILY_DOMAIN` remains optional because Daily normally returns the room URL.
+Provider integrations are optional in development and test. A production host
+with `REQUIRE_PROVIDER_CONFIG=true` fails fast when any listed provider is
+missing. The current cost-bounded host may set that policy to false; every
+optional feature must then fail closed. Daily calls use both the Pages flag and
+`GET /api/features`, so an absent `DAILY_API_KEY` cannot leave visible controls.
+`DAILY_DOMAIN` remains optional because Daily normally returns the room URL.
 
 - ZeptoMail: `ZEPTOMAIL_TOKEN`, `ZEPTOMAIL_API_URL`, `ZEPTOMAIL_FROM_EMAIL`, `ZEPTOMAIL_FROM_NAME`. The checked production configuration uses the India REST endpoint and `noreply@cirkle.world`; SMTP credentials are not used. A 2xx response records provider acceptance, not final inbox delivery, and delivery/bounce webhooks still require a separate authenticated receiver.
 - Google OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`.
 - AI extraction: `OPENAI_API_KEY`, `OPENAI_MODEL`, `GEMINI_API_KEY`, `GEMINI_MODEL`.
 - GIF and calling: `KLIPY_API_KEY`, `DAILY_API_KEY`, optionally `DAILY_DOMAIN`.
-- AppSync Events: `APPSYNC_ENABLED=true`, `APPSYNC_HTTP_ENDPOINT`, and distinct
-  server-only `APPSYNC_PUBLISH_TOKEN`/`APPSYNC_AUTHORIZER_SECRET` values. The
-  Node API does not need an AWS access key.
+- Optional AppSync topology (not current production): `APPSYNC_ENABLED=true`,
+  `APPSYNC_HTTP_ENDPOINT`, and distinct server-only publisher/authorizer values.
 - Local-only phone testing: `MOBILE_TEST_MODE=true` and an explicit comma-separated `MOBILE_TEST_PHONES` allowlist. This path is disabled in production.
 - Test data: `ENABLE_SEED_DATA=true`; always disabled in production.
 
@@ -41,6 +45,8 @@ Missing optional provider credentials return an explicit `503`; provider failure
 - Functions: `POST /api/functions/:name` for login/reset/verification mail, user administration, scanners, KLIPY, Daily, and related workflows.
 - Storage: multipart `POST /api/storage/upload`; `POST /signed-url`, `/signed-urls`, `/remove`; public and signed-private download paths.
 - Health: `/healthz` is liveness; `/readyz` verifies MySQL and performs a create/read/delete probe in `STORAGE_ROOT`.
+- Public features: `GET /api/features` returns non-secret provider capability
+  booleans. It never returns credentials.
 
 Refresh tokens rotate in an HTTP-only cookie. The checked configuration keeps a
 signed-in browser for up to one year while continuing to rotate the token on
@@ -64,22 +70,15 @@ Connection requests are created only through the RPC workflow. It serializes eac
 
 ## Realtime
 
-In production, browsers authenticate AppSync Events with their short-lived
-access JWT. A minimal Lambda authorizer calls this API to verify every requested
-forum, thread, chat, or inbox channel. Typing/presence remains on the revocable
-Socket.IO path; browsers never receive the server publisher token and cannot
-publish raw database envelopes. Node records content-free row-ID invalidations in a
-MySQL-backed retry outbox and publishes them to the AppSync HTTP endpoint.
-Clients refetch changed rows through this API, so current account/scope/room
-authorization is checked before durable content reaches the UI. MySQL remains
-authoritative, and the clients reconcile missed events through cursor reads.
-
-Socket.IO is retained as the local and outage fallback. It authenticates the
-same access token and subscribes with `realtime:subscribe` plus
+Production uses Socket.IO on the first-party API origin. It authenticates the
+same access token as HTTP requests and subscribes with `realtime:subscribe` plus
 `{ channel, bindings }`. The server verifies profile, forum-scope, or chat-room
 membership before joining a room and limits each socket to 50 subscriptions.
 Client relay accepts only rate-limited, identity-derived typing/presence—not
-arbitrary database events.
+arbitrary database events. MySQL remains authoritative; reconnecting clients
+refetch durable rows, so a disconnected or backgrounded browser cannot lose
+message history. The AppSync code and stack are retained only as an optional,
+separately operated topology.
 
 ## Supabase import
 
@@ -94,7 +93,9 @@ The JSON shape is `{ "tables": { "education": [{ "id": "existing-uuid", ... }] }
 
 ## Explicit current limitations
 
-- Object bytes use hardened local filesystem storage under `STORAGE_ROOT`. The routes and metadata model are ready for a provider adapter, but AWS S3 upload/signing is not implemented in this service yet.
+- Production object bytes use private, encrypted S3; local development can use
+  hardened filesystem storage under `STORAGE_ROOT`. MySQL stores metadata and
+  authorization references, not file bytes.
 - Production SMS/Fast2SMS is not enabled; only an allowlisted, non-production phone OTP path exists. Email OTP and recovery use ZeptoMail.
 - OpenAI and Gemini extract only evidence grounded in supplied, SSRF-checked HTTPS documents. Grounded OpenAI discovery is enabled only for a reviewed web-search-capable configured model; unsupported configurations report `openai_web_discovery: false` instead of generating unverified listings.
 - AI scans have a 50-second end-to-end ceiling: source retrieval is capped at 12 seconds, provider calls at 30 seconds with retries disabled, and all item/run/audit writes commit in one bounded transaction. A timeout imports nothing and returns an explicit `504` before Nginx's request ceiling.

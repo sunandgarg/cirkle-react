@@ -18,7 +18,7 @@ ZEPTOMAIL_FROM_EMAIL=noreply@cirkle.world
 ZEPTOMAIL_FROM_NAME=Cirkle
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=https://api.cirkle.world/api/auth/google/callback
+GOOGLE_REDIRECT_URI=https://api-react.cirkle.world/api/auth/google/callback
 ```
 
 `ZEPTOMAIL_TOKEN` is the Agent's Send Mail API key. The service accepts either

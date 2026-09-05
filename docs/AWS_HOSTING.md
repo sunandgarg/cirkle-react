@@ -1,12 +1,16 @@
 # Cirkle React budget AWS hosting
 
-This is the independent `cirkle-react` deployment. It does not delete or modify the existing Supabase project, the existing EC2 deployment, `cirkle.world`, or `www.cirkle.world`. AppSync is disabled for this deployment.
+This is the AWS-backed `cirkle-react` deployment selected for the
+`cirkle.world` cutover. The existing Supabase project and legacy Cloudflare
+Pages project remain intact as rollback sources; the cutover does not delete
+either one. AppSync is disabled for this deployment.
 
 ## Live topology
 
 ```text
 Browser
-  -> Cloudflare Pages: https://cirkle-react.cirkle.world
+  -> Cloudflare Pages: https://cirkle.world
+       (rollout/rollback origin: https://cirkle-react.cirkle.world)
   -> HTTPS API/Socket.IO: https://api-react.cirkle.world
        -> Lightsail instance cirkle-react-api (Mumbai, $7 bundle)
        -> Lightsail managed MySQL 8.4 cirkle-react-mysql (private, $15 bundle)
@@ -14,11 +18,14 @@ Browser
 ```
 
 - The API server is a 1 GiB/2-vCPU Lightsail instance with a static IP, Nginx, Let's Encrypt TLS, Node 22, a memory-bounded systemd service, 2 GiB swap, bounded journald/log rotation, a restrictive firewall, and CPU/status alarms.
-- MySQL is the managed Lightsail 1 GiB plan. It is private to the Lightsail network, retains automatic backups, and is not exposed on port 3306. AWS lists the USD 15 standard tier as not providing managed-database storage encryption; the USD 30 tier is required if primary-volume encryption at rest is mandatory. Passwords/tokens remain hashed and application/provider secrets are never placed in this database.
+- MySQL is the managed Lightsail 1 GiB plan. It is private to the Lightsail network, retains automatic backups, and is not exposed on port 3306. The AWS Lightsail API reports the selected `micro_2_0` database bundle as encrypted; the USD 30 `micro_ha_2_0` tier adds high availability, not the first encrypted tier. Passwords/tokens remain hashed and application/provider secrets are never placed in this database.
 - User bytes are stored in the private, AES-256-encrypted, versioned S3 bucket `cirkle-react-media-mediabucket-phet4t6hharr`. S3 public access is blocked.
 - Text, relationships, metadata, object paths, hashes, permissions, and audit records live in MySQL. Image/file bytes do not live in MySQL.
 - Socket.IO is the realtime transport. AppSync values are absent from the Pages build and API environment, so hidden browser tabs do not accumulate AppSync connection-minute charges.
 - Secrets are held in AWS Secrets Manager and installed as root-owned host environment files. Secrets must never be stored in MySQL or exposed through `VITE_*` browser variables.
+- Audio/video calls remain hidden while `DAILY_API_KEY` is absent. Even after
+  Pages opts in, the UI enables calls only when `GET /api/features` confirms
+  that the server-side provider is configured.
 
 ## Media flow and immutability
 
@@ -38,13 +45,37 @@ When a Cirkle tab becomes hidden—because the user selects another tab, another
 
 Operating systems can freeze background processes before JavaScript receives a visibility event. The server heartbeat timeout and reconnect/refetch path remain the authoritative fallback for that unavoidable browser/OS case.
 
+## Managed MySQL identities and transport security
+
+Every database connection verifies the AWS CA and database hostname. Prisma
+URLs must contain an absolute `sslcert` path and `sslaccept=strict`; command-line
+clients use `--ssl-ca` plus `--ssl-verify-server-cert`. `REQUIRE SSL` on each
+account is a server-side backstop, not a replacement for client certificate and
+hostname verification.
+
+The credentials are deliberately split:
+
+| Identity | Consumer | Grants on `cirkle.*` |
+| --- | --- | --- |
+| `cirkle_app` | Long-running Node API | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
+| `cirkle_migrate` | Release-time Prisma migrations only | Runtime grants plus reviewed schema-change grants |
+| `cirkle_backup` | Daily logical dump only | `SELECT`, `SHOW VIEW`, `TRIGGER` |
+
+Use independent passwords and the examples in `aws/hosting/`. The API file is
+root-owned and group-readable only by `cirkle`; migration and backup files are
+root-only mode `0600`. Provisioning rekeys all three identities, so rerunning it
+requires an ordered credential rollout. Keep the pre-existing broad database
+identity during the rollback window under the instruction not to delete
+existing resources; remove or lock it only after the new paths are proven and
+explicit decommission approval is given.
+
 ## Reproducible resources and deployment
 
 - `aws/hosting/bootstrap-lightsail.sh`: host packages, Node, Nginx, TLS automation, swap, systemd hardening, bounded logs.
-- `aws/hosting/setup-lightsail-db.sh`: idempotent database/app-user creation with least-privilege schema grants.
+- `aws/hosting/setup-lightsail-db.sh`: idempotent TLS-only runtime, migration, and backup identity provisioning with least-privilege grants.
 - `aws/hosting/cirkle-react-media.yaml`: retained private S3 media, optional CloudFront OAC/signed delivery, least-privilege media IAM user.
-- `aws/hosting/deploy-lightsail-release.sh`: immutable release build, migration, DB/storage preflight, atomic symlink switch, health wait, rollback.
-- `aws/hosting/backup-managed-mysql.sh` and `install-managed-backup.sh`: daily consistent encrypted logical dumps to the separate deployment bucket, with locking and monitored systemd execution.
+- `aws/hosting/deploy-lightsail-release.sh`: immutable release build, mandatory verified backup, migration-only DDL identity, DB/storage preflight, atomic code/config switch, health wait, and code/config rollback.
+- `aws/hosting/backup-managed-mysql.sh` and `install-managed-backup.sh`: daily consistent logical dumps over verified TLS to encrypted S3, including locking, SHA-256 metadata, upload verification, and monitored systemd execution.
 
 Example media-stack update after CloudFront approval:
 
@@ -88,14 +119,32 @@ The intended low-traffic base is approximately **USD 23.30-23.70/month before ta
 | Service | Configuration | Approx. USD/month |
 | --- | --- | ---: |
 | Lightsail API | 1 GiB, 2 vCPU, 40 GB SSD, static IP, 1 TB Mumbai transfer | 7.00 |
-| Lightsail managed MySQL | 1 GiB, 2 vCPU, 40 GB, automatic backups; primary storage not encrypted on this tier | 15.00 |
-| Secrets Manager | 3 secrets | 1.20 plus requests |
+| Lightsail managed MySQL | 1 GiB, 2 vCPU, 40 GB, encryption and automatic backups; single availability zone | 15.00 |
+| Secrets Manager | 3 active Lightsail secrets | 1.20 plus requests |
 | S3 | current media and logical backups | 0.10-0.50 initially |
 | Cloudflare Pages | frontend | 0.00 on current plan |
 | AppSync | disabled | 0.00 |
 | CloudFront | blocked pending account verification; normally usage/free-tier dependent | 0.00 currently |
 
-The existing EC2 deployment, retained RDS snapshots, old buckets, and old secrets were intentionally left intact, so the AWS invoice is temporarily higher than this target architecture. Decommission them only after explicit approval and a proven rollback window. Upgrade the API to the 2 GiB bundle if sustained memory is above 70-75%, swap activity is persistent, or latency/error alarms trigger.
+The account currently has five Cirkle secrets: the three active Lightsail
+secrets plus retained `cirkle/staging/api` and `cirkle-react/application`, so
+Secrets Manager is currently about USD 2/month before requests. The running
+legacy EC2 deployment, retained RDS snapshots, and old buckets also make the
+AWS invoice temporarily higher than the target table. In particular,
+`cirkle-react-deploymentbucket-vs0hxjf6smax` is still the new database-backup
+destination even though the older `cirkle-react` CloudFormation stack owns it;
+do not delete that stack wholesale. Decommission resources only after explicit
+approval, dependency review, and a proven rollback window. Upgrade the API to
+the 2 GiB bundle if sustained memory is above 70-75%, swap activity is
+persistent, or latency/error alarms trigger.
+
+Current cost/health guardrails are the USD 40/month
+`Cirkle-Monthly-Cost` budget (80% forecast and 100% actual notifications) and
+three Lightsail alarms: `cirkle-react-api-burst-low`,
+`cirkle-react-api-status-failed`, and `cirkle-react-api-cpu-high`. All three
+alarms were `OK` at the last audit, but the Lightsail email contact was still
+`PendingVerification`; alarms cannot reliably notify anyone until that email is
+confirmed. A budget alerts after spend; it is not a hard service limit.
 
 ## Remaining production acceptance gates
 
@@ -112,5 +161,25 @@ submitted.
 2. Submit KLIPY's production request with category, monthly-active-user estimate, product video, and required attribution.
 3. Ask AWS Support to verify the account for CloudFront, deploy the conditional distribution, then test signed/private/public media behavior and cache headers.
 4. Configure and live-test OpenAI, Gemini, and Daily credentials where those features are required.
-5. Decide whether the budget constraint or encrypted primary MySQL storage wins: keep the private USD 15 tier with encrypted off-boundary dumps, or upgrade to the USD 30 encrypted tier.
+5. Roll out the three TLS-only database identities in backup, migration, then runtime order; prove a non-empty TLS cipher for each and retain the old broad identity only for the rollback window.
 6. Confirm the AWS alert email, allow the API burst balance to recover after release builds, and restore one fresh S3 backup into an isolated MySQL instance before declaring disaster recovery rehearsed.
+
+## Apex cutover and rollback
+
+Before moving a custom domain, the API allowlist must contain
+`https://cirkle.world`, `https://www.cirkle.world`,
+`https://cirkle-react.cirkle.world`, and `https://cirkle-react.pages.dev`.
+Move domains through the Cloudflare Pages custom-domain workflow; changing a
+CNAME alone can leave the hostname associated with the wrong Pages project.
+
+Use `www` as the canary first, confirm certificate status and the browser
+acceptance suite, then move the apex. After apex is proven, make `www` a
+path-and-query-preserving redirect to `https://cirkle.world`. Retain the legacy
+`cirkle` Pages project, its default `cirkle.pages.dev` hostname, and the last
+known-good `cirkle-react` deployment throughout the rollback window.
+
+For frontend rollback, reattach `www` and then the apex to the legacy Pages
+project through its custom-domain workflow and verify DNS/SSL before declaring
+recovery. Do not delete or rewrite AWS/Supabase data during a frontend rollback.
+The `cirkle-react.cirkle.world` hostname remains available to diagnose the AWS
+path independently. See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the ordered gate.

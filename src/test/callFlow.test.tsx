@@ -22,6 +22,10 @@ vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => ({ user: { id: "viewer-1" } }),
 }));
 
+vi.mock("@/hooks/useRuntimeFeatures", () => ({
+  useDailyCallsEnabled: () => true,
+}));
+
 vi.mock("@daily-co/daily-js", () => ({
   default: { createFrame: mocks.createFrame },
 }));

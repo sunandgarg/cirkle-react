@@ -6,6 +6,7 @@ import { requestPathForLog, responseForLog } from "../src/security/logging.js";
 const production = {
   ...config,
   NODE_ENV: "production" as const,
+  DATABASE_URL: "mysql://cirkle_app:runtime-password@cirkle.cluster-example.ap-south-1.rds.amazonaws.com:3306/cirkle?sslcert=%2Fetc%2Fcirkle%2Fmysql-ca.pem&sslaccept=strict&connection_limit=5",
   TRUST_PROXY_HOPS: 1,
   APP_BASE_URL: "https://api.cirkle.world",
   FRONTEND_URL: "https://cirkle.world",
@@ -70,6 +71,20 @@ describe("production configuration", () => {
     const issues = productionConfigIssues({ ...production, HOST: "0.0.0.0", TRUST_PROXY_HOPS: 0 });
     expect(issues.some((issue) => issue.includes("HOST"))).toBe(true);
     expect(issues.some((issue) => issue.includes("TRUST_PROXY_HOPS"))).toBe(true);
+  });
+
+  it("requires the least-privilege runtime identity and verified MySQL TLS", () => {
+    const insecure = [
+      "mysql://cirkle_app:password@cirkle.cluster-example.ap-south-1.rds.amazonaws.com:3306/cirkle",
+      "mysql://cirkle_app:password@cirkle.cluster-example.ap-south-1.rds.amazonaws.com:3306/cirkle?sslcert=%2Fetc%2Fcirkle%2Fmysql-ca.pem&sslaccept=accept_invalid_certs",
+      "mysql://cirkle_migrate:password@cirkle.cluster-example.ap-south-1.rds.amazonaws.com:3306/cirkle?sslcert=%2Fetc%2Fcirkle%2Fmysql-ca.pem&sslaccept=strict",
+      "mysql://cirkle_app:password@127.0.0.1:3306/cirkle?sslcert=%2Fetc%2Fcirkle%2Fmysql-ca.pem&sslaccept=strict",
+      "not-a-url",
+    ];
+    for (const DATABASE_URL of insecure) {
+      expect(productionConfigIssues({ ...production, DATABASE_URL }))
+        .toContain("DATABASE_URL must use cirkle_app on the AWS managed cirkle database with an absolute sslcert and sslaccept=strict");
+    }
   });
 
   it("can boot an isolated staging environment with external providers disabled explicitly", () => {

@@ -12,6 +12,7 @@ import {
   getNotificationNavigationTarget,
   type CirkleNotification,
 } from "@/lib/notifications";
+import { useDailyCallsEnabled } from "@/hooks/useRuntimeFeatures";
 
 const PAGE_SIZE = 50;
 
@@ -19,6 +20,7 @@ const Notifications = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const callsEnabled = useDailyCallsEnabled();
   const [page, setPage] = useState(0);
 
   const { data, isLoading, error, refetch } = useQuery({
@@ -70,7 +72,7 @@ const Notifications = () => {
   };
 
   const openNotification = async (notification: CirkleNotification) => {
-    const target = getNotificationNavigationTarget(notification);
+    const target = getNotificationNavigationTarget(notification, { dailyCallsEnabled: callsEnabled });
     if (!target) return;
     if (!notification.is_read && !(await markRead(notification.id))) return;
     navigate(target);
@@ -86,7 +88,7 @@ const Notifications = () => {
             </button>
             <div>
               <h1 className="text-xl font-bold text-foreground">Notifications</h1>
-              <p className="text-xs text-muted-foreground">Account, network, job and call updates</p>
+              <p className="text-xs text-muted-foreground">Account, network, job and community updates</p>
             </div>
           </div>
           {unreadOnPage > 0 && (
@@ -108,7 +110,7 @@ const Notifications = () => {
         ) : rows.length ? (
           <div className="overflow-hidden rounded-2xl border border-border bg-card">
             {rows.map((notification) => {
-              const action = getNotificationActionLabel(notification);
+              const action = getNotificationActionLabel(notification, { dailyCallsEnabled: callsEnabled });
               return (
                 <article key={notification.id} className={`border-b border-border p-4 last:border-0 ${notification.is_read ? "" : "bg-primary/5"}`}>
                   <div className="flex items-start gap-3">
