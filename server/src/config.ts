@@ -48,12 +48,17 @@ const schema = z.object({
   KLIPY_API_KEY: z.string().optional(),
   DAILY_API_KEY: z.string().optional(),
   DAILY_DOMAIN: z.string().optional(),
+  REQUIRE_PROVIDER_CONFIG: booleanString.default("true"),
   APPSYNC_ENABLED: booleanString,
   APPSYNC_HTTP_ENDPOINT: z.string().url().optional(),
   APPSYNC_PUBLISH_TOKEN: z.string().optional(),
   APPSYNC_AUTHORIZER_SECRET: z.string().optional(),
   APPSYNC_PUBLISH_TIMEOUT_MS: z.coerce.number().int().min(500).max(10_000).default(4_000),
+  STORAGE_DRIVER: z.enum(["local", "s3"]).default("local"),
   STORAGE_ROOT: z.string().default("./server/storage"),
+  AWS_REGION: z.string().regex(/^[a-z]{2}-[a-z]+-\d$/).default("ap-south-1"),
+  S3_BUCKET: z.string().min(3).max(63).optional(),
+  S3_KEY_PREFIX: z.string().regex(/^[A-Za-z0-9!_.*'()/-]*$/).default(""),
   STORAGE_SIGNING_SECRET: z.string().min(16),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().max(20 * 1024 * 1024).default(20 * 1024 * 1024),
   MOBILE_TEST_MODE: booleanString,
@@ -79,11 +84,13 @@ export function productionConfigIssues(value: ServerConfig): string[] {
     if (/replace|change-before|local-only|placeholder|example|^test-/i.test(secret)) issues.push(`${key} still contains a placeholder value`);
   }
   if (new Set(secrets.map((key) => value[key])).size !== secrets.length) issues.push("Production security secrets must be distinct");
-  const providers = [
-    "ZEPTOMAIL_TOKEN", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI",
-    "OPENAI_API_KEY", "GEMINI_API_KEY", "KLIPY_API_KEY", "DAILY_API_KEY",
-  ] as const;
-  for (const key of providers) if (!value[key]?.trim()) issues.push(`${key} is required in production`);
+  if (value.REQUIRE_PROVIDER_CONFIG) {
+    const providers = [
+      "ZEPTOMAIL_TOKEN", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI",
+      "OPENAI_API_KEY", "GEMINI_API_KEY", "KLIPY_API_KEY", "DAILY_API_KEY",
+    ] as const;
+    for (const key of providers) if (!value[key]?.trim()) issues.push(`${key} is required in production`);
+  }
   const productionUrl = (key: "APP_BASE_URL" | "FRONTEND_URL", raw: string): URL | null => {
     try {
       const url = new URL(raw);
@@ -123,7 +130,6 @@ export function productionConfigIssues(value: ServerConfig): string[] {
   if (value.ZEPTOMAIL_FROM_EMAIL.toLowerCase() !== "noreply@cirkle.world") {
     issues.push("ZEPTOMAIL_FROM_EMAIL must equal the verified noreply@cirkle.world sender");
   }
-  if (!value.APPSYNC_ENABLED) issues.push("APPSYNC_ENABLED must be true in production");
   if (value.APPSYNC_ENABLED) {
     if (!value.APPSYNC_HTTP_ENDPOINT) issues.push("APPSYNC_HTTP_ENDPOINT is required when AppSync is enabled");
     if (!value.APPSYNC_PUBLISH_TOKEN || value.APPSYNC_PUBLISH_TOKEN.length < 32) issues.push("APPSYNC_PUBLISH_TOKEN must contain at least 32 characters when AppSync is enabled");
@@ -145,6 +151,7 @@ export function productionConfigIssues(value: ServerConfig): string[] {
       issues.push("AppSync credentials must be distinct from JWT, storage, hashing, and OTP secrets");
     }
   }
+  if (value.STORAGE_DRIVER === "s3" && !value.S3_BUCKET) issues.push("S3_BUCKET is required when STORAGE_DRIVER=s3");
   if (value.COOKIE_DOMAIN) issues.push("COOKIE_DOMAIN must be unset in production so the refresh cookie remains host-only");
   if (value.DAILY_DOMAIN) {
     try {
@@ -154,7 +161,7 @@ export function productionConfigIssues(value: ServerConfig): string[] {
   }
   if (!value.COOKIE_SECURE) issues.push("COOKIE_SECURE must be true in production");
   if (!new Set(["127.0.0.1", "::1", "localhost"]).has(value.HOST)) issues.push("HOST must bind to loopback behind Nginx in production");
-  if (value.TRUST_PROXY_HOPS !== 1) issues.push("TRUST_PROXY_HOPS must be 1; the API hostname must be DNS-only rather than Cloudflare-proxied");
+  if (![1, 2].includes(value.TRUST_PROXY_HOPS)) issues.push("TRUST_PROXY_HOPS must match the reviewed one-hop Nginx or two-hop AWS ALB/Nginx topology");
   return issues;
 }
 

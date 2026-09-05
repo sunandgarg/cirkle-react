@@ -15,6 +15,7 @@
     "build": "pnpm build:web && pnpm build:api",
     "build:web": "vite build",
     "build:pages": "node scripts/build-pages.mjs",
+    "build:aws": "node scripts/build-aws.mjs",
     "build:api": "tsc -p server/tsconfig.json",
     "build:dev": "vite build --mode development",
     "lint": "eslint . --max-warnings=0",
@@ -31,6 +32,8 @@
     "test:chat-load:live": "k6 run load/k6-forum.js",
     "test:forum:live50": "node load/live-forum-50.mjs",
     "smoke:local": "node scripts/smoke-local.mjs",
+    "supabase:export": "node scripts/export-supabase.mjs",
+    "supabase:import:full": "tsx server/src/scripts/import-supabase-full.ts",
     "test:watch": "vitest",
     "db:generate": "prisma generate",
     "db:validate": "prisma validate",
@@ -46,6 +49,7 @@
     "verify": "pnpm db:validate && pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1126.0",
     "@daily-co/daily-js": "^0.89.1",
     "@google/genai": "^2.21.0",
     "@hookform/resolvers": "^3.10.0",

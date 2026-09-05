@@ -65,10 +65,26 @@ describe("production configuration", () => {
       .toContain("ZEPTOMAIL_FROM_EMAIL must equal the verified noreply@cirkle.world sender");
   });
 
-  it("requires a loopback, one-hop, DNS-only API proxy model", () => {
-    const issues = productionConfigIssues({ ...production, HOST: "0.0.0.0", TRUST_PROXY_HOPS: 2 });
+  it("requires a loopback and a reviewed proxy topology", () => {
+    const issues = productionConfigIssues({ ...production, HOST: "0.0.0.0", TRUST_PROXY_HOPS: 0 });
     expect(issues.some((issue) => issue.includes("HOST"))).toBe(true);
     expect(issues.some((issue) => issue.includes("TRUST_PROXY_HOPS"))).toBe(true);
+  });
+
+  it("can boot an isolated staging environment with external providers disabled explicitly", () => {
+    expect(productionConfigIssues({
+      ...production,
+      REQUIRE_PROVIDER_CONFIG: false,
+      ZEPTOMAIL_TOKEN: undefined,
+      GOOGLE_CLIENT_ID: undefined,
+      GOOGLE_CLIENT_SECRET: undefined,
+      GOOGLE_REDIRECT_URI: undefined,
+      OPENAI_API_KEY: undefined,
+      GEMINI_API_KEY: undefined,
+      KLIPY_API_KEY: undefined,
+      DAILY_API_KEY: undefined,
+      TRUST_PROXY_HOPS: 2,
+    })).toEqual([]);
   });
 
   it("requires a host-only cookie and the Nginx-compatible upload limit", () => {
@@ -96,8 +112,20 @@ describe("production configuration", () => {
       ...production,
       APPSYNC_PUBLISH_TOKEN: production.JWT_ACCESS_SECRET,
     })).toContain("AppSync credentials must be distinct from JWT, storage, hashing, and OTP secrets");
-    expect(productionConfigIssues({ ...production, APPSYNC_ENABLED: false }))
-      .toContain("APPSYNC_ENABLED must be true in production");
+    expect(productionConfigIssues({
+      ...production,
+      APPSYNC_ENABLED: false,
+      APPSYNC_HTTP_ENDPOINT: undefined,
+      APPSYNC_PUBLISH_TOKEN: undefined,
+      APPSYNC_AUTHORIZER_SECRET: undefined,
+    })).toEqual([]);
+  });
+
+  it("requires an S3 bucket only when the S3 storage driver is selected", () => {
+    expect(productionConfigIssues({ ...production, STORAGE_DRIVER: "s3", S3_BUCKET: undefined }))
+      .toContain("S3_BUCKET is required when STORAGE_DRIVER=s3");
+    expect(productionConfigIssues({ ...production, STORAGE_DRIVER: "s3", S3_BUCKET: "cirkle-uploads-example" }))
+      .toEqual([]);
   });
 });
 

@@ -16,18 +16,11 @@ module.exports = {
       // Socket.IO currently uses in-process subscriptions. Keep one process
       // until a shared adapter and sticky sessions are deliberately added.
       instances: 1,
-      env: {
-        NODE_ENV: "development",
-        HOST: "127.0.0.1",
-        PORT: "3001",
-        TRUST_PROXY_HOPS: "0",
-      },
-      env_production: {
-        NODE_ENV: "production",
-        HOST: "127.0.0.1",
-        PORT: "3001",
-        TRUST_PROXY_HOPS: "1",
-      },
+      // Runtime configuration comes exclusively from the root-owned env file.
+      // Duplicating values here silently overrides Node's --env-file values and
+      // breaks alternate reviewed topologies such as CloudFront/ALB/Nginx.
+      env: {},
+      env_production: {},
       autorestart: true,
       watch: false,
       max_memory_restart: "768M",

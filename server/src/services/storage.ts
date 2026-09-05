@@ -1,6 +1,4 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Express } from "express";
 import { config } from "../config.js";
 import { ApiError } from "../lib/errors.js";
@@ -10,6 +8,7 @@ import { canUseForumScope } from "../security/forumScope.js";
 import type { RequestContext } from "../types.js";
 import { writeAudit } from "./audit.js";
 import { isDeletedForEveryone, mediaReferencesRevoked } from "../security/tombstone.js";
+import { deleteObjectBytes, putObjectNew, readObjectBytes } from "./objectStore.js";
 
 interface BucketPolicy { visibility: "public" | "private"; max: number; mime: RegExp; admin?: boolean }
 const mb = 1024 * 1024;
@@ -43,13 +42,6 @@ function policy(bucket: string): BucketPolicy {
   const found = buckets[bucket];
   if (!found) throw new ApiError(400, "bucket_not_allowed", "Storage bucket is not allowed");
   return found;
-}
-
-function diskPath(bucket: string, objectPath: string): string {
-  const root = path.resolve(config.STORAGE_ROOT);
-  const target = path.resolve(root, bucket, objectPath);
-  if (!target.startsWith(`${root}${path.sep}`)) throw new ApiError(400, "invalid_object_path", "Object path escapes storage root");
-  return target;
 }
 
 function signature(bucket: string, objectPath: string, expires: number): string {
@@ -155,8 +147,6 @@ export async function storeUpload(bucket: string, objectPathValue: string, file:
     }
     if (existing) throw new ApiError(409, "object_immutable", "An uploaded object cannot be replaced; upload to a new path instead");
   }
-  const target = diskPath(bucket, objectPath);
-  await mkdir(path.dirname(target), { recursive: true, mode: 0o750 });
   const metadata = await prisma.$transaction(async (tx) => {
     // Hold a shared lock on the active uploader through both the byte write and
     // metadata insert. Account deletion takes the corresponding FOR UPDATE
@@ -166,9 +156,12 @@ export async function storeUpload(bucket: string, objectPathValue: string, file:
       SELECT id FROM users WHERE id = ${ctx.auth.id} AND status = 'active' LIMIT 1 FOR SHARE
     `;
     if (active.length !== 1) throw new ApiError(401, "account_unavailable", "This account is unavailable");
-    try { await writeFile(target, file.buffer, { flag: "wx", mode: 0o640 }); }
+    try { await putObjectNew(objectKey, file.buffer, file.mimetype); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new ApiError(409, "object_exists", "An object already exists at this path");
+      const code = (error as { code?: string; name?: string; $metadata?: { httpStatusCode?: number } }).code;
+      const name = (error as { name?: string }).name;
+      const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+      if (code === "EEXIST" || name === "PreconditionFailed" || status === 412) throw new ApiError(409, "object_exists", "An object already exists at this path");
       throw error;
     }
     try {
@@ -180,7 +173,7 @@ export async function storeUpload(bucket: string, objectPathValue: string, file:
     } catch (error) {
       // A brand-new path has no prior bytes to preserve. Avoid leaving an
       // untracked object behind if metadata persistence fails.
-      await unlink(target).catch(() => undefined);
+      await deleteObjectBytes(objectKey).catch(() => undefined);
       throw error;
     }
   }, { timeout: 15_000 });
@@ -385,9 +378,9 @@ export async function loadObject(bucket: string, objectPathValue: string, requir
   const metadata = await prisma.fileObject.findUnique({ where: { object_key: `${bucket}/${objectPath}` } });
   if (!metadata || metadata.deleted_at || metadata.status !== "ready") throw new ApiError(404, "object_not_found", "Object not found");
   if (rules.visibility === "private" && await privateObjectRevoked(bucket, objectPath)) throw new ApiError(404, "object_not_found", "Object not found");
-  try { return { bytes: await readFile(diskPath(bucket, objectPath)), mime: metadata.mime_type, name: metadata.original_name }; }
+  try { return { bytes: await readObjectBytes(`${bucket}/${objectPath}`), mime: metadata.mime_type, name: metadata.original_name }; }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ApiError(404, "object_not_found", "Object not found");
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as { name?: string }).name === "NoSuchKey") throw new ApiError(404, "object_not_found", "Object not found");
     throw error;
   }
 }
@@ -413,7 +406,7 @@ export async function removeObjects(bucket: string, paths: string[], ctx: Reques
         throw new ApiError(409, "verification_evidence_locked", "Verification evidence under review or already approved cannot be deleted");
       }
     }
-    try { await unlink(diskPath(bucket, objectPath)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    try { await deleteObjectBytes(`${bucket}/${objectPath}`); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (error as { name?: string }).name !== "NoSuchKey") throw error; }
     await prisma.fileObject.update({ where: { id: metadata.id }, data: { status: "deleted", deleted_at: new Date() } });
     removed.push({ path: objectPath });
   }

@@ -5,12 +5,14 @@ import path from "node:path";
 import { config } from "../config.js";
 import { asyncHandler } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
+import { probeObjectStore } from "../services/objectStore.js";
 
 export const healthRouter: Router = Router();
 
 export const healthPayload = (uptimeSeconds = process.uptime()) => ({ status: "ok" as const, service: "cirkle-api", uptime_seconds: Math.floor(uptimeSeconds) });
 
 export async function probeStorageRoot(rootValue = config.STORAGE_ROOT): Promise<void> {
+  if (config.STORAGE_DRIVER === "s3" && rootValue === config.STORAGE_ROOT) return probeObjectStore();
   const root = path.resolve(rootValue);
   await mkdir(root, { recursive: true, mode: 0o750 });
   const probePath = path.join(root, `.cirkle-readiness-${randomUUID()}`);

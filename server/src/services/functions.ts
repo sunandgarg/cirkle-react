@@ -1,4 +1,3 @@
-import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { Prisma, type LegacyRecord } from "@prisma/client";
 import { config } from "../config.js";
@@ -26,6 +25,7 @@ import {
 import { forumSegment } from "../security/forumScope.js";
 import { publicStorageObjectUrl } from "./storage.js";
 import { AppSyncFixedWindowRateLimiter } from "../realtime/appsyncRateLimit.js";
+import { deleteObjectBytes } from "./objectStore.js";
 
 type Body = Record<string, unknown>;
 type Row = Record<string, unknown>;
@@ -234,10 +234,10 @@ async function cleanupMemberFileBytes(files: Array<{ id: string; object_key: str
   for (const batch of chunks(files, 25)) {
     const outcomes = await Promise.all(batch.map(async (file) => {
       try {
-        await unlink(resolveMemberFileDiskPath(config.STORAGE_ROOT, file.object_key));
+        await deleteObjectBytes(file.object_key);
         return { id: file.id, removed: true };
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return { id: file.id, removed: true };
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as { name?: string }).name === "NoSuchKey") return { id: file.id, removed: true };
         return { id: file.id, removed: false };
       }
     }));
