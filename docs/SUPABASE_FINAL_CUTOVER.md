@@ -2,6 +2,63 @@
 
 This is a copy-and-reconcile migration. It does not delete or mutate Supabase data. The old Supabase export (50 tables / 638 public rows) is not a cutover artifact: version 2 deliberately rejects it.
 
+## Completed production outcome (2026-09-06)
+
+The production version-2 export was applied to AWS and its final automatic
+reconciliation returned `passed`. The authoritative recorded totals are:
+
+| Area | Final cutover evidence |
+| --- | ---: |
+| Source `public` tables | 64 |
+| Source `public` rows | 2,395 |
+| Auth users | 35 |
+| Imported bcrypt password verifiers | 14 |
+| Storage objects | 8 |
+| Storage bytes | 1,368,387 |
+
+The final post-domain-cutover content-digest prefix is `bd4d1c45...`; two
+consecutive exports matched exactly. Compared with the initially imported
+`2b376887...` snapshot, only the privately archived legacy
+`realtime_delivery_outbox` control/retry payload changed. No user/content table,
+auth record, bucket, or storage object changed. The stable final snapshot was
+applied idempotently with API writes paused and reconciliation again returned
+`passed`. Its restricted, versioned, AES-256-encrypted archive is
+`migration-archives/2026-09-06/cirkle-supabase-v2-bd4d1c45.tar.gz` in the
+private media bucket. The complete manifest, digest, reconciliation JSON, and
+object-hash evidence are sensitive migration artifacts and belong in restricted storage;
+do not infer the omitted digest suffix from this runbook. AWS managed MySQL and
+private S3 are now the durable production stores, while the API is live on
+Lightsail. Both `cirkle.world` and `www.cirkle.world` are attached to the
+Cloudflare Pages project `cirkle-react`. Supabase remains intact for the agreed
+rollback/evidence window but is not a production frontend dependency. Because
+the unchanged legacy `cirkle.pages.dev` remains reachable, the matching final
+exports demonstrate source stability during their observation window rather
+than an independently enforced global freeze. Treat that site as rollback-only
+and never operate both stores as writable authorities.
+
+The production database-TLS change was bracketed by these verified encrypted,
+checksummed S3 backups in
+`cirkle-react-deploymentbucket-vs0hxjf6smax`:
+
+- Pre-change: `backups/mysql/cirkle-20260905T182055Z.sql.gz`
+- Post-change: `backups/mysql/cirkle-20260905T182415Z.sql.gz`
+
+The final version-2 import itself was separately bracketed by:
+
+- Pre-import: `backups/mysql/cirkle-20260905T182721Z.sql.gz`
+- Post-import: `backups/mysql/cirkle-20260905T182818Z.sql.gz`
+
+The final stable outbox-archive reconciliation was bracketed by:
+
+- Pre-delta: `backups/mysql/cirkle-20260905T185002Z.sql.gz`
+- Post-delta: `backups/mysql/cirkle-20260905T185232Z.sql.gz`
+
+Active Supabase sessions were not migrated; every user must establish a fresh
+Cirkle session. Fourteen protected bcrypt verifiers were migrated, so the
+earlier forced-reset limitation does not apply to those accounts. The gates
+below remain the repeatable audit/recovery procedure and historical basis for
+the cutover; the completed outcome above is the production record.
+
 ## What version 2 preserves
 
 - All 64 reviewed `public` tables, not only the original 50.
@@ -19,9 +76,11 @@ This is a copy-and-reconcile migration. It does not delete or mutate Supabase da
 
 The importer is additive/upserting. It does not remove unrelated AWS-created rows. An obsolete single-column academic-specialisation record is moved to its correct composite identity, or preserved under `supabase_migration_artifact` if it conflicts; it is not deleted.
 
-## Audited starting point (2026-09-05)
+## Pre-freeze audited starting point (2026-09-05)
 
-These are diagnostics, not hard-coded acceptance totals. The final frozen export is authoritative.
+These were pre-cutover diagnostics, not hard-coded acceptance totals. They
+explain why the final authoritative total above is 2,395 rather than the
+earlier 2,389-row observation.
 
 | Area | Audited source |
 | --- | ---: |
@@ -140,7 +199,7 @@ If the plan reports zero or a different known count, use that exact count; never
 
 Success is only the final JSON result containing `"reconciliation": "passed"`. A non-zero exit or missing reconciliation result is a failed cutover, even if some immutable S3 objects were staged. The command is idempotent and can be rerun after correcting the failure.
 
-## Gate 6: functional acceptance before DNS
+## Gate 6: functional acceptance and DNS
 
 Keep both systems frozen while testing the AWS origin directly:
 
@@ -156,4 +215,20 @@ Keep both systems frozen while testing the AWS origin directly:
 - Confirm no operational profile/logo/media field references `bugwubrwvlqayxwcazfd.supabase.co`, while the private source snapshot still preserves the original source rows.
 - Confirm `verification_codes` is rejected by the compatibility API and the 28 historical rows exist only in the private archive/snapshot.
 
-Only after these pass should DNS/frontend API configuration move to AWS. Keep Supabase intact and read-only for an agreed rollback period. If rollback is needed, stop AWS writers before re-enabling Supabase; never permit independent writes to both systems and attempt an ad-hoc merge.
+The data-import and reconciliation gates passed for the recorded production
+cutover, and the frontend hostnames then moved to `cirkle-react`. The remaining
+provider and operational checks below are not evidence failures in that final
+reconciliation. Keep Supabase intact as rollback evidence and operationally
+unused for the agreed rollback period. If rollback is needed, stop AWS writers
+before making Supabase authoritative again; never permit independent writes to
+both systems and attempt an ad-hoc merge.
+
+Remaining operations are tracked in `AWS_HOSTING.md`: verify the pending AWS
+alert contact, run an isolated restore drill, clear the CloudFront account hold
+before enabling signed delivery, create/fix the optional custom-domain mailbox
+that hard-bounced (the ZeptoMail India transport itself passed live Gmail delivery),
+complete KLIPY production review, and configure optional AI/calling providers
+only when their features are required. Retain the source-freeze/change-control
+log with the full digest and reconciliation evidence if it exists; a manifest
+digest proves artifact integrity but does not independently prove writer
+freeze.

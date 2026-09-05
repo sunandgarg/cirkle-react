@@ -1,15 +1,19 @@
 # Cirkle React budget AWS hosting
 
-This is the AWS-backed `cirkle-react` deployment selected for the
-`cirkle.world` cutover. The existing Supabase project and legacy Cloudflare
-Pages project remain intact as rollback sources; the cutover does not delete
-either one. AppSync is disabled for this deployment.
+This is the AWS-backed `cirkle-react` production deployment. The apex and
+`www` hostnames completed their cutover to the Cloudflare Pages project
+`cirkle-react` on 6 September 2026; the API, managed MySQL database, and private
+S3 storage are live on AWS. The existing Supabase project and legacy
+Cloudflare Pages project remain intact as rollback sources; the cutover did not
+delete either one. AppSync is disabled for this deployment.
 
 ## Live topology
 
 ```text
 Browser
-  -> Cloudflare Pages: https://cirkle.world
+  -> Cloudflare Pages project cirkle-react
+       https://cirkle.world (canonical)
+       https://www.cirkle.world
        (rollout/rollback origin: https://cirkle-react.cirkle.world)
   -> HTTPS API/Socket.IO: https://api-react.cirkle.world
        -> Lightsail instance cirkle-react-api (Mumbai, $7 bundle)
@@ -93,24 +97,65 @@ aws cloudformation deploy \
 
 ## Source copy and reconciliation
 
-The original source remains intact. A consistent source MySQL dump was restored into the managed database, copied into the separate encrypted backup bucket, and verified table-by-table. The media copy was verified by object count and total bytes.
-
-Verified destination snapshot:
+The production version-2 Supabase export was imported into AWS and its final
+automatic reconciliation returned `passed`. The authoritative cutover totals
+recorded on 6 September 2026 are:
 
 | Data | Count |
 | --- | ---: |
-| Users | 35 |
-| Profiles | 17 |
-| Auth identities | 23 |
-| Posts | 106 |
-| Connections | 7 |
-| Jobs | 40 |
-| Events | 126 |
-| RSVPs | 2 |
-| Legacy records | 338 |
-| S3 media objects | 8 (1,368,387 bytes) |
+| Source `public` tables | 64 |
+| Source `public` rows | 2,395 |
+| Auth users | 35 |
+| Imported bcrypt password verifiers | 14 |
+| S3 media objects | 8 |
+| S3 media bytes | 1,368,387 |
 
-Email/password hashes and active Supabase sessions are not portable through the Supabase Admin API. Any user imported without a portable password must use Cirkle's password-reset flow. Google identities retain their provider subject. Never invent passwords or import active OTP/reset challenges.
+The final post-domain-cutover version-2 content-digest prefix is `bd4d1c45...`.
+Two consecutive exports matched exactly. Compared with the initially imported
+`2b376887...` snapshot, only the archived legacy
+`realtime_delivery_outbox` control/retry payload changed; no user/content table,
+auth record, bucket, or object changed. The stable final snapshot was applied
+idempotently with API writes paused and reconciliation again returned `passed`.
+Its restricted, versioned, AES-256-encrypted archive is
+`migration-archives/2026-09-06/cirkle-supabase-v2-bd4d1c45.tar.gz` in the
+private media bucket. Preserve the
+complete manifest and digest in the restricted migration evidence; do not infer
+or publish the omitted digest suffix. The eight copied objects were verified by
+count, byte total, and object hash before the database transaction committed.
+The private source snapshot and compatibility records preserve tables that do
+not have first-class runtime models.
+
+Fourteen valid bcrypt verifiers were imported through the protected migration
+path. Users without a portable verifier must use password reset. Supabase
+access/refresh sessions, OTPs, and reset challenges were not imported, so every
+user must establish a fresh Cirkle session. Google identities retain their
+provider subject. Never invent passwords or migrate live challenges.
+
+The database-transport rollout was bracketed by two verified, encrypted,
+checksummed logical backups in
+`cirkle-react-deploymentbucket-vs0hxjf6smax`:
+
+- Pre-change: `backups/mysql/cirkle-20260905T182055Z.sql.gz`
+- Post-change: `backups/mysql/cirkle-20260905T182415Z.sql.gz`
+
+The final version-2 import was separately bracketed by:
+
+- Pre-import: `backups/mysql/cirkle-20260905T182721Z.sql.gz`
+- Post-import: `backups/mysql/cirkle-20260905T182818Z.sql.gz`
+
+The final stable outbox-archive reconciliation was bracketed by:
+
+- Pre-delta: `backups/mysql/cirkle-20260905T185002Z.sql.gz`
+- Post-delta: `backups/mysql/cirkle-20260905T185232Z.sql.gz`
+
+The production frontend no longer depends on Supabase. The Supabase project and
+legacy `cirkle.pages.dev` frontend nevertheless remain reachable because the
+cutover requirement prohibited changing or deleting them. The matching final
+exports prove source stability during that observation window, but do not prove
+an independently enforced global write freeze. Treat the legacy system as
+rollback-only, keep the protected version-2 export for the agreed evidence
+window, and do not accept independent writes on both systems or attempt an
+ad-hoc merge.
 
 ## Estimated base monthly cost
 
@@ -146,37 +191,47 @@ alarms were `OK` at the last audit, but the Lightsail email contact was still
 `PendingVerification`; alarms cannot reliably notify anyone until that email is
 confirmed. A budget alerts after spend; it is not a hard service limit.
 
-## Remaining production acceptance gates
+## Completed provider checks and remaining operational items
 
 Completed on 5 September 2026: a fresh ZeptoMail India send token, Google OAuth
 client secret, and KLIPY key were stored only in the Lightsail application
 secret; the API was restarted through a validated environment preflight. Google
-OAuth completed end to end on the live custom domain. ZeptoMail accepted the
-live OTP request, but `sunandgarg@cirkle.world` hard-bounced because that mailbox
-was not deliverable. KLIPY search works with the new key, which remains in the
+OAuth completed end to end on the live custom domain. ZeptoMail India delivery
+also completed end to end to the deliverable `sunandgarg@gmail.com` mailbox:
+Gmail received the branded sign-in-code message from `noreply@cirkle.world`
+with its inline logo. A separate test to `sunandgarg@cirkle.world` hard-bounced
+because that custom-domain mailbox was not deliverable. KLIPY search works with
+the configured key, which remains in the
 provider's TESTING state until its production-review form and product video are
-submitted.
+submitted. The three database identities were also rolled out with verified
+AWS-CA TLS, `require_secure_transport=1` was activated by a controlled managed
+database reboot, and both the pre-change and post-change encrypted/checksummed
+S3 backups succeeded. Lightsail returned to `available`/`in-sync`, every scoped
+identity reported `TLS_AES_256_GCM_SHA384`, and API database/storage readiness
+passed afterward.
 
-1. Create/fix the `sunandgarg@cirkle.world` mailbox (or explicitly choose a valid test recipient), then verify every live email template and delivery outcome.
+1. Create/fix the `sunandgarg@cirkle.world` mailbox if that address should receive mail; the ZeptoMail India transport and branded login template are already live-verified with a deliverable Gmail recipient.
 2. Submit KLIPY's production request with category, monthly-active-user estimate, product video, and required attribution.
 3. Ask AWS Support to verify the account for CloudFront, deploy the conditional distribution, then test signed/private/public media behavior and cache headers.
 4. Configure and live-test OpenAI, Gemini, and Daily credentials where those features are required.
-5. Roll out the three TLS-only database identities in backup, migration, then runtime order; prove a non-empty TLS cipher for each and retain the old broad identity only for the rollback window.
-6. Confirm the AWS alert email, allow the API burst balance to recover after release builds, and restore one fresh S3 backup into an isolated MySQL instance before declaring disaster recovery rehearsed.
+5. Confirm the AWS alert email, allow the API burst balance to recover after release builds, and restore one fresh S3 backup into an isolated MySQL instance before declaring disaster recovery rehearsed.
+6. Retain the complete version-2 manifest, digest, reconciliation output, source-freeze/change-control evidence, and object-hash report in restricted storage. The digest and reconciliation result alone do not prove that every source writer was frozen.
+7. Keep the legacy Pages project, Supabase project, prior API release, old EC2 resources, retained buckets, and rollback secrets until the rollback window is explicitly closed. Review ownership first: the older `cirkle-react` CloudFormation stack still owns the active database-backup bucket, so the stack must not be deleted wholesale.
 
 ## Apex cutover and rollback
 
-Before moving a custom domain, the API allowlist must contain
+The apex and `www` production hostnames are now attached to Cloudflare Pages
+project `cirkle-react`; `https://cirkle.world` is the canonical frontend. The
+API allowlist contains
 `https://cirkle.world`, `https://www.cirkle.world`,
 `https://cirkle-react.cirkle.world`, and `https://cirkle-react.pages.dev`.
-Move domains through the Cloudflare Pages custom-domain workflow; changing a
-CNAME alone can leave the hostname associated with the wrong Pages project.
-
-Use `www` as the canary first, confirm certificate status and the browser
-acceptance suite, then move the apex. After apex is proven, make `www` a
-path-and-query-preserving redirect to `https://cirkle.world`. Retain the legacy
-`cirkle` Pages project, its default `cirkle.pages.dev` hostname, and the last
-known-good `cirkle-react` deployment throughout the rollback window.
+Keep both hostnames associated through the Pages custom-domain workflow;
+changing a CNAME alone can leave a hostname associated with the wrong Pages
+project. `www` currently serves the same verified Pages artifact as the apex;
+no redirect is configured. If a canonical redirect is added later, verify that
+it preserves paths and query parameters. Retain the legacy `cirkle` Pages
+project, its default `cirkle.pages.dev` hostname, and the last known-good
+`cirkle-react` deployment throughout the rollback window.
 
 For frontend rollback, reattach `www` and then the apex to the legacy Pages
 project through its custom-domain workflow and verify DNS/SSL before declaring
