@@ -16,6 +16,13 @@ import { applyProfileEntryModeration, moderationReferenceDefinitions, type Catal
 import { forumAppSyncChannels, isCanonicalRealtimeRecordId } from "../realtime/appsyncChannels.js";
 import { createForumPostsWithSlowMode } from "./forumSlowMode.js";
 import { activeDailyRoomNamesForUser, closeDailySessionsForRooms, revokeDailyUserRooms, type ClosedDailySessions } from "./daily.js";
+import {
+  activeChatMembershipRecordsForUser,
+  lockedActiveChatMembership,
+  lockedActiveChatMembershipForUpdate,
+  normalizeActiveChatMembership,
+  type ChatMembershipRecord,
+} from "../realtime/chatMembership.js";
 
 type Args = Record<string, unknown>;
 type Row = Record<string, unknown>;
@@ -100,13 +107,21 @@ async function legacyRowsForUser(table: string, userId: string): Promise<Array<R
   return records.map((record) => ({ ...(record.data as Row), __legacy_id: record.id }));
 }
 
-async function legacyRowsByJsonValues(table: string, column: string, values: string[]): Promise<Array<Row & { __legacy_id: string }>> {
+type LegacyRecordReadClient = Pick<Prisma.TransactionClient, "legacyRecord">;
+type ChatInboxReadClient = Pick<Prisma.TransactionClient, "legacyRecord" | "$queryRaw">;
+
+async function legacyRowsByJsonValues(
+  client: LegacyRecordReadClient,
+  table: string,
+  column: string,
+  values: string[],
+): Promise<Array<Row & { __legacy_id: string }>> {
   const unique = [...new Set(values.filter(Boolean))];
   if (!unique.length) return [];
   const output: Array<Row & { __legacy_id: string }> = [];
   for (let offset = 0; offset < unique.length; offset += 250) {
     const chunk = unique.slice(offset, offset + 250);
-    const records = await prisma.legacyRecord.findMany({ where: {
+    const records = await client.legacyRecord.findMany({ where: {
       table_name: table,
       OR: chunk.map((value) => ({ data: { path: `$.${column}`, equals: value } })),
     }, orderBy: { created_at: "desc" } });
@@ -658,45 +673,101 @@ async function forumUnread(ctx: RequestContext): Promise<Row[]> {
 async function directChat(args: Args, ctx: RequestContext): Promise<string> {
   await requireVerified(ctx);
   const peerId = text(args, "p_peer_id", { required: true });
-  const connection = await prisma.connection.findUnique({ where: { pair_key: pairKey(ctx.auth.id, peerId) } });
-  if (!connection || connection.status !== "accepted") throw new ApiError(403, "connection_required", "An accepted connection is required for direct chat");
-  const key = `direct:${pairKey(ctx.auth.id, peerId)}`;
-  const existing = await prisma.legacyRecord.findUnique({ where: { table_name_record_id: { table_name: "chat_rooms", record_id: key } } });
-  if (existing) return String((existing.data as Row).id);
-  const roomId = newId();
-  try {
-    await prisma.$transaction([
-      prisma.legacyRecord.create({ data: { table_name: "chat_rooms", record_id: key, community_id: ctx.auth.community_id, data: { id: roomId, name: null, is_group: false, direct_key: pairKey(ctx.auth.id, peerId), created_by: ctx.auth.id, created_at: nowIso(), updated_at: nowIso() } } }),
-      prisma.legacyRecord.create({ data: { table_name: "chat_members", record_id: `${roomId}:${ctx.auth.id}`, owner_id: ctx.auth.id, community_id: ctx.auth.community_id, data: { id: newId(), room_id: roomId, user_id: ctx.auth.id, joined_at: nowIso(), last_read_at: nowIso() } } }),
-      prisma.legacyRecord.create({ data: { table_name: "chat_members", record_id: `${roomId}:${peerId}`, owner_id: peerId, community_id: ctx.auth.community_id, data: { id: newId(), room_id: roomId, user_id: peerId, joined_at: nowIso(), last_read_at: null } } }),
-    ]);
+  if (peerId === ctx.auth.id) throw new ApiError(400, "invalid_chat_peer", "A direct conversation requires another member");
+  const directKey = pairKey(ctx.auth.id, peerId);
+  const key = `direct:${directKey}`;
+  return prisma.$transaction(async (tx) => {
+    // The accepted connection is the stable serialization point for creation
+    // and explicit reopening. If the connection is revoked concurrently, this
+    // request either observes that state or commits before the revocation.
+    const lockedConnection = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM connections WHERE pair_key = ${directKey} LIMIT 1 FOR UPDATE
+    `);
+    const connection = lockedConnection.length === 1
+      ? await tx.connection.findUnique({ where: { pair_key: directKey } })
+      : null;
+    if (!connection || connection.status !== "accepted"
+      || pairKey(connection.requester_id, connection.receiver_id) !== directKey) {
+      throw new ApiError(403, "connection_required", "An accepted connection is required for direct chat");
+    }
+
+    const existing = await tx.legacyRecord.findUnique({ where: {
+      table_name_record_id: { table_name: "chat_rooms", record_id: key },
+    } });
+    let roomId: string;
+    if (existing) {
+      const room = existing.data as Row;
+      roomId = typeof room.id === "string" ? room.id : "";
+      if (!roomId || room.direct_key !== directKey || room.is_group !== false) {
+        throw new ApiError(409, "direct_chat_invalid", "The existing direct conversation is invalid");
+      }
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM legacy_records WHERE id = ${existing.id} AND table_name = 'chat_rooms' LIMIT 1 FOR UPDATE`);
+    } else {
+      roomId = newId();
+      await tx.legacyRecord.create({ data: {
+        table_name: "chat_rooms",
+        record_id: key,
+        community_id: ctx.auth.community_id,
+        data: { id: roomId, name: null, is_group: false, direct_key: directKey, created_by: ctx.auth.id, created_at: nowIso(), updated_at: nowIso() },
+      } });
+    }
+
+    // Calling this RPC is the sole explicit direct-chat reactivation action.
+    // It restores both still-connected peers and normalizes duplicate or
+    // soft-removed membership rows; passive sidebar reads never reactivate.
+    const reopenedAt = nowIso();
+    await normalizeActiveChatMembership(tx, {
+      userId: ctx.auth.id, roomId, communityId: ctx.auth.community_id, lastReadAt: reopenedAt,
+    });
+    await normalizeActiveChatMembership(tx, {
+      userId: peerId, roomId, communityId: ctx.auth.community_id,
+    });
     return roomId;
-  } catch (error) {
-    const raced = await prisma.legacyRecord.findUnique({ where: { table_name_record_id: { table_name: "chat_rooms", record_id: key } } });
-    if (raced) return String((raced.data as Row).id);
-    throw error;
-  }
+  });
 }
 
-async function chatMembership(userId: string): Promise<Row[]> {
-  const records = await prisma.legacyRecord.findMany({ where: { table_name: "chat_members", owner_id: userId } });
-  return records.map((record) => ({ ...(record.data as Row), __legacy_id: record.id }));
+async function chatMembership(client: LegacyRecordReadClient, userId: string): Promise<Row[]> {
+  const records = await client.legacyRecord.findMany({
+    where: {
+      table_name: "chat_members",
+      OR: [{ owner_id: userId }, { data: { path: "$.user_id", equals: userId } }],
+    },
+    select: { id: true, record_id: true, owner_id: true, community_id: true, data: true },
+    orderBy: { id: "asc" },
+  });
+  const roomIds = [...new Set(records.flatMap((record) => {
+    const row = record.data && typeof record.data === "object" && !Array.isArray(record.data)
+      ? record.data as Row
+      : {};
+    return typeof row.room_id === "string" && row.room_id ? [row.room_id] : [];
+  }))];
+  const canonical = roomIds.length ? await client.legacyRecord.findMany({
+    where: { table_name: "chat_members", record_id: { in: roomIds.map((roomId) => `${roomId}:${userId}`) } },
+    select: { id: true, record_id: true, owner_id: true, community_id: true, data: true },
+  }) : [];
+  const completeRecords = [...new Map([...records, ...canonical].map((record) => [record.id, record])).values()];
+  return activeChatMembershipRecordsForUser(completeRecords as ChatMembershipRecord[], userId)
+    .map((record) => ({ ...(record.data as Row), __legacy_id: record.id }));
 }
 
 type LatestMessageKey = { id: string; room_id: string };
 type UnreadRoomCount = { room_id: string; unread_count: bigint | number | string };
 
-async function chatInboxMessageSummary(roomIds: string[], userId: string): Promise<{
+async function chatInboxMessageSummary(client: ChatInboxReadClient, memberships: Row[], userId: string): Promise<{
   latestByRoom: Map<string, Row>;
   unreadByRoom: Map<string, number>;
 }> {
   const latestByRoom = new Map<string, Row>();
   const unreadByRoom = new Map<string, number>();
-  for (let offset = 0; offset < roomIds.length; offset += 1000) {
-    const chunk = roomIds.slice(offset, offset + 1000);
+  for (let offset = 0; offset < memberships.length; offset += 1000) {
+    const cursorChunk = memberships.slice(offset, offset + 1000).flatMap((membership) =>
+      typeof membership.room_id === "string"
+        ? [{ roomId: membership.room_id, lastReadAt: typeof membership.last_read_at === "string" ? membership.last_read_at : "" }]
+        : []);
+    const chunk = cursorChunk.map(({ roomId }) => roomId);
     if (!chunk.length) continue;
     const [latestKeys, unreadCounts] = await Promise.all([
-      prisma.$queryRaw<LatestMessageKey[]>(Prisma.sql`
+      client.$queryRaw<LatestMessageKey[]>(Prisma.sql`
         SELECT ranked.id, ranked.room_id
         FROM (
           SELECT id,
@@ -713,24 +784,27 @@ async function chatInboxMessageSummary(roomIds: string[], userId: string): Promi
         ) AS ranked
         WHERE ranked.row_rank = 1
       `),
-      prisma.$queryRaw<UnreadRoomCount[]>(Prisma.sql`
+      client.$queryRaw<UnreadRoomCount[]>(Prisma.sql`
+        WITH member_cursor AS (
+          ${Prisma.join(cursorChunk.map(({ roomId, lastReadAt }) => Prisma.sql`
+            SELECT ${roomId} AS room_id, ${lastReadAt} AS last_read_at
+          `), " UNION ALL ")}
+        )
         SELECT JSON_UNQUOTE(JSON_EXTRACT(messages.data, '$.room_id')) AS room_id,
           COUNT(*) AS unread_count
         FROM legacy_records AS messages
-        INNER JOIN legacy_records AS membership
-          ON membership.table_name = 'chat_members'
-          AND membership.owner_id = ${userId}
-          AND JSON_UNQUOTE(JSON_EXTRACT(membership.data, '$.room_id')) = JSON_UNQUOTE(JSON_EXTRACT(messages.data, '$.room_id'))
+        INNER JOIN member_cursor AS membership
+          ON membership.room_id = JSON_UNQUOTE(JSON_EXTRACT(messages.data, '$.room_id'))
         WHERE messages.table_name = 'messages'
           AND JSON_UNQUOTE(JSON_EXTRACT(messages.data, '$.room_id')) IN (${Prisma.join(chunk)})
           AND JSON_UNQUOTE(JSON_EXTRACT(messages.data, '$.sender_id')) <> ${userId}
           AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(messages.data, '$.created_at')), '')
-            > COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(membership.data, '$.last_read_at')), 'null'), '')
+            > membership.last_read_at
           AND COALESCE(JSON_CONTAINS(JSON_EXTRACT(messages.data, '$.deleted_for_users'), JSON_QUOTE(${userId})), 0) = 0
         GROUP BY JSON_UNQUOTE(JSON_EXTRACT(messages.data, '$.room_id'))
       `),
     ]);
-    const records = latestKeys.length ? await prisma.legacyRecord.findMany({ where: { id: { in: latestKeys.map((item) => item.id) } } }) : [];
+    const records = latestKeys.length ? await client.legacyRecord.findMany({ where: { id: { in: latestKeys.map((item) => item.id) } } }) : [];
     const recordById = new Map(records.map((record) => [record.id, contentTombstone(record.data as Row)]));
     for (const key of latestKeys) {
       const row = recordById.get(key.id);
@@ -743,22 +817,41 @@ async function chatInboxMessageSummary(roomIds: string[], userId: string): Promi
 
 async function chatInbox(ctx: RequestContext): Promise<Row[]> {
   await requireVerified(ctx);
-  const memberships = await chatMembership(ctx.auth.id);
-  const roomIds = memberships.flatMap((membership) => typeof membership.room_id === "string" ? [membership.room_id] : []);
-  const [rooms, summary] = await Promise.all([
-    legacyRowsByJsonValues("chat_rooms", "id", roomIds),
-    chatInboxMessageSummary(roomIds, ctx.auth.id),
-  ]);
-  const roomById = new Map(rooms.map((room) => [String(room.id), room]));
-  return memberships.map((membership) => {
-    const roomId = String(membership.room_id);
-    return { ...(roomById.get(roomId) ?? { id: roomId }), room_id: roomId,
-      last_message: summary.latestByRoom.get(roomId) ?? null,
-      unread_count: summary.unreadByRoom.get(roomId) ?? 0 };
-  });
+  return prisma.$transaction(async (tx) => {
+    const discoveredMemberships = await chatMembership(tx, ctx.auth.id);
+    const roomIds = [...new Set(discoveredMemberships.flatMap((membership) =>
+      typeof membership.room_id === "string" && membership.room_id ? [membership.room_id] : []))].sort();
+
+    // Lock memberships in one stable order, then rebuild the cursor rows from
+    // those locking reads. A removal between discovery and this fence is
+    // omitted, while a removal after the fence waits until this response has
+    // finished reading and materializing every protected room/message row.
+    const lockedByRoom = new Map<string, Row>();
+    for (const roomId of roomIds) {
+      const record = await lockedActiveChatMembership(tx, ctx.auth.id, roomId);
+      if (record) lockedByRoom.set(roomId, { ...(record.data as Row), __legacy_id: record.id });
+    }
+    const memberships = discoveredMemberships.flatMap((membership) => {
+      const roomId = typeof membership.room_id === "string" ? membership.room_id : "";
+      const current = lockedByRoom.get(roomId);
+      return current ? [current] : [];
+    });
+    const activeRoomIds = memberships.map((membership) => String(membership.room_id));
+    const rooms = await legacyRowsByJsonValues(tx, "chat_rooms", "id", activeRoomIds);
+    const summary = await chatInboxMessageSummary(tx, memberships, ctx.auth.id);
+    const roomById = new Map(rooms.map((room) => [String(room.id), room]));
+    return memberships.map((membership) => {
+      const roomId = String(membership.room_id);
+      return { ...(roomById.get(roomId) ?? { id: roomId }), room_id: roomId,
+        last_message: summary.latestByRoom.get(roomId) ?? null,
+        unread_count: summary.unreadByRoom.get(roomId) ?? 0 };
+    });
+  }, { timeout: 15_000 });
 }
 
 async function directSidebar(ctx: RequestContext): Promise<Row[]> {
+  // The sidebar is a passive view: a soft-removed/ambiguous membership is
+  // omitted and is never reopened merely because the connection remains active.
   const inbox = await chatInbox(ctx);
   const connections = await prisma.connection.findMany({ where: { status: "accepted", OR: [{ requester_id: ctx.auth.id }, { receiver_id: ctx.auth.id }] } });
   const profiles = await prisma.profile.findMany({ where: { user_id: { in: connections.map((row) => row.requester_id === ctx.auth.id ? row.receiver_id : row.requester_id) } } });
@@ -775,15 +868,17 @@ async function directSidebar(ctx: RequestContext): Promise<Row[]> {
 async function markChatRead(args: Args, ctx: RequestContext): Promise<null> {
   await requireVerified(ctx);
   const roomId = text(args, "p_room_id", { required: true });
-  const membershipRecord = await prisma.legacyRecord.findFirst({ where: {
-    table_name: "chat_members", owner_id: ctx.auth.id,
-    data: { path: "$.room_id", equals: roomId },
-  } });
-  const membership = membershipRecord?.data as Row | undefined;
-  if (!membershipRecord || !membership) throw new ApiError(403, "chat_membership_required", "Chat membership is required");
   const readAt = nowIso();
-  const updatedMembership = { ...membership, last_read_at: readAt, updated_at: readAt };
-  await prisma.legacyRecord.update({ where: { id: membershipRecord.id }, data: { data: updatedMembership as Prisma.InputJsonValue } });
+  const updatedMembership = await prisma.$transaction(async (tx) => {
+    const membershipRecord = await lockedActiveChatMembershipForUpdate(tx, ctx.auth.id, roomId);
+    if (!membershipRecord) throw new ApiError(403, "chat_membership_required", "Chat membership is required");
+    // Patch only the cursor fields onto the locked, current JSON document. A
+    // concurrent removal cannot be overwritten or have its soft markers lost.
+    const membership = membershipRecord.data as Row;
+    const updated = { ...membership, last_read_at: readAt, updated_at: readAt };
+    await tx.legacyRecord.update({ where: { id: membershipRecord.id }, data: { data: updated as Prisma.InputJsonValue } });
+    return updated;
+  });
   emitDbChange({ table: "chat_members", event: "UPDATE", row: updatedMembership, actor_id: ctx.auth.id, room: roomId });
 
   // Read state is persisted once on the membership cursor. Emit bounded,

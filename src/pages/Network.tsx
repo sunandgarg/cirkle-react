@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Textarea } from "@/components/ui/textarea";
 import { resolveConnectionState, type ConnectionRow } from "@/lib/connections";
 import { requestRealtimeDispatch } from "@/lib/appsyncEvents";
+import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import {
   NETWORK_MEMBER_PAGE_SIZE,
   NETWORK_SEARCH_PAGE_SIZE,
@@ -45,6 +46,7 @@ const Network = () => {
   const activeTab = resolveNetworkTab(location.pathname, searchParams.get("tab"));
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const realtimeActive = useRealtimeActivity();
 
   const setActiveTab = (tab: ReturnType<typeof resolveNetworkTab>) => {
     setSearchParams({ tab });
@@ -276,7 +278,7 @@ const Network = () => {
   const openInvite = (member: any) => { setInvitee(member); setInviteNote(""); };
 
   useEffect(() => {
-    if (!user?.id || !isVerified) return;
+    if (!user?.id || !isVerified || !realtimeActive) return;
     const channel = supabase
       .channel(`connections-${user.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "connections" }, () => {
@@ -285,7 +287,7 @@ const Network = () => {
       })
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
-  }, [isVerified, queryClient, user?.id]);
+  }, [isVerified, queryClient, realtimeActive, user?.id]);
 
   const shuffled = (arr: any[]) => {
     const seed = new Date().toDateString();

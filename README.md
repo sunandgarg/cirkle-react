@@ -13,8 +13,9 @@ workflows.
   Google OpenID Connect, email OTP, and password recovery
 - Transactional email: Zoho ZeptoMail
 - AI: OpenAI Responses API and the Google Gemini API
-- Realtime: Socket.IO on the current budget deployment; optional AWS AppSync
-  invalidations for a separately operated topology
+- Realtime: AWS AppSync Events for durable forum/chat/inbox invalidations;
+  authorized Socket.IO runs in parallel for personal-state compatibility and
+  typing/presence, and remains the automatic room-delivery fallback
 - Frontend hosting: Cloudflare Pages
 - API hosting: AWS Lightsail, Nginx, and a hardened systemd service
 
@@ -142,7 +143,9 @@ Cloudflare Pages settings:
 - Output directory: `dist`
 - Production branch: `main` (matches the existing Pages project)
 - Public environment value: `VITE_API_URL=https://api-react.cirkle.world`
-- Public environment value: `VITE_CHAT_REALTIME_PROVIDER=socketio`
+- Public environment value: `VITE_CHAT_REALTIME_PROVIDER=appsync`
+- Public environment value: `VITE_APPSYNC_HTTP_ENDPOINT=https://hzrd5pmdhvfobbzonf2hffeq5e.appsync-api.ap-south-1.amazonaws.com/event`
+- Public environment value: `VITE_APPSYNC_REALTIME_ENDPOINT=wss://hzrd5pmdhvfobbzonf2hffeq5e.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime`
 - Public environment value: `VITE_DAILY_CALLS_ENABLED=false` until Daily is configured on the API
 - Build environment value: `PNPM_VERSION=11.19.0`
 
@@ -152,10 +155,11 @@ an atomic API deployment procedure under `deploy/`.
 
 Never place MySQL, JWT, Google client secret, ZeptoMail, OpenAI, Gemini, or any
 AppSync publisher/authorizer secret in Cloudflare Pages browser variables.
-Those belong only on the API server. The current `cirkle-react` deployment uses
-a Lightsail API, private Lightsail managed MySQL, private S3, and Socket.IO; it
-does not enable AppSync. See `docs/AWS_HOSTING.md`. The optional AppSync-only
-topology remains documented separately in `aws/realtime/README.md`.
+Those belong only on the API server. The `cirkle-react` deployment uses a
+Lightsail API, private Lightsail managed MySQL, private S3, AppSync Events for
+content-free durable forum/chat/inbox invalidations, and authorized Socket.IO
+for room fallback, personal-state compatibility, and typing/presence. See
+`docs/AWS_HOSTING.md` and `aws/realtime/README.md`.
 
 Audio/video call controls are fail-closed. Pages must explicitly set
 `VITE_DAILY_CALLS_ENABLED=true`, and the API must independently report

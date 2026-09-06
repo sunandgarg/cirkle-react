@@ -5,7 +5,8 @@ This is the AWS-backed `cirkle-react` production deployment. The apex and
 `cirkle-react` on 6 September 2026; the API, managed MySQL database, and private
 S3 storage are live on AWS. The existing Supabase project and legacy
 Cloudflare Pages project remain intact as rollback sources; the cutover did not
-delete either one. AppSync is disabled for this deployment.
+delete either one. A separate AWS account now hosts only the AppSync Events
+transport and its required Lambda authorizer/IAM/logging support resources.
 
 ## Live topology
 
@@ -19,13 +20,23 @@ Browser
        -> Lightsail instance cirkle-react-api (Mumbai, $7 bundle)
        -> Lightsail managed MySQL 8.4 cirkle-react-mysql (private, $15 bundle)
        -> private encrypted/versioned S3 bucket
+  -> AppSync Events (Mumbai, separate AWS account)
+       -> content-free durable invalidations over WebSocket
+       -> Lambda authorizer calls the existing Node API for current access
 ```
 
 - The API server is a 1 GiB/2-vCPU Lightsail instance with a static IP, Nginx, Let's Encrypt TLS, Node 22, a memory-bounded systemd service, 2 GiB swap, bounded journald/log rotation, a restrictive firewall, and CPU/status alarms.
 - MySQL is the managed Lightsail 1 GiB plan. It is private to the Lightsail network, retains automatic backups, and is not exposed on port 3306. The AWS Lightsail API reports the selected `micro_2_0` database bundle as encrypted; the USD 30 `micro_ha_2_0` tier adds high availability, not the first encrypted tier. Passwords/tokens remain hashed and application/provider secrets are never placed in this database.
 - User bytes are stored in the private, AES-256-encrypted, versioned S3 bucket `cirkle-react-media-mediabucket-phet4t6hharr`. S3 public access is blocked.
 - Text, relationships, metadata, object paths, hashes, permissions, and audit records live in MySQL. Image/file bytes do not live in MySQL.
-- Socket.IO is the realtime transport. AppSync values are absent from the Pages build and API environment, so hidden browser tabs do not accumulate AppSync connection-minute charges.
+- AppSync Events carries content-free durable forum/chat/inbox invalidations.
+  Socket.IO supplies automatic room fallback and runs in parallel for current
+  personal-state compatibility plus typing/presence. Losing tab/window/app
+  focus closes both transports; foreground return reconnects and refetches.
+- The separate realtime account has a USD 3 monthly account-wide budget with
+  80% forecast and 100% actual email alerts. It covers AppSync, Lambda,
+  CloudWatch, and every other charge in that account. The AppSync
+  CloudFormation stack has termination protection enabled.
 - Secrets are held in AWS Secrets Manager and installed as root-owned host environment files. Secrets must never be stored in MySQL or exposed through `VITE_*` browser variables.
 - Audio/video calls remain hidden while `DAILY_API_KEY` is absent. Even after
   Pages opts in, the UI enables calls only when `GET /api/features` confirms
@@ -45,7 +56,7 @@ CloudFront signed URLs and Origin Access Control are implemented in `aws/hosting
 
 ## Browser activity and recovery
 
-When a Cirkle tab becomes hidden—because the user selects another tab, another browser, or another application—the client immediately closes its Socket.IO/AppSync-compatible realtime connection and reports inactive presence. There is no 30-second grace period. When visible again, it reconnects and invalidates/refetches durable forum/chat/notification state from MySQL, so realtime is an optimization rather than the source of truth.
+When a Cirkle tab becomes hidden—because the user selects another tab, another browser, or another application—the client immediately closes its Socket.IO/AppSync-compatible realtime connection and stops realtime/typing activity. There is no 30-second grace period. When visible again, it reconnects and invalidates/refetches durable forum/chat/notification state from MySQL, so realtime is an optimization rather than the source of truth.
 
 Operating systems can freeze background processes before JavaScript receives a visibility event. The server heartbeat timeout and reconnect/refetch path remain the authoritative fallback for that unavoidable browser/OS case.
 
@@ -159,7 +170,10 @@ ad-hoc merge.
 
 ## Estimated base monthly cost
 
-The intended low-traffic base is approximately **USD 23.30-23.70/month before tax and usage overages**:
+The intended fixed low-traffic base is approximately **USD 23.30-23.70/month
+before tax and usage overages**. AppSync Events and its authorizer Lambda are
+additional usage-based services in the separate account; neither adds a fixed
+monthly service fee.
 
 | Service | Configuration | Approx. USD/month |
 | --- | --- | ---: |
@@ -168,7 +182,7 @@ The intended low-traffic base is approximately **USD 23.30-23.70/month before ta
 | Secrets Manager | 3 active Lightsail secrets | 1.20 plus requests |
 | S3 | current media and logical backups | 0.10-0.50 initially |
 | Cloudflare Pages | frontend | 0.00 on current plan |
-| AppSync | disabled | 0.00 |
+| AppSync Events + authorizer Lambda | separate account; usage based with no fixed service fee | usage based |
 | CloudFront | blocked pending account verification; normally usage/free-tier dependent | 0.00 currently |
 
 The account currently has five Cirkle secrets: the three active Lightsail

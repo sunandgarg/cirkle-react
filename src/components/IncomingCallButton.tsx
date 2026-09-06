@@ -8,6 +8,7 @@ import { getCallInvitePath, parseCallInviteNotification } from "@/lib/callInvite
 import type { CirkleNotification } from "@/lib/notifications";
 import { appSyncRealtimeEnabled, subscribeAppSync } from "@/lib/appsyncEvents";
 import { useDailyCallsEnabled } from "@/hooks/useRuntimeFeatures";
+import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 
 /** A call-only affordance for the Forum header; ordinary notifications stay out. */
 const IncomingCallButton = () => {
@@ -15,6 +16,7 @@ const IncomingCallButton = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const callsEnabled = useDailyCallsEnabled();
+  const realtimeActive = useRealtimeActivity();
   const { data: notifications = [] } = useQuery({
     queryKey: ["incoming-call-notifications", user?.id],
     queryFn: async () => {
@@ -28,7 +30,7 @@ const IncomingCallButton = () => {
   });
 
   useEffect(() => {
-    if (!callsEnabled || !user) return;
+    if (!callsEnabled || !user || !realtimeActive) return;
     const refresh = () => {
       void queryClient.invalidateQueries({ queryKey: ["incoming-call-notifications", user.id] });
       void queryClient.invalidateQueries({ queryKey: ["notifications", user.id] });
@@ -47,7 +49,7 @@ const IncomingCallButton = () => {
       unsubscribeAppSync?.();
       void supabase.removeChannel(channel);
     };
-  }, [callsEnabled, queryClient, user]);
+  }, [callsEnabled, queryClient, realtimeActive, user]);
 
   const invite = notifications.map(parseCallInviteNotification).find((value) => value !== null);
   if (!callsEnabled || !invite) return null;

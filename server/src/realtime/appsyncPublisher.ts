@@ -80,14 +80,31 @@ export function appSyncEnvelope(change: DbChangeEvent): Record<string, unknown> 
 }
 
 function safePublishedEvent(event: Record<string, unknown>): Record<string, unknown> {
-  if (event.schemaVersion !== 1 || typeof event.table !== "string" || typeof event.eventType !== "string") return event;
+  if (event.schemaVersion !== 1
+    || typeof event.eventId !== "string" || !event.eventId || event.eventId.length > 100
+    || typeof event.table !== "string" || !/^[A-Za-z0-9_]{1,100}$/.test(event.table)
+    || !new Set(["INSERT", "UPDATE", "DELETE"]).has(String(event.eventType))
+    || typeof event.occurredAt !== "string" || Number.isNaN(Date.parse(event.occurredAt))) {
+    throw new Error("Invalid AppSync event envelope");
+  }
   const deleted = event.eventType === "DELETE";
   const source = deleted ? event.old : event.new;
   const identity = source && typeof source === "object" && !Array.isArray(source)
     && typeof (source as Record<string, unknown>).id === "string"
+    && ((source as Record<string, unknown>).id as string).length <= 200
     ? { id: (source as Record<string, unknown>).id }
     : {};
-  return { ...event, new: deleted ? {} : identity, old: deleted ? identity : {} };
+  // Construct an exact allowlist. Spreading a persisted object here could leak
+  // an unexpected top-level field created by an old or corrupted release.
+  return {
+    schemaVersion: 1,
+    eventId: event.eventId,
+    table: event.table,
+    eventType: event.eventType,
+    new: deleted ? {} : identity,
+    old: deleted ? identity : {},
+    occurredAt: event.occurredAt,
+  };
 }
 
 async function publish(channel: string, event: Record<string, unknown>): Promise<void> {

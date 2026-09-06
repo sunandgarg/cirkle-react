@@ -4,7 +4,7 @@ Description: Cirkle AppSync Events transport for the Node and MySQL application.
 Parameters:
   ApiBaseUrl:
     Type: String
-    Default: https://api.cirkle.world
+    Default: https://api-react.cirkle.world
     AllowedPattern: ^https://[A-Za-z0-9.-]+$
     Description: Public HTTPS origin of the existing Cirkle Node API. No app is hosted by this stack.
   AuthorizerSharedSecret:

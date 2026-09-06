@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,11 @@ import DirectMessageSidebar from "@/components/forum/DirectMessageSidebar";
 
 const mocks = vi.hoisted(() => ({
   rpc: vi.fn(),
+  channel: vi.fn(),
+  removeChannel: vi.fn(),
+  subscribeAppSync: vi.fn(),
+  realtimeActive: false,
+  appSyncEnabled: false,
 }));
 
 vi.mock("@/hooks/useAuth", () => ({
@@ -13,20 +18,30 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 
 vi.mock("@/hooks/useRealtimeActivity", () => ({
-  useRealtimeActivity: () => false,
+  useRealtimeActivity: () => mocks.realtimeActive,
+}));
+
+vi.mock("@/lib/appsyncEvents", () => ({
+  get appSyncRealtimeEnabled() { return mocks.appSyncEnabled; },
+  subscribeAppSync: mocks.subscribeAppSync,
 }));
 
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
     rpc: mocks.rpc,
-    channel: vi.fn(),
-    removeChannel: vi.fn(),
+    channel: mocks.channel,
+    removeChannel: mocks.removeChannel,
   },
 }));
 
 describe("forum direct-message sidebar", () => {
   beforeEach(() => {
     mocks.rpc.mockReset();
+    mocks.channel.mockReset();
+    mocks.removeChannel.mockReset();
+    mocks.subscribeAppSync.mockReset();
+    mocks.realtimeActive = false;
+    mocks.appSyncEnabled = false;
     mocks.rpc.mockImplementation(async (name: string) => {
       if (name === "get_direct_message_sidebar") return {
         data: [{
@@ -84,5 +99,49 @@ describe("forum direct-message sidebar", () => {
     );
     expect(await screen.findByText("No private chats yet")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: /search your connections/i })).toBeEnabled();
+  });
+
+  it("retires both Socket.IO sidebar fallbacks when AppSync recovers", async () => {
+    mocks.realtimeActive = true;
+    mocks.appSyncEnabled = true;
+    const channels: Array<{ on: ReturnType<typeof vi.fn>; subscribe: ReturnType<typeof vi.fn> }> = [];
+    mocks.channel.mockImplementation(() => {
+      const channel = {
+        on: vi.fn(),
+        subscribe: vi.fn(),
+      };
+      channel.on.mockReturnValue(channel);
+      channel.subscribe.mockReturnValue(channel);
+      channels.push(channel);
+      return channel;
+    });
+    let onStatus: ((status: string) => void) | undefined;
+    const unsubscribe = vi.fn();
+    mocks.subscribeAppSync.mockImplementation((_channel, _onEvent, status) => {
+      onStatus = status;
+      return unsubscribe;
+    });
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter><DirectMessageSidebar /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(mocks.subscribeAppSync).toHaveBeenCalledTimes(1));
+
+    act(() => onStatus?.("CHANNEL_ERROR"));
+    expect(channels).toHaveLength(2);
+    expect(mocks.removeChannel).not.toHaveBeenCalled();
+
+    act(() => onStatus?.("SUBSCRIBED"));
+    expect(mocks.removeChannel).toHaveBeenCalledTimes(2);
+    expect(mocks.removeChannel).toHaveBeenNthCalledWith(1, channels[0]);
+    expect(mocks.removeChannel).toHaveBeenNthCalledWith(2, channels[1]);
+
+    act(() => onStatus?.("CHANNEL_ERROR"));
+    expect(channels).toHaveLength(4);
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });

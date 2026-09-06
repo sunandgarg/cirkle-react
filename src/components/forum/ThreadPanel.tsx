@@ -25,8 +25,11 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { appSyncRealtimeEnabled, subscribeAppSync } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { safeHttpUrl } from "@/lib/safeUrl";
+import { reconcileThreadSnapshot, resolveThreadAppSyncInvalidation } from "@/lib/threadRealtime";
+import { createRealtimeFallbackSlot } from "@/lib/realtimeFallback";
 
 const THREAD_PAGE_SIZE = 50;
+const MAX_THREAD_RECOVERY = 1_200;
 
 const AVATAR_COLORS = [
   "bg-[hsl(0,55%,55%)]", "bg-[hsl(120,35%,45%)]", "bg-[hsl(210,55%,50%)]", "bg-[hsl(30,65%,50%)]",
@@ -262,6 +265,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
 
   useEffect(() => {
     if (testSession || !realtimeActive) return;
+    let replyEventRevision = 0;
     const updateParentReplyCount = (delta: number) => {
       if (!delta) return;
       queryClient.setQueriesData({ queryKey: ["forum-posts"] }, (current: any) => current?.posts ? {
@@ -273,6 +277,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
     };
     const applyReplyEvent = (eventType: string, row: any) => {
       if (!row?.id) return;
+      replyEventRevision += 1;
       let replyCountDelta = 0;
       queryClient.setQueryData(["thread-replies", parentPost.id], (current: any) => {
         const pages = current?.pages || [[]];
@@ -293,37 +298,98 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
       updateParentReplyCount(replyCountDelta);
     };
     let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
-    let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
+    const fallback = createRealtimeFallbackSlot<ReturnType<typeof supabase.channel>>(
+      (channel) => supabase.removeChannel(channel),
+    );
     let unsubscribeAppSync: (() => void) | null = null;
-    let fallbackStarted = false;
     let disposed = false;
-    const recoverMissedReplies = async () => {
-      const { data, error } = await (supabase as any).rpc("get_forum_thread_page", {
-        p_parent_id: parentPost.id,
-        p_limit: THREAD_PAGE_SIZE,
-        p_before_created_at: null,
-        p_before_id: null,
-      });
-      if (disposed || error) return;
-      const hydrated = await hydrateForumMediaUrls((data || []).map((row: any) => row.post || row));
-      if (disposed) return;
-      hydrated.forEach((reply: any) => applyReplyEvent("INSERT", reply));
+    let recoveryRunning: Promise<void> | null = null;
+    let recoveryRerunRequested = false;
+    const recoverMissedReplies = () => {
+      if (disposed) return Promise.resolve();
+      if (recoveryRunning) {
+        recoveryRerunRequested = true;
+        return recoveryRunning;
+      }
+      recoveryRunning = (async () => {
+        do {
+          recoveryRerunRequested = false;
+          const current = queryClient.getQueryData<any>(["thread-replies", parentPost.id]);
+          const loadedCount = (current?.pages || []).flat().length;
+          const targetSize = Math.min(MAX_THREAD_RECOVERY, Math.max(THREAD_PAGE_SIZE, loadedCount));
+          const authoritative: any[] = [];
+          let before: { createdAt: string; id: string } | null = null;
+          const revisionAtStart = replyEventRevision;
+
+          // Re-read the complete rendered window. Asking only for newer rows
+          // cannot repair an older reply edited/deleted while this tab slept.
+          while (!disposed && authoritative.length < targetSize) {
+            const pageSize = Math.min(100, targetSize - authoritative.length);
+            const { data, error } = await (supabase as any).rpc("get_forum_thread_page", {
+              p_parent_id: parentPost.id,
+              p_limit: pageSize,
+              p_before_created_at: before?.createdAt || null,
+              p_before_id: before?.id || null,
+            });
+            if (disposed || error) return;
+            const page = (data || []).map((row: any) => row.post || row);
+            authoritative.push(...page);
+            if (page.length < pageSize) break;
+            const oldest = page[page.length - 1];
+            if (!oldest?.created_at || !oldest?.id) break;
+            before = { createdAt: oldest.created_at, id: oldest.id };
+          }
+
+          const hydrated = await hydrateForumMediaUrls(authoritative);
+          if (disposed) return;
+          const snapshot = reconcileThreadSnapshot(hydrated, parentPost.id, MAX_THREAD_RECOVERY);
+          queryClient.setQueryData(["thread-replies", parentPost.id], (latest: any) => ({
+            ...(latest || {}),
+            pages: [snapshot],
+            pageParams: [null],
+          }));
+          if (replyEventRevision !== revisionAtStart) recoveryRerunRequested = true;
+        } while (!disposed && recoveryRerunRequested);
+      })().finally(() => { recoveryRunning = null; });
+      return recoveryRunning;
     };
     const startFallback = () => {
-      if (fallbackStarted || disposed) return;
-      fallbackStarted = true;
-      fallbackChannel = supabase.channel(`forum-thread-pg:${parentPost.id}`)
+      if (fallback.hasChannel() || disposed) return;
+      const channel = supabase.channel(`forum-thread-pg:${parentPost.id}`)
         .on("postgres_changes", {
           event: "*", schema: "public", table: "posts", filter: `reply_to_id=eq.${parentPost.id}`,
-        }, (payload: any) => applyReplyEvent(payload.eventType, payload.eventType === "DELETE" ? payload.old : payload.new))
-        .subscribe((status) => { if (status === "SUBSCRIBED") void recoverMissedReplies(); });
+        }, (payload: any) => {
+          if (fallback.isCurrent(channel)) {
+            applyReplyEvent(payload.eventType, payload.eventType === "DELETE" ? payload.old : payload.new);
+          }
+        });
+      if (!fallback.attach(channel)) { void supabase.removeChannel(channel); return; }
+      channel.subscribe((status) => {
+        if (!fallback.isCurrent(channel)) return;
+        if (status === "SUBSCRIBED") {
+          fallback.markHealthy(channel);
+          void recoverMissedReplies();
+        }
+      });
     };
     if (appSyncRealtimeEnabled) {
       unsubscribeAppSync = subscribeAppSync(`/thread/${parentPost.id}`, (event: any) => {
-        const eventType = String(event.eventType || "INSERT");
-        applyReplyEvent(eventType, eventType === "DELETE" ? event.old : event.new);
+        void resolveThreadAppSyncInvalidation(event, parentPost.id, async (replyId) => {
+          const { data, error } = await (supabase as any).rpc("get_forum_post", { p_post_id: replyId });
+          if (error || !data) return null;
+          const [reply] = await hydrateForumMediaUrls([data]);
+          return reply || null;
+        }).then((resolved) => {
+          if (disposed) return;
+          if (!resolved) { void recoverMissedReplies(); return; }
+          applyReplyEvent(resolved.eventType, resolved.row);
+        }).catch(() => { if (!disposed) void recoverMissedReplies(); });
       }, (status) => {
-        if (status === "SUBSCRIBED") void recoverMissedReplies();
+        if (disposed) return;
+        if (status === "SUBSCRIBED") {
+          fallback.retire();
+          void recoverMissedReplies();
+        }
         if (status === "CHANNEL_ERROR" || status === "CLOSED") startFallback();
       });
     } else void (async () => {
@@ -334,14 +400,17 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
         .on("broadcast", { event: "UPDATE" }, (payload: any) => applyReplyEvent("UPDATE", getForumBroadcastRow(payload, "new")))
         .on("broadcast", { event: "DELETE" }, (payload: any) => applyReplyEvent("DELETE", getForumBroadcastRow(payload, "old")))
         .subscribe((status) => {
-          if (status === "SUBSCRIBED") void recoverMissedReplies();
+          if (status === "SUBSCRIBED") {
+            fallback.retire();
+            void recoverMissedReplies();
+          }
           if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") startFallback();
         });
     })().catch(startFallback);
     return () => {
       disposed = true;
       if (broadcastChannel) void supabase.removeChannel(broadcastChannel);
-      if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
+      fallback.retire();
       unsubscribeAppSync?.();
     };
   }, [parentPost.id, profileMap, queryClient, realtimeActive, testSession]);

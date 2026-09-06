@@ -14,6 +14,12 @@ import { createForumPostsWithSlowMode } from "./forumSlowMode.js";
 import { isCanonicalRealtimeRecordId } from "../realtime/appsyncChannels.js";
 import { forumPostMediaHandles, redactAnonymousPostForViewer } from "./forum.js";
 import { dailyParticipantLeaseIsFresh } from "./daily.js";
+import {
+  activeChatAudienceUserIds,
+  hasActiveChatMembership,
+  lockedActiveChatMembership,
+  type ChatMembershipRecord,
+} from "../realtime/chatMembership.js";
 
 type Row = Record<string, unknown>;
 
@@ -930,12 +936,7 @@ function legacyOwner(table: string, row: Row, ctx: RequestContext): string | und
 }
 
 async function isChatMember(userId: string, roomId: unknown): Promise<boolean> {
-  if (typeof roomId !== "string") return false;
-  return !!await prisma.legacyRecord.findFirst({ where: {
-    table_name: "chat_members",
-    owner_id: userId,
-    data: { path: "$.room_id", equals: roomId },
-  }, select: { id: true } });
+  return hasActiveChatMembership(prisma, userId, roomId);
 }
 
 export function normalizeNewMessageShape(raw: Row, actorId: string, now = new Date()): Row {
@@ -1142,12 +1143,12 @@ async function legacyRealtimeContext(table: string, row: Row): Promise<{ room?: 
   if (table !== "messages" || !room) return {};
   const members = await prisma.legacyRecord.findMany({ where: {
     table_name: "chat_members",
-    data: { path: "$.room_id", equals: room },
-  } });
-  const audience_ids = members.flatMap((record) => {
-    const member = record.data as Row;
-    return member.room_id === room && typeof member.user_id === "string" ? [member.user_id] : [];
-  });
+    OR: [
+      { data: { path: "$.room_id", equals: room } },
+      { record_id: { startsWith: `${room}:` } },
+    ],
+  }, select: { id: true, record_id: true, owner_id: true, community_id: true, data: true } });
+  const audience_ids = activeChatAudienceUserIds(members as ChatMembershipRecord[], room);
   return { room, audience_ids };
 }
 
@@ -1169,6 +1170,16 @@ async function legacyReadable(table: string, record: { owner_id: string | null; 
   }
   if (moderatedProfileTable(table)) return profileEntryVisible(row, record.owner_id, ctx.auth.id, isAdmin(ctx));
   if (isAdmin(ctx)) return true;
+  // Chat rows are gated by current membership before the generic owner shortcut:
+  // a sender/uploader must not retain content access after soft removal.
+  if (table === "chat_members") return isChatMember(ctx.auth.id, row.room_id);
+  if (table === "chat_rooms") return isChatMember(ctx.auth.id, row.id);
+  if (table === "messages") {
+    if (Array.isArray(row.deleted_for_users) && row.deleted_for_users.includes(ctx.auth.id)) return false;
+    return isChatMember(ctx.auth.id, row.room_id);
+  }
+  if (table === "call_sessions") return isChatMember(ctx.auth.id, row.chat_room_id ?? row.room_id);
+  if (table === "call_participants") return isChatMember(ctx.auth.id, row.room_id ?? row.chat_room_id);
   if (record.owner_id === ctx.auth.id) return true;
   if (legacyPublicRead.has(table)) {
     if (table === "blogs") return blogIsPublic(row);
@@ -1177,13 +1188,6 @@ async function legacyReadable(table: string, record: { owner_id: string | null; 
     return true;
   }
   if (legacyCommunityRead.has(table)) return !record.community_id || record.community_id === ctx.auth.community_id;
-  if (table === "chat_rooms") return isChatMember(ctx.auth.id, row.id);
-  if (table === "messages") {
-    if (Array.isArray(row.deleted_for_users) && row.deleted_for_users.includes(ctx.auth.id)) return false;
-    return isChatMember(ctx.auth.id, row.room_id);
-  }
-  if (table === "call_sessions") return isChatMember(ctx.auth.id, row.chat_room_id ?? row.room_id);
-  if (table === "call_participants") return isChatMember(ctx.auth.id, row.room_id ?? row.chat_room_id);
   if (table === "consultations") return row.client_id === ctx.auth.id || row.consultant_id === ctx.auth.id;
   return false;
 }
@@ -1290,6 +1294,13 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
   const scopedMessageReadable = typeof scopedMessageRoom === "string"
     ? await isChatMember(ctx.auth.id, scopedMessageRoom)
     : undefined;
+  const callParticipantLeaveCleanup = query.table === "call_participants"
+    && query.operation === "update"
+    && !!query.values
+    && typeof query.values === "object"
+    && !Array.isArray(query.values)
+    && Object.keys(query.values).length === 1
+    && Object.prototype.hasOwnProperty.call(query.values, "left_at");
   const authorized: Row[] = [];
   const potentiallyMatched = needsSelection ? candidates.filter((record) => {
     const row = publicLegacyRow(query.table, record.data as Row, ctx.auth.id);
@@ -1304,6 +1315,10 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
       ? storyIsActive(row) && storyAudience.has(storyOwner)
       : query.table === "messages" && scopedMessageReadable !== undefined
         ? scopedMessageReadable && !(Array.isArray(row.deleted_for_users) && row.deleted_for_users.includes(ctx.auth.id))
+        : callParticipantLeaveCleanup && record.owner_id === ctx.auth.id && row.user_id === ctx.auth.id
+          && typeof row.session_id === "string" && !!row.session_id
+          && typeof row.room_id === "string" && !!row.room_id
+          ? true
         : await legacyReadable(query.table, record, ctx);
     if (readable) authorized.push(publicLegacyRow(query.table, row, ctx.auth.id));
   }
@@ -1314,13 +1329,18 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
     if (query.table === "messages" && typeof scopedMessageRoom === "string" && selected.length) {
       const memberships = await prisma.legacyRecord.findMany({ where: {
         table_name: "chat_members",
-        data: { path: "$.room_id", equals: scopedMessageRoom },
-      }, select: { data: true } });
+        OR: [
+          { data: { path: "$.room_id", equals: scopedMessageRoom } },
+          { record_id: { startsWith: `${scopedMessageRoom}:` } },
+        ],
+      }, select: { id: true, record_id: true, owner_id: true, community_id: true, data: true } });
+      const activeAudience = new Set(activeChatAudienceUserIds(memberships as ChatMembershipRecord[], scopedMessageRoom));
       outputRows = selected.map((message) => {
         const readBy = new Set(Array.isArray(message.read_by) ? message.read_by as string[] : []);
         for (const record of memberships) {
           const membership = record.data as Row;
           const memberId = typeof membership.user_id === "string" ? membership.user_id : "";
+          if (!activeAudience.has(memberId) || record.owner_id !== memberId || membership.room_id !== scopedMessageRoom) continue;
           const lastReadAt = typeof membership.last_read_at === "string" ? membership.last_read_at : "";
           if (memberId && lastReadAt && lastReadAt >= String(message.created_at ?? "")) readBy.add(memberId);
         }
@@ -1445,7 +1465,6 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
         const normalized = normalizeNewMessageShape(data, ctx.auth.id);
         for (const key of Object.keys(data)) delete data[key];
         Object.assign(data, normalized);
-        if (!(await isChatMember(ctx.auth.id, data.room_id))) throw new ApiError(403, "chat_membership_required", "Chat membership is required");
         if (data.media_path) {
           data.media_path = await assertOwnedReadyObject(
             "chat-media",
@@ -1453,16 +1472,6 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
             ctx.auth.id,
             data.message_type === "image" ? /^image\// : /^audio\//,
           );
-        }
-        if (data.reply_to_message_id) {
-          const reply = await prisma.legacyRecord.findFirst({ where: {
-            table_name: "messages",
-            AND: [
-              { data: { path: "$.id", equals: String(data.reply_to_message_id) } },
-              { data: { path: "$.room_id", equals: String(data.room_id) } },
-            ],
-          }, select: { data: true } });
-          if (!reply || isDeletedForEveryone(reply.data as Row)) throw new ApiError(400, "invalid_reply_message", "Reply message must exist in the same room");
         }
       }
       if (query.table === "blog_comments") {
@@ -1508,11 +1517,9 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
             new Date(),
             participants.some((record) => dailyParticipantLeaseIsFresh(record.data as Row)),
           );
-          const membership = await tx.legacyRecord.findFirst({ where: {
-            table_name: "chat_members", owner_id: ctx.auth.id,
-            data: { path: "$.room_id", equals: String(normalized.room_id) },
-          }, select: { id: true } });
-          if (!membership) throw new ApiError(403, "call_membership_required", "An active chat call membership is required");
+          if (!(await lockedActiveChatMembership(tx, ctx.auth.id, normalized.room_id))) {
+            throw new ApiError(403, "call_membership_required", "An active chat call membership is required");
+          }
           const recordId = `call-participant:${sha256(`${sessionId}\n${ctx.auth.id}`).slice(0, 64)}`;
           const existing = await tx.legacyRecord.findUnique({ where: { table_name_record_id: { table_name: "call_participants", record_id: recordId } } });
           const row = existing ? { ...(existing.data as Row), ...normalized, id: (existing.data as Row).id } : normalized;
@@ -1583,7 +1590,31 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
         : typeof data.id === "string" ? data.id : newId();
       data.id = typeof data.id === "string" ? data.id : newId();
       try {
-        const record = await prisma.legacyRecord.create({ data: { table_name: query.table, record_id, owner_id, community_id: typeof data.community_id === "string" ? data.community_id : ctx.auth.community_id, data: data as Prisma.InputJsonValue } });
+        const record = query.table === "messages" ? await prisma.$transaction(async (tx) => {
+          const roomId = String(data.room_id);
+          if (!(await lockedActiveChatMembership(tx, ctx.auth.id, roomId))) {
+            throw new ApiError(403, "chat_membership_required", "Chat membership is required");
+          }
+          if (data.reply_to_message_id) {
+            const reply = await tx.legacyRecord.findFirst({ where: {
+              table_name: "messages",
+              AND: [
+                { data: { path: "$.id", equals: String(data.reply_to_message_id) } },
+                { data: { path: "$.room_id", equals: roomId } },
+              ],
+            }, select: { data: true } });
+            if (!reply || isDeletedForEveryone(reply.data as Row)) {
+              throw new ApiError(400, "invalid_reply_message", "Reply message must exist in the same room");
+            }
+          }
+          return tx.legacyRecord.create({ data: {
+            table_name: query.table,
+            record_id,
+            owner_id,
+            community_id: typeof data.community_id === "string" ? data.community_id : ctx.auth.community_id,
+            data: data as Prisma.InputJsonValue,
+          } });
+        }) : await prisma.legacyRecord.create({ data: { table_name: query.table, record_id, owner_id, community_id: typeof data.community_id === "string" ? data.community_id : ctx.auth.community_id, data: data as Prisma.InputJsonValue } });
         created.push(publicLegacyRow(query.table, record.data as Row, ctx.auth.id));
         inserted.push(publicLegacyRow(query.table, record.data as Row, ctx.auth.id));
       } catch (error) {
@@ -1727,11 +1758,9 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
         if (!freshRecord || !fresh || fresh.id !== sessionId) throw new ApiError(404, "call_session_not_found", "Call session was not found");
         const roomId = fresh.room_id ?? fresh.chat_room_id;
         if (!isAdmin(ctx)) {
-          const membership = await tx.legacyRecord.findFirst({ where: {
-            table_name: "chat_members", owner_id: ctx.auth.id,
-            data: { path: "$.room_id", equals: String(roomId ?? "") },
-          }, select: { id: true } });
-          if (!membership) throw new ApiError(403, "call_membership_required", "Chat membership is required");
+          if (!(await lockedActiveChatMembership(tx, ctx.auth.id, roomId))) {
+            throw new ApiError(403, "call_membership_required", "Chat membership is required");
+          }
         }
         const participantRecords = await tx.legacyRecord.findMany({ where: {
           table_name: "call_participants",
@@ -1767,12 +1796,27 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
         throw new ApiError(403, "ownership_required", "You no longer own this row");
       }
       const current = freshRecord.data as Row;
+      if (query.table === "call_participants"
+        && (current.user_id !== selectedCurrent.user_id
+          || current.session_id !== selectedCurrent.session_id
+          || current.room_id !== selectedCurrent.room_id)) {
+        throw new ApiError(409, "record_changed", "The call participant identity changed while this request was being processed; refresh and try again");
+      }
+      if (query.table === "messages" && !isAdmin(ctx)
+        && !(await lockedActiveChatMembership(tx, ctx.auth.id, current.room_id))) {
+        throw new ApiError(403, "chat_membership_required", "Chat membership is required");
+      }
       if (moderatedProfileTable(query.table)) assertModeratedProfileWrite(query.table, patch, current, isAdmin(ctx));
       const effectivePatch = query.table === "messages"
         ? normalizeMessageUpdatePatch(current, patch, ctx.auth.id, isAdmin(ctx))
         : query.table === "call_participants"
           ? normalizeCallParticipantUpdate(current, patch, ctx.auth.id, isAdmin(ctx))
           : patch;
+      if (query.table === "call_participants" && !isAdmin(ctx)
+        && Object.prototype.hasOwnProperty.call(effectivePatch, "lease_refreshed_at")
+        && !(await lockedActiveChatMembership(tx, ctx.auth.id, current.room_id ?? current.chat_room_id))) {
+        throw new ApiError(403, "call_membership_required", "An active chat call membership is required");
+      }
       let next: Row = { ...current, ...effectivePatch, id: current.id, updated_at: new Date().toISOString() };
       if (query.table === "blogs") next = normalizeBlogPublishing(next);
       if (moderatedProfileTable(query.table)) {

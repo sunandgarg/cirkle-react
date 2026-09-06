@@ -30,3 +30,18 @@ export const mergeChatTimeline = <T extends ChatTimelineMessage>(
   ...current.filter((message) => message.room_id === roomId),
   ...incoming.filter((message) => message.room_id === roomId),
 ]);
+
+/**
+ * Replaces the persisted portion of an active room with an authoritative
+ * database snapshot. Pending outbox rows stay visible until the server
+ * acknowledges their client id, but stale persisted rows (including a missed
+ * UPDATE/DELETE while the browser slept) are removed.
+ */
+export const reconcileChatTimeline = <T extends ChatTimelineMessage>(
+  current: T[],
+  authoritative: T[],
+  roomId: string,
+) => uniqueChatMessages([
+  ...current.filter((message) => message.room_id === roomId && message.id.startsWith("optimistic-")),
+  ...authoritative.filter((message) => message.room_id === roomId),
+]);

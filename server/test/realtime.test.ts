@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   accessTokenRemainingMs,
   bindingMatches,
@@ -8,10 +8,20 @@ import {
   clientPresenceState,
   clientTypingEnvelope,
   envelopeForChange,
+  revokeChatMembershipSubscriptions,
   takeClientEventRateSlot,
   topicMatches,
   type Subscription,
 } from "../src/realtime/socket.js";
+import {
+  activeChatAudienceUserIds,
+  activeChatMembership,
+  activeChatMembershipRecordsForUser,
+  boundChatMembership,
+  exactlyOneActiveChatMembership,
+  revokedChatMembership,
+  type ChatMembershipRecord,
+} from "../src/realtime/chatMembership.js";
 
 const postgres = (channel: string, table: string): Subscription => ({
   channel,
@@ -57,6 +67,64 @@ describe("realtime topic isolation", () => {
     expect(topicMatches("direct-message-sidebar-22222222-2222-4222-8222-222222222222", change)).toBe(false);
   });
 
+  it("revokes every fallback subscription and closes the transport synchronously when membership is removed", () => {
+    const userId = "11111111-1111-4111-8111-111111111111";
+    const roomId = "private-room";
+    const leave = vi.fn(() => Promise.resolve());
+    const subscriptions = new Map([
+      [`room-${roomId}`, postgres(`room-${roomId}`, "messages")],
+      [`chat:${roomId}`, { channel: `chat:${roomId}`, bindings: [] }],
+      [`direct-message-sidebar-${userId}-subscription`, { channel: `direct-message-sidebar-${userId}-subscription`, bindings: [] }],
+      ["forum:GLOBAL:IIT_ALL", { channel: "forum:GLOBAL:IIT_ALL", bindings: [] }],
+    ]);
+    const presence = new Map([[`chat:${roomId}`, { online: true }]]);
+    const close = vi.fn();
+    const socket = { data: { auth: { id: userId }, subscriptions, presence }, leave, conn: { close } };
+
+    expect(revokeChatMembershipSubscriptions([socket], {
+      table: "chat_members", event: "DELETE", row: { user_id: userId, room_id: roomId },
+    })).toBe(4);
+    expect([...subscriptions.keys()]).toEqual([]);
+    expect(presence.size).toBe(0);
+    expect(leave).toHaveBeenCalledTimes(4);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("treats explicit inactive membership updates as revocations without touching read cursors", () => {
+    const active = { user_id: "member", room_id: "room", last_read_at: new Date().toISOString() };
+    expect(activeChatMembership(active)).toBe(true);
+    expect(revokedChatMembership({ table: "chat_members", event: "UPDATE", row: active })).toBeNull();
+    expect(revokedChatMembership({
+      table: "chat_members", event: "UPDATE", row: { ...active, status: "removed" },
+    })).toEqual({ userId: "member", roomId: "room" });
+  });
+
+  it.each([
+    [{ user_id: "member", room_id: "room" }, true],
+    [{ user_id: "member", room_id: "room", status: "active", is_active: true }, true],
+    [{ user_id: "member", room_id: "room", status: "removed" }, false],
+    [{ user_id: "member", room_id: "room", status: "future-state" }, false],
+    [{ user_id: "member", room_id: "room", is_active: "false" }, false],
+    [{ user_id: "member", room_id: "room", removed_at: "" }, false],
+  ])("parses active membership markers fail closed for %j", (row, expected) => {
+    expect(activeChatMembership(row)).toBe(expected);
+  });
+
+  it("requires exactly one structurally bound active row and excludes ambiguous audiences", () => {
+    const valid = {
+      id: "one", record_id: "source-one", owner_id: "member", community_id: null,
+      data: { user_id: "member", room_id: "room", last_read_at: "2026-09-04T00:00:00.000Z" },
+    } satisfies ChatMembershipRecord;
+    const duplicate = { ...valid, id: "two", record_id: "source-two" } satisfies ChatMembershipRecord;
+    const malformed = { ...valid, id: "bad", record_id: "source-bad", owner_id: "someone-else" } satisfies ChatMembershipRecord;
+    expect(boundChatMembership(valid, "member", "room")).toBe(true);
+    expect(boundChatMembership(malformed, "member", "room")).toBe(false);
+    expect(exactlyOneActiveChatMembership([valid], "member", "room")).toBe(true);
+    expect(exactlyOneActiveChatMembership([valid, duplicate], "member", "room")).toBe(false);
+    expect(activeChatMembershipRecordsForUser([valid, duplicate], "member")).toEqual([]);
+    expect(activeChatAudienceUserIds([valid, duplicate], "room")).toEqual([]);
+  });
+
   it("keeps protected messages out of notification-only personal channels", () => {
     const userId = "11111111-1111-4111-8111-111111111111";
     const change = { table: "messages", event: "INSERT" as const, row: { room_id: "private-room" }, audience_ids: [userId] };
@@ -71,6 +139,15 @@ describe("realtime topic isolation", () => {
     const change = { table: "posts", event: "INSERT" as const, row: { scope_type: "IIT", scope_key: "IIT_DELHI" } };
     expect(bindingMatches(postgres("forum:IIT:IIT_DELHI", "posts"), change)).toBe(true);
     expect(bindingMatches(postgres("forum:IIT:IIT_BOMBAY", "posts"), change)).toBe(false);
+  });
+
+  it("routes the unfiltered Forum database fallback only to its authorized exact scope", () => {
+    const subscription = postgres("forum-pg-IIT-IIT_DELHI", "posts");
+    const matching = { table: "posts", event: "UPDATE" as const, row: { scope_type: "IIT", scope_key: "IIT_DELHI" } };
+    const neighboring = { table: "posts", event: "UPDATE" as const, row: { scope_type: "IIT", scope_key: "IIT_BOMBAY" } };
+
+    expect(bindingMatches(subscription, matching)).toBe(true);
+    expect(bindingMatches(subscription, neighboring)).toBe(false);
   });
 
   it("ignores client-shaped room hints from unrelated legacy tables", () => {

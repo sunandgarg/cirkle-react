@@ -26,6 +26,13 @@ import { forumSegment } from "../security/forumScope.js";
 import { publicStorageObjectUrl } from "./storage.js";
 import { AppSyncFixedWindowRateLimiter } from "../realtime/appsyncRateLimit.js";
 import { deleteObjectBytes } from "./objectStore.js";
+import {
+  activeChatAudienceUserIds,
+  hasActiveChatMembership,
+  lockedActiveChatMembership,
+  normalizeActiveChatMembership,
+  type ChatMembershipRecord,
+} from "../realtime/chatMembership.js";
 
 type Body = Record<string, unknown>;
 type Row = Record<string, unknown>;
@@ -809,28 +816,39 @@ async function createConsultChat(body: Body, ctx: RequestContext): Promise<Row> 
     if (row.client_id !== ctx.auth.id && row.consultant_id !== ctx.auth.id) throw new ApiError(403, "consultation_access_denied", "You are not part of this consultation");
     if (row.status !== "confirmed") throw new ApiError(409, "consultation_not_confirmed", "The consultation must be confirmed before creating its conversation");
 
-    let roomId = typeof row.chat_room_id === "string" ? row.chat_room_id : "";
-    if (!roomId) {
-      const existingRoom = await tx.legacyRecord.findUnique({ where: { table_name_record_id: { table_name: "chat_rooms", record_id: `consult:${id}` } } });
-      if (existingRoom) {
-        const storedRoomId = (existingRoom.data as Row).id;
-        if (typeof storedRoomId !== "string" || !storedRoomId) throw new ApiError(409, "consultation_chat_invalid", "The existing consultation conversation is invalid");
-        roomId = storedRoomId;
-      } else {
-        roomId = newId();
-        await tx.legacyRecord.create({ data: {
-          table_name: "chat_rooms", record_id: `consult:${id}`, community_id: ctx.auth.community_id,
-          data: { id: roomId, name: "Consultation", is_group: false, consultation_id: id, created_by: ctx.auth.id, created_at: new Date().toISOString() },
-        } });
+    const roomKey = `consult:${id}`;
+    const byKey = await tx.legacyRecord.findUnique({ where: {
+      table_name_record_id: { table_name: "chat_rooms", record_id: roomKey },
+    } });
+    const linkedRoomId = typeof row.chat_room_id === "string" ? row.chat_room_id : "";
+    const byLinkedId = linkedRoomId ? await tx.legacyRecord.findMany({ where: {
+      table_name: "chat_rooms", data: { path: "$.id", equals: linkedRoomId },
+    } }) : [];
+    if (linkedRoomId && (byLinkedId.length !== 1 || (byKey && byKey.id !== byLinkedId[0]!.id))) {
+      throw new ApiError(409, "consultation_chat_invalid", "The existing consultation conversation is invalid");
+    }
+    const existingRoom = byLinkedId[0] ?? byKey;
+    let roomId: string;
+    if (existingRoom) {
+      const stored = existingRoom.data as Row;
+      roomId = typeof stored.id === "string" ? stored.id : "";
+      if (!roomId || stored.consultation_id !== id || stored.is_group !== false) {
+        throw new ApiError(409, "consultation_chat_invalid", "The existing consultation conversation is invalid");
       }
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM legacy_records WHERE id = ${existingRoom.id} AND table_name = 'chat_rooms' LIMIT 1 FOR UPDATE`);
+    } else {
+      roomId = newId();
+      await tx.legacyRecord.create({ data: {
+        table_name: "chat_rooms", record_id: roomKey, community_id: ctx.auth.community_id,
+        data: { id: roomId, name: "Consultation", is_group: false, consultation_id: id, created_by: ctx.auth.id, created_at: new Date().toISOString() },
+      } });
     }
 
+    // Confirmed participants explicitly reopen this sanctioned conversation.
+    // Every prior soft marker is cleared and duplicates are privately archived,
+    // leaving exactly one structurally bound active membership per participant.
     for (const userId of [String(row.client_id), String(row.consultant_id)]) {
-      await tx.legacyRecord.upsert({
-        where: { table_name_record_id: { table_name: "chat_members", record_id: `${roomId}:${userId}` } },
-        create: { table_name: "chat_members", record_id: `${roomId}:${userId}`, owner_id: userId, community_id: ctx.auth.community_id, data: { id: newId(), room_id: roomId, user_id: userId, joined_at: new Date().toISOString() } },
-        update: { owner_id: userId },
-      });
+      await normalizeActiveChatMembership(tx, { userId, roomId, communityId: ctx.auth.community_id });
     }
     const updated: Row = { ...row, chat_room_id: roomId, updated_at: new Date().toISOString() };
     await tx.legacyRecord.update({ where: { id: consultation.id }, data: { data: updated as Prisma.InputJsonValue } });
@@ -903,12 +921,9 @@ async function dailyRoom(body: Body, ctx: RequestContext): Promise<Row> {
   const roomId = string(body, "roomId", true);
   const mode = string(body, "mode", true);
   if (!/^[0-9a-f-]{36}$/i.test(roomId) || !new Set(["audio", "video"]).has(mode)) throw new ApiError(400, "invalid_call_request", "A valid roomId and audio/video mode are required");
-  const membership = await prisma.legacyRecord.findFirst({ where: {
-    table_name: "chat_members",
-    owner_id: ctx.auth.id,
-    data: { path: "$.room_id", equals: roomId },
-  }, select: { id: true } });
-  if (!membership) throw new ApiError(403, "chat_membership_required", "Chat membership is required");
+  if (!(await hasActiveChatMembership(prisma, ctx.auth.id, roomId))) {
+    throw new ApiError(403, "chat_membership_required", "Chat membership is required");
+  }
   const chatRoomRecord = await prisma.legacyRecord.findFirst({ where: {
     table_name: "chat_rooms",
     data: { path: "$.id", equals: roomId },
@@ -917,19 +932,16 @@ async function dailyRoom(body: Body, ctx: RequestContext): Promise<Row> {
   const requestedSessionId = string(body, "sessionId");
   let session: { record: LegacyRecord; row: Row; created: boolean } = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT id FROM users WHERE id = ${ctx.auth.id} LIMIT 1 FOR UPDATE`);
-    const [currentUser, currentProfile, currentMembership] = await Promise.all([
+    const [currentUser, currentProfile] = await Promise.all([
       tx.user.findUnique({ where: { id: ctx.auth.id }, select: { role: true, status: true } }),
       tx.profile.findUnique({ where: { user_id: ctx.auth.id }, select: { is_verified: true } }),
-      tx.legacyRecord.findFirst({ where: {
-        table_name: "chat_members", owner_id: ctx.auth.id,
-        data: { path: "$.room_id", equals: roomId },
-      }, select: { id: true } }),
     ]);
+    const currentMembershipActive = !!await lockedActiveChatMembership(tx, ctx.auth.id, roomId);
     const privileged = currentUser?.role === "admin" || currentUser?.role === "owner";
     if (!currentUser || currentUser.status !== "active" || (!privileged && !currentProfile?.is_verified)) {
       throw new ApiError(403, "verification_required", "Verified membership is required for calls");
     }
-    if (!currentMembership) throw new ApiError(403, "chat_membership_required", "Chat membership is required");
+    if (!currentMembershipActive) throw new ApiError(403, "chat_membership_required", "Chat membership is required");
     // The chat-room row is the canonical lock for starting a call. Every
     // participant in the room therefore observes or creates the same active
     // session even when call buttons are pressed concurrently.
@@ -1044,19 +1056,16 @@ async function dailyRoom(body: Body, ctx: RequestContext): Promise<Row> {
   try {
     invitation = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT id FROM users WHERE id = ${ctx.auth.id} LIMIT 1 FOR UPDATE`);
-    const [currentUser, currentProfile, currentMembership] = await Promise.all([
+    const [currentUser, currentProfile] = await Promise.all([
       tx.user.findUnique({ where: { id: ctx.auth.id }, select: { role: true, status: true } }),
       tx.profile.findUnique({ where: { user_id: ctx.auth.id }, select: { is_verified: true } }),
-      tx.legacyRecord.findFirst({ where: {
-        table_name: "chat_members", owner_id: ctx.auth.id,
-        data: { path: "$.room_id", equals: roomId },
-      }, select: { id: true } }),
     ]);
+    const currentMembershipActive = !!await lockedActiveChatMembership(tx, ctx.auth.id, roomId);
     const privileged = currentUser?.role === "admin" || currentUser?.role === "owner";
     if (!currentUser || currentUser.status !== "active" || (!privileged && !currentProfile?.is_verified)) {
       throw new ApiError(403, "verification_required", "Verified membership is required for calls");
     }
-    if (!currentMembership) throw new ApiError(403, "chat_membership_required", "Chat membership is required");
+    if (!currentMembershipActive) throw new ApiError(403, "chat_membership_required", "Chat membership is required");
     await tx.$queryRaw(Prisma.sql`SELECT id FROM legacy_records WHERE id = ${session.record.id} AND table_name = 'call_sessions' LIMIT 1 FOR UPDATE`);
     const freshRecord = await tx.legacyRecord.findUnique({ where: { id: session.record.id } });
     const freshSession = freshRecord?.data as Row | undefined;
@@ -1064,12 +1073,12 @@ async function dailyRoom(body: Body, ctx: RequestContext): Promise<Row> {
     if (freshSession.invite_sent_at) return null;
     const allMemberships = await tx.legacyRecord.findMany({ where: {
       table_name: "chat_members",
-      data: { path: "$.room_id", equals: roomId },
-    } });
-    const memberIds = [...new Set(allMemberships.flatMap((record) => {
-      const membership = record.data as Row;
-      return membership.room_id === roomId && typeof membership.user_id === "string" ? [membership.user_id] : [];
-    }))];
+      OR: [
+        { data: { path: "$.room_id", equals: roomId } },
+        { record_id: { startsWith: `${roomId}:` } },
+      ],
+    }, select: { id: true, record_id: true, owner_id: true, community_id: true, data: true } });
+    const memberIds = activeChatAudienceUserIds(allMemberships as ChatMembershipRecord[], roomId);
     const startedBy = typeof freshSession.started_by === "string" ? freshSession.started_by : ctx.auth.id;
     const inviter = startedBy === ctx.auth.id ? profile : await tx.profile.findUnique({ where: { user_id: startedBy } });
     const inviteMode = freshSession.mode === "video" ? "video" : "audio";

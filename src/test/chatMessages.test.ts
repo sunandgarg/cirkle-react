@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { isChatMessageRealtimeEvent, mergeChatTimeline, uniqueChatMessages } from "@/lib/chatMessages";
+import {
+  isChatMessageRealtimeEvent, mergeChatTimeline, reconcileChatTimeline, uniqueChatMessages,
+} from "@/lib/chatMessages";
 
 const message = (id: string, createdAt: string, roomId = "room-1", clientId?: string) => ({
   id, created_at: createdAt, room_id: roomId, client_id: clientId || null,
@@ -35,5 +37,26 @@ describe("chat timeline merging", () => {
     expect(isChatMessageRealtimeEvent({ table: "messages", eventType: "INSERT" })).toBe(true);
     expect(isChatMessageRealtimeEvent({ table: "chat_members", eventType: "UPDATE" })).toBe(false);
     expect(isChatMessageRealtimeEvent({ table: "call_sessions", eventType: "INSERT" })).toBe(false);
+  });
+
+  it("authoritatively reconciles an old edit and a missed delete after foreground resume", () => {
+    const current = [
+      { ...message("old-edited", "2026-08-31T10:00:01.000Z"), content: "before edit" },
+      { ...message("old-deleted", "2026-08-31T10:00:02.000Z"), content: "delete me" },
+      { ...message("newest", "2026-08-31T10:00:03.000Z"), content: "latest" },
+    ];
+    const authoritative = [
+      { ...message("old-edited", "2026-08-31T10:00:01.000Z"), content: "after edit" },
+      { ...message("newest", "2026-08-31T10:00:03.000Z"), content: "latest" },
+    ];
+
+    const recovered = reconcileChatTimeline(current, authoritative, "room-1");
+    expect(recovered.map((item) => item.id)).toEqual(["old-edited", "newest"]);
+    expect(recovered[0].content).toBe("after edit");
+  });
+
+  it("keeps an unacknowledged outbox message during authoritative recovery", () => {
+    const optimistic = message("optimistic-client-1", "2026-08-31T10:00:02.000Z", "room-1", "client-1");
+    expect(reconcileChatTimeline([optimistic], [], "room-1")).toEqual([optimistic]);
   });
 });

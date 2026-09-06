@@ -42,7 +42,10 @@ import {
   type CanonicalAcademicIdentity, type ForumScope as ScopeDef,
 } from "@/lib/forumScopes";
 import { hasMobileTestAcademicProfile, readMobileTestSession } from "@/lib/mobileVerification";
-import { applyForumRealtimeBatch, getForumBroadcastRow, type ForumRealtimeEvent } from "@/lib/forumRealtime";
+import {
+  applyForumRealtimeBatch, getForumBroadcastRow, reconcileForumRoomSnapshot,
+  type ForumRealtimeEvent,
+} from "@/lib/forumRealtime";
 import { acknowledgeForumPost } from "@/lib/forumMessages";
 import { hydrateForumMediaUrls } from "@/lib/forumMedia";
 import { publishForumOutboxItem } from "@/lib/forumPublisher";
@@ -55,9 +58,10 @@ import {
   type ForumSendIdentity, type ForumSendSnapshot,
 } from "@/lib/forumSend";
 import {
-  MAX_ROOM_HISTORY, mergeForumHistoryPosts, persistForumHistory, readForumHistory,
+  MAX_ROOM_HISTORY, mergeForumHistoryPosts, persistForumHistory, readForumHistory, replaceForumHistory,
 } from "@/lib/forumHistoryCache";
 import { createRealtimeRecoveryController } from "@/lib/realtimeRecovery";
+import { createRealtimeFallbackSlot } from "@/lib/realtimeFallback";
 import {
   appSyncRealtimeEnabled, getForumAppSyncChannels, subscribeAppSync,
 } from "@/lib/appsyncEvents";
@@ -421,6 +425,9 @@ const Forum = () => {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasMoreOlder, setHasMoreOlder] = useState(true);
   const [olderPages, setOlderPages] = useState<any[]>([]);
+  const olderPagesRef = useRef<any[]>([]);
+
+  useEffect(() => { olderPagesRef.current = olderPages; }, [olderPages]);
 
   const presenceChannelRef = useRef<any>(null);
   const typingLastSentRef = useRef(0);
@@ -665,6 +672,7 @@ const Forum = () => {
     setUnreadDots(getUnreadChannels(user?.id));
     setNewMsgCount(0);
     setHasMoreOlder(true);
+    olderPagesRef.current = [];
     setOlderPages([]);
     olderPageRequestRef.current = false;
     olderPageTriggerArmedRef.current = true;
@@ -807,13 +815,11 @@ const Forum = () => {
         ? await readForumHistory<any>(user.id, activeScope.type, activeScope.key)
         : [];
       if (!rawPosts || rawPosts.length === 0) {
-        if (history.length > 0) {
-          setCachedPosts(activeScope.type, activeScope.key, history, user?.id);
-          return { posts: history, isDemo: false, demos: [] };
-        }
         // A real empty room stays empty. Demo conversations are restricted to
         // the explicit mobile test session above so production outages and
         // fresh communities are never disguised as successful data loads.
+        setCachedPosts(activeScope.type, activeScope.key, [], user?.id);
+        if (user?.id) void replaceForumHistory(user.id, activeScope.type, activeScope.key, []);
         return { posts: [], isDemo: false, demos: [] };
       }
       const enriched = (serverEnriched ? rawPosts : await enrichPosts(rawPosts)).reverse();
@@ -1237,20 +1243,22 @@ const Forum = () => {
   /* ─── Realtime: subscribe only to the open room ─── */
   useEffect(() => {
     if (readMobileTestSession() || !realtimeActive) return;
-    const filter = `scope_identity=eq.${activeScope.type}:${activeScope.key}`;
     const roomQueryKey = ["forum-posts", user?.id, activeScope.type, activeScope.key] as const;
     const pendingEvents: ForumRealtimeEvent[] = [];
+    let roomEventRevision = 0;
     let flushFrame: number | null = null;
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
     let historyPersistTimer: ReturnType<typeof setTimeout> | null = null;
     let latestHistorySnapshot: any[] = [];
+    let hasHistorySnapshot = false;
     const scheduleHistoryPersistence = (posts: any[]) => {
       if (!user?.id) return;
-      latestHistorySnapshot = posts;
+      latestHistorySnapshot = mergeForumHistoryPosts(olderPagesRef.current, posts);
+      hasHistorySnapshot = true;
       if (historyPersistTimer !== null) clearTimeout(historyPersistTimer);
       historyPersistTimer = setTimeout(() => {
         historyPersistTimer = null;
-        void persistForumHistory(user.id, activeScope.type, activeScope.key, latestHistorySnapshot);
+        void replaceForumHistory(user.id, activeScope.type, activeScope.key, latestHistorySnapshot);
       }, 1_200);
     };
     const flushRoomEvents = () => {
@@ -1283,6 +1291,7 @@ const Forum = () => {
       });
     };
     const applyRoomEvent = (event: ForumRealtimeEvent) => {
+      roomEventRevision += 1;
       pendingEvents.push(event);
       if (flushFrame !== null || flushTimer !== null) return;
       if (typeof requestAnimationFrame === "function") flushFrame = requestAnimationFrame(flushRoomEvents);
@@ -1296,11 +1305,11 @@ const Forum = () => {
       void hydrateForumMediaUrls([event.new]).then(([post]) => applyRoomEvent({ ...event, new: post }))
         .catch(() => applyRoomEvent(event));
     };
-    let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
+    const fallback = createRealtimeFallbackSlot<ReturnType<typeof supabase.channel>>(
+      (channel) => supabase.removeChannel(channel),
+    );
     let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
-    let fallbackStarted = false;
     let broadcastHealthy = false;
-    let fallbackHealthy = false;
     let fallbackRestartTimer: ReturnType<typeof setTimeout> | null = null;
     let recoveryController: ReturnType<typeof createRealtimeRecoveryController> | null = null;
     let unsubscribeAppSync: (() => void) | null = null;
@@ -1308,53 +1317,73 @@ const Forum = () => {
     const recoverMissedMessages = async () => {
       if (disposed) return;
       const current = queryClient.getQueryData<any>(roomQueryKey);
-      const latest = [...(current?.posts || [])].reverse().find((post: any) =>
-        post?.created_at && !isDemoId(post.id));
-      let query = supabase.from("posts")
-        .select(LEGACY_FORUM_POST_COLUMNS)
-        .eq("scope_type", activeScope.type)
-        .eq("scope_key", activeScope.key)
-        .is("reply_to_id", null)
-        .is("deleted_at", null)
-        .order("created_at", { ascending: false })
-        .order("id", { ascending: false })
-        .limit(latest ? MAX_ROOM_HISTORY : PAGE_SIZE) as any;
-      if (latest?.created_at) query = query.gte("created_at", latest.created_at);
-      const { data, error } = await query;
-      if (disposed || error || !data?.length) return;
-      const enriched = await hydrateForumMediaUrls(await enrichPosts(data as any[]));
-      enriched.forEach((post) => applyRoomEvent({ eventType: "INSERT", new: post }));
-      flushRoomEvents();
+      const renderedWindow = mergeForumHistoryPosts(olderPagesRef.current, current?.posts || []);
+      const persistedCount = renderedWindow.filter((post: any) => !isDemoId(post.id)).length;
+      const targetSize = Math.min(MAX_ROOM_HISTORY, Math.max(PAGE_SIZE, persistedCount));
+      const authoritativeRows: any[] = [];
+      let before: ForumCursor | undefined;
+      const revisionAtStart = roomEventRevision;
+
+      // Re-read the entire rendered database window. New-row cursors alone
+      // leave stale edits/tombstones/deletes behind after a hidden-tab resume.
+      while (!disposed && authoritativeRows.length < targetSize) {
+        const pageSize = Math.min(500, targetSize - authoritativeRows.length);
+        const { data, error } = await buildScopeQuery(activeScope.type, activeScope.key, pageSize, before);
+        if (disposed || error) return;
+        const pageRows = (data || []) as any[];
+        authoritativeRows.push(...pageRows);
+        if (pageRows.length < pageSize) break;
+        const oldest = pageRows[pageRows.length - 1];
+        before = { createdAt: oldest.created_at, id: oldest.id };
+      }
+      const enriched = await hydrateForumMediaUrls(await enrichPosts(authoritativeRows));
+      if (disposed) return;
+      let nextSnapshot: any[] = [];
+      queryClient.setQueryData(roomQueryKey, (latest: any) => {
+        nextSnapshot = reconcileForumRoomSnapshot(
+          latest?.posts || [],
+          enriched,
+          { type: activeScope.type, key: activeScope.key },
+          MAX_ROOM_HISTORY,
+        );
+        return { ...(latest || {}), posts: nextSnapshot, isDemo: false, demos: [] };
+      });
+      olderPagesRef.current = [];
+      setOlderPages([]);
+      setCachedPosts(activeScope.type, activeScope.key, nextSnapshot, user?.id);
+      if (user?.id) void replaceForumHistory(user.id, activeScope.type, activeScope.key, nextSnapshot);
+      if (roomEventRevision !== revisionAtStart) void recoveryController?.recoverNow();
     };
     function scheduleFallbackRestart() {
       if (disposed || fallbackRestartTimer !== null) return;
-      fallbackHealthy = false;
-      const previous = fallbackChannel;
-      fallbackChannel = null;
-      fallbackStarted = false;
-      if (previous) void supabase.removeChannel(previous);
+      fallback.retire();
       fallbackRestartTimer = setTimeout(() => {
         fallbackRestartTimer = null;
-        startPostgresFallback();
+        if (!broadcastHealthy) startPostgresFallback();
       }, 1_500);
     }
+    function retirePostgresFallback() {
+      if (fallbackRestartTimer !== null) clearTimeout(fallbackRestartTimer);
+      fallbackRestartTimer = null;
+      fallback.retire();
+    }
     function startPostgresFallback() {
-      if (fallbackStarted || disposed) return;
-      fallbackStarted = true;
+      if (fallback.hasChannel() || disposed || broadcastHealthy) return;
       const channel = supabase.channel(`forum-pg-${activeScope.type}-${activeScope.key}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts', filter }, (payload: any) => {
-        applyHydratedRoomEvent({ eventType: "INSERT", new: payload.new || {} });
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, (payload: any) => {
+        if (fallback.isCurrent(channel)) applyHydratedRoomEvent({ eventType: "INSERT", new: payload.new || {} });
       })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts', filter }, (payload: any) => {
-        applyHydratedRoomEvent({ eventType: "UPDATE", new: payload.new || {} });
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts' }, (payload: any) => {
+        if (fallback.isCurrent(channel)) applyHydratedRoomEvent({ eventType: "UPDATE", new: payload.new || {} });
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts', filter }, (payload: any) => {
-        applyRoomEvent({ eventType: "DELETE", old: payload.old || {} });
-      })
-      .subscribe((status) => {
-        if (disposed || fallbackChannel !== channel) return;
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts' }, (payload: any) => {
+        if (fallback.isCurrent(channel)) applyRoomEvent({ eventType: "DELETE", old: payload.old || {} });
+      });
+      if (!fallback.attach(channel)) { void supabase.removeChannel(channel); return; }
+      channel.subscribe((status) => {
+        if (disposed || !fallback.isCurrent(channel)) return;
         if (status === "SUBSCRIBED") {
-          fallbackHealthy = true;
+          fallback.markHealthy(channel);
           void (recoveryController?.recoverNow() || recoverMissedMessages());
           return;
         }
@@ -1362,13 +1391,12 @@ const Forum = () => {
           scheduleFallbackRestart();
         }
       });
-      fallbackChannel = channel;
     }
 
     recoveryController = createRealtimeRecoveryController({
       recover: recoverMissedMessages,
       ensureConnected: () => {
-        if (!broadcastHealthy && !fallbackHealthy) startPostgresFallback();
+        if (!broadcastHealthy && !fallback.isHealthy()) startPostgresFallback();
       },
     });
 
@@ -1396,6 +1424,7 @@ const Forum = () => {
         if (disposed) return;
         if (status === "SUBSCRIBED") {
           broadcastHealthy = true;
+          retirePostgresFallback();
           void (recoveryController?.recoverNow() || recoverMissedMessages());
         } else if (status === "CHANNEL_ERROR" || status === "CLOSED") {
           broadcastHealthy = false;
@@ -1432,6 +1461,7 @@ const Forum = () => {
           if (disposed) return;
           if (status === "SUBSCRIBED") {
             broadcastHealthy = true;
+            retirePostgresFallback();
             void (recoveryController?.recoverNow() || recoverMissedMessages());
             return;
           }
@@ -1454,11 +1484,11 @@ const Forum = () => {
       if (flushTimer !== null) clearTimeout(flushTimer);
       flushRoomEvents();
       if (historyPersistTimer !== null) clearTimeout(historyPersistTimer);
-      if (user?.id && latestHistorySnapshot.length > 0) {
-        void persistForumHistory(user.id, activeScope.type, activeScope.key, latestHistorySnapshot);
+      if (user?.id && hasHistorySnapshot) {
+        void replaceForumHistory(user.id, activeScope.type, activeScope.key, latestHistorySnapshot);
       }
       if (broadcastChannel) supabase.removeChannel(broadcastChannel);
-      if (fallbackChannel) supabase.removeChannel(fallbackChannel);
+      fallback.retire();
       unsubscribeAppSync?.();
     };
   }, [queryClient, activeScope.type, activeScope.key, enrichPosts, profileMap, realtimeActive, user?.id]);

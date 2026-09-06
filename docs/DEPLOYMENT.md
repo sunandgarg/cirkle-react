@@ -15,9 +15,10 @@ Browser -> Cloudflare Pages project cirkle-react
            -> private Lightsail managed MySQL 8.4
            -> private encrypted/versioned S3
 
-Foreground realtime: authorized Socket.IO at /api/socket.io
-Durable truth: MySQL; clients refetch after reconnect
-AppSync: disabled
+Foreground forum/chat/inbox invalidations: AppSync Events in the separate realtime account
+Foreground room fallback + parallel personal-state/ephemeral paths: authorized Socket.IO
+Background state: both transports close immediately; MySQL is refetched on resume
+Durable truth: MySQL; AppSync envelopes are content-free invalidations only
 ```
 
 The legacy Cloudflare `cirkle` project, its `cirkle.pages.dev` hostname, and the
@@ -31,8 +32,8 @@ Do not move a production hostname until all gates are satisfied:
 
 1. `pnpm verify` succeeds on the exact commit selected for both API and Pages.
 2. The API release is deployed first and its loopback `/readyz` passes.
-3. Public `/healthz`, Socket.IO handshake, CORS, OAuth callback, email, GIF,
-   storage, and two-browser forum/chat tests pass on
+3. Public `/healthz`, AppSync authorization/publish/subscribe, Socket.IO room fallback
+   and personal-state/ephemeral paths, CORS, OAuth callback, email, GIF, storage, and two-browser forum/chat tests pass on
    `https://cirkle-react.cirkle.world`.
 4. The final Supabase export has been applied idempotently and destination UUID,
    ownership, row-count, and S3 object-count parity is recorded.
@@ -63,7 +64,8 @@ APP_BASE_URL=https://api-react.cirkle.world
 FRONTEND_URL=https://cirkle.world
 GOOGLE_REDIRECT_URI=https://api-react.cirkle.world/api/auth/google/callback
 COOKIE_SECURE=true
-APPSYNC_ENABLED=false
+APPSYNC_ENABLED=true
+APPSYNC_HTTP_ENDPOINT=https://hzrd5pmdhvfobbzonf2hffeq5e.appsync-api.ap-south-1.amazonaws.com/event
 STORAGE_DRIVER=s3
 ```
 
@@ -263,14 +265,16 @@ The reviewed public build variables for the current release are:
 
 ```dotenv
 VITE_API_URL=https://api-react.cirkle.world
-VITE_CHAT_REALTIME_PROVIDER=socketio
+VITE_CHAT_REALTIME_PROVIDER=appsync
+VITE_APPSYNC_HTTP_ENDPOINT=https://hzrd5pmdhvfobbzonf2hffeq5e.appsync-api.ap-south-1.amazonaws.com/event
+VITE_APPSYNC_REALTIME_ENDPOINT=wss://hzrd5pmdhvfobbzonf2hffeq5e.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime
 VITE_DAILY_CALLS_ENABLED=false
 PNPM_VERSION=11.19.0
 ```
 
-Leave `VITE_APPSYNC_HTTP_ENDPOINT` and
-`VITE_APPSYNC_REALTIME_ENDPOINT` absent. Vite embeds every `VITE_*` value in
-downloadable JavaScript, so no secret can use that prefix.
+The AppSync endpoint pair is public and pinned to the reviewed Event API. Vite
+embeds every `VITE_*` value in downloadable JavaScript, so publisher tokens,
+authorizer secrets, and every other secret must never use that prefix.
 
 `wrangler.jsonc`, `package.json`, and the Pages dashboard all use the same
 project name and `main` production branch. A direct upload from a clean,
@@ -278,13 +282,16 @@ committed checkout is:
 
 ```sh
 VITE_API_URL=https://api-react.cirkle.world \
-VITE_CHAT_REALTIME_PROVIDER=socketio \
+VITE_CHAT_REALTIME_PROVIDER=appsync \
+VITE_APPSYNC_HTTP_ENDPOINT=https://hzrd5pmdhvfobbzonf2hffeq5e.appsync-api.ap-south-1.amazonaws.com/event \
+VITE_APPSYNC_REALTIME_ENDPOINT=wss://hzrd5pmdhvfobbzonf2hffeq5e.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime \
 VITE_DAILY_CALLS_ENABLED=false \
 pnpm pages:deploy
 ```
 
 The command rejects a dirty checkout, unreviewed public variables, the old API
-origin, AppSync endpoints, and ambiguous Daily flag values.
+origin, a downgraded realtime provider, a mismatched AppSync endpoint pair, and
+ambiguous Daily flag values.
 
 ## Ordered apex and www rollout
 
@@ -374,8 +381,8 @@ Test at least these flows on desktop and mobile before declaring completion:
    refresh, and two-tab session recovery.
 3. Forum post/comment/reaction/poll and direct-message writes with a second
    non-admin member; denied room access must remain denied.
-4. Foreground Socket.IO delivery, immediate disconnect on page hide, and MySQL
-   refetch/reconciliation on visibility return.
+4. Foreground AppSync delivery, Socket.IO room fallback/personal-state/typing, immediate disconnect
+   on page hide or window blur, and MySQL refetch/reconciliation on return.
 5. Private/public image, voice, and document upload/download authorization;
    object bytes must remain in S3 rather than MySQL.
 6. GIF search and attribution. OpenAI/Gemini/Daily controls must be absent or

@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { allowedForumScopes, canUseForumScope } from "../security/forumScope.js";
 import type { AuthUser } from "../types.js";
+import { hasActiveChatMembership } from "./chatMembership.js";
 import {
   chatAppSyncChannels,
   forumAppSyncChannels,
@@ -19,14 +20,7 @@ const roomFromChannel = (channel: string): string | undefined => {
 const ADMIN_FORUM_CHANNEL = /^\/forum\/[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?\/[a-f0-9]{32}$/;
 
 async function isRoomMember(userId: string, roomId: string): Promise<boolean> {
-  return Boolean(await prisma.legacyRecord.findFirst({
-    where: {
-      table_name: "chat_members",
-      owner_id: userId,
-      data: { path: "$.room_id", equals: roomId },
-    },
-    select: { id: true },
-  }));
+  return hasActiveChatMembership(prisma, userId, roomId);
 }
 
 async function canUseForumChannel(auth: AuthUser, channel: string): Promise<boolean> {

@@ -1,6 +1,6 @@
 # Cirkle API
 
-The API is an Express/TypeScript service backed by Prisma and MySQL. It keeps the existing frontend's Supabase-shaped interface while enforcing authorization in the server. The production entry point is `server/dist/index.js`; it binds to `HOST` (default `127.0.0.1`) and `PORT` (default `3001`). Socket.IO at `/api/socket.io` is the production realtime transport. AppSync is disabled in the current budget topology.
+The API is an Express/TypeScript service backed by Prisma and MySQL. It keeps the existing frontend's Supabase-shaped interface while enforcing authorization in the server. The production entry point is `server/dist/index.js`; it binds to `HOST` (default `127.0.0.1`) and `PORT` (default `3001`). AWS AppSync Events carries content-free durable forum/chat/inbox invalidations in production; Socket.IO at `/api/socket.io` remains the authorized room fallback, parallel personal-state compatibility transport, and typing/presence transport.
 
 ## Local startup
 
@@ -30,7 +30,7 @@ optional feature must then fail closed. Daily calls use both the Pages flag and
 - Google OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`.
 - AI extraction: `OPENAI_API_KEY`, `OPENAI_MODEL`, `GEMINI_API_KEY`, `GEMINI_MODEL`.
 - GIF and calling: `KLIPY_API_KEY`, `DAILY_API_KEY`, optionally `DAILY_DOMAIN`.
-- Optional AppSync topology (not current production): `APPSYNC_ENABLED=true`,
+- Production AppSync transport: `APPSYNC_ENABLED=true`,
   `APPSYNC_HTTP_ENDPOINT`, and distinct server-only publisher/authorizer values.
 - Local-only phone testing: `MOBILE_TEST_MODE=true` and an explicit comma-separated `MOBILE_TEST_PHONES` allowlist. This path is disabled in production.
 - Test data: `ENABLE_SEED_DATA=true`; always disabled in production.
@@ -70,15 +70,24 @@ Connection requests are created only through the RPC workflow. It serializes eac
 
 ## Realtime
 
-Production uses Socket.IO on the first-party API origin. It authenticates the
-same access token as HTTP requests and subscribes with `realtime:subscribe` plus
-`{ channel, bindings }`. The server verifies profile, forum-scope, or chat-room
-membership before joining a room and limits each socket to 50 subscriptions.
-Client relay accepts only rate-limited, identity-derived typing/presence—not
-arbitrary database events. MySQL remains authoritative; reconnecting clients
-refetch durable rows, so a disconnected or backgrounded browser cannot lose
-message history. The AppSync code and stack are retained only as an optional,
-separately operated topology.
+Production publishes content-free durable invalidations to AppSync Events in a
+separate AWS account. The AppSync Lambda authorizer calls this API to recheck
+the current profile, forum scope, thread visibility, chat membership, or inbox
+owner on every connection and subscription. Browsers receive only the table,
+operation, opaque row ID, and event timestamps, then refetch authorized content
+from this API.
+
+For integrated forum/chat room rows, Socket.IO on the first-party API origin is
+the automatic fallback when AppSync is unavailable. It also runs in parallel
+for current personal-state compatibility paths (profile, notifications, and
+connections; call invites when Daily is enabled) and is the only
+typing/presence transport. It authenticates the same access token as HTTP
+requests and subscribes with `realtime:subscribe` plus `{ channel, bindings }`;
+the server limits each socket to 50 subscriptions. Client relay accepts only
+rate-limited, identity-derived typing/presence—not arbitrary database events.
+Both browser transports close when the page loses foreground focus. MySQL
+remains authoritative, and returning clients refetch durable rows, so a
+disconnected or backgrounded browser cannot lose message history.
 
 ## Supabase import
 

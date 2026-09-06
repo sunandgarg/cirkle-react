@@ -66,4 +66,20 @@ describe("cost-aware realtime activity", () => {
     expect(onActiveChange).toHaveBeenLastCalledWith(true);
     controller.dispose();
   });
+
+  it("suspends when the browser loses OS focus and resumes on focus", () => {
+    const windowTarget = new EventTarget();
+    const documentTarget = Object.assign(new EventTarget(), {
+      hidden: false,
+      visibilityState: "visible" as DocumentVisibilityState,
+    });
+    const onActiveChange = vi.fn();
+    const controller = createRealtimeActivityController({ onActiveChange, windowTarget, documentTarget });
+
+    windowTarget.dispatchEvent(new Event("blur"));
+    expect(onActiveChange).toHaveBeenLastCalledWith(false);
+    windowTarget.dispatchEvent(new Event("focus"));
+    expect(onActiveChange).toHaveBeenLastCalledWith(true);
+    controller.dispose();
+  });
 });

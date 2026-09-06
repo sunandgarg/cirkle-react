@@ -5,6 +5,7 @@ import type { Tables } from "@/integrations/supabase/types";
 import type { ApiUser as User } from "@/integrations/api/types";
 import { isInvalidRefreshTokenError, isMissingAuthIdentityError } from "@/lib/authSessionRecovery";
 import { reportError } from "@/lib/errorTelemetry";
+import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 
 type Profile = Tables<"profiles">;
 
@@ -71,6 +72,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [isAdmin, setIsAdmin] = useState(false);
   const initializedRef = useRef(false);
   const activeUserIdRef = useRef<string | null>(null);
+  const realtimeActive = useRealtimeActivity();
 
   const isVerified = !!profile?.is_verified;
 
@@ -220,7 +222,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, [user]);
 
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id || !realtimeActive) return;
     const channel = supabase
       .channel(`member-profile:${user.id}`)
       .on(
@@ -236,16 +238,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       )
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
-  }, [user?.id]);
+  }, [realtimeActive, user?.id]);
 
   useEffect(() => {
     if (!user) return;
     const refresh = () => { void refetchProfile().catch(() => undefined); };
     const handleVisibility = () => { if (document.visibilityState === "visible") refresh(); };
     window.addEventListener("online", refresh);
+    window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       window.removeEventListener("online", refresh);
+      window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [refetchProfile, user]);

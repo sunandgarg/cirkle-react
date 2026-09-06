@@ -9,9 +9,12 @@ MySQL remains authoritative. After the Node API writes durable application
 data, it derives audience-scoped channels, places a content-free row-ID
 invalidation in the MySQL `legacy_records` outbox, and publishes it through the
 AppSync HTTP endpoint. Browsers subscribe over AppSync WebSockets and refetch
-the row through the normal Node API, which rechecks current authorization. The
-existing Socket.IO compatibility transport takes over if AppSync is
-unavailable.
+the row through the normal Node API, which rechecks current authorization.
+Integrated forum/chat room consumers retire their Socket.IO row-delivery
+subscription after AppSync succeeds and restore it automatically if AppSync is
+unavailable. Socket.IO also remains a parallel authorized transport for
+personal-state compatibility and typing/presence; it is not globally
+fallback-only.
 
 ## Security model
 
@@ -41,7 +44,7 @@ unavailable.
 
 Prerequisites:
 
-1. `https://api.cirkle.world` (or the chosen `ApiBaseUrl`) must already expose
+1. `https://api-react.cirkle.world` (or the chosen `ApiBaseUrl`) must already expose
    the Node API over public HTTPS.
 2. Generate two different random values of at least 32 characters. Store them
    in the production secret store as `APPSYNC_AUTHORIZER_SECRET` and
@@ -80,7 +83,7 @@ group.
 
 ## Runtime configuration
 
-Set on the Node server, then restart the PM2 process:
+Set on the Node server, then restart its production systemd service:
 
 ```text
 APPSYNC_ENABLED=true
@@ -93,17 +96,39 @@ Set only these public Cloudflare Pages build variables and rebuild the site:
 
 ```text
 VITE_CHAT_REALTIME_PROVIDER=appsync
-VITE_APPSYNC_HTTP_ENDPOINT=<AppSyncHttpEndpoint>
-VITE_APPSYNC_REALTIME_ENDPOINT=<AppSyncRealtimeEndpoint>
+VITE_APPSYNC_HTTP_ENDPOINT=https://hzrd5pmdhvfobbzonf2hffeq5e.appsync-api.ap-south-1.amazonaws.com/event
+VITE_APPSYNC_REALTIME_ENDPOINT=wss://hzrd5pmdhvfobbzonf2hffeq5e.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime
 ```
 
 ## Verification and operations
 
-Verify one forum room, one direct-message room, Socket.IO typing,
-reconnect-after-token refresh, and Socket.IO fallback while AppSync is
-unavailable. Also confirm the
+Verify one forum room, one direct-message room, the Socket.IO personal-state
+and typing/presence paths, reconnect-after-token refresh, and room fallback
+while AppSync is unavailable. Also confirm the
 Node readiness endpoint and inspect AppSync 4XX/5XX, connection, subscription,
 and event metrics in CloudWatch.
+
+The dedicated realtime account has a USD 3 monthly account-wide AWS Budget
+named `cirkle-appsync-monthly-usd-3`. It includes AppSync, Lambda, CloudWatch,
+and any other charge incurred in that account, and emails the account owner at
+80% forecast and 100% actual spend. A budget is an alert, not a hard spending
+cap; review AppSync and Lambda metrics together if it fires. The production
+CloudFormation stack also has termination protection enabled.
+
+Event API request logging is intentionally disabled. AWS documents that those
+request-level logs include request and response HTTP headers; this deployment's
+authorization header contains either a short-lived Cirkle access token or the
+server publisher token. CloudWatch's built-in Event API metrics provide error,
+latency, connection, subscription, and message-volume observability without
+persisting bearer material. The Lambda authorizer keeps only 14 days of its own
+sanitized error logs and never logs the supplied token or shared secret.
+
+The browser requests a synchronous WebSocket close on visibility loss, page
+freeze/hide, or window blur. No browser can promise delivery of that close frame
+after an abrupt process kill, device sleep, or network loss; in those cases AWS
+recognizes the disconnect through its normal connection lifecycle. Treat the
+foreground rule as a strong cost optimization, not a zero-connection-minute
+guarantee.
 
 Failed AppSync publishes are retried with bounded exponential backoff. After 12
 failed attempts a record is retained for inspection under

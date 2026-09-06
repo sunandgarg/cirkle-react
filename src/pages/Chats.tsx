@@ -21,7 +21,11 @@ import {
 } from "@/lib/chatOutbox";
 import { getForumBroadcastRow } from "@/lib/forumRealtime";
 import { createRealtimeRecoveryController } from "@/lib/realtimeRecovery";
-import { isChatMessageRealtimeEvent, mergeChatTimeline, uniqueChatMessages as uniqueMessages } from "@/lib/chatMessages";
+import { createRealtimeFallbackSlot, selectChatTypingChannel } from "@/lib/realtimeFallback";
+import {
+  isChatMessageRealtimeEvent, mergeChatTimeline, reconcileChatTimeline,
+  uniqueChatMessages as uniqueMessages,
+} from "@/lib/chatMessages";
 import { reportError } from "@/lib/errorTelemetry";
 import VoiceRecorder from "@/components/forum/VoiceRecorder";
 import {
@@ -263,13 +267,14 @@ const Chats = () => {
     if (!activeRoom || !user || !realtimeActive) return;
     let cancelled = false;
     let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
-    let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
-    let fallbackStarted = false;
+    const fallback = createRealtimeFallbackSlot<ReturnType<typeof supabase.channel>>(
+      (channel) => supabase.removeChannel(channel),
+    );
     let broadcastHealthy = false;
-    let fallbackHealthy = false;
     let fallbackRestartTimer: ReturnType<typeof setTimeout> | null = null;
     let recoveryController: ReturnType<typeof createRealtimeRecoveryController> | null = null;
     let unsubscribeAppSyncMessage: (() => void) | null = null;
+    let roomEventRevision = 0;
     const changedRoom = realtimeRoomIdRef.current !== activeRoom.id;
     realtimeRoomIdRef.current = activeRoom.id;
     if (changedRoom) {
@@ -308,6 +313,7 @@ const Chats = () => {
 
     const applyMessage = async (eventType: string, row: ChatMessage | undefined) => {
       if (!row?.id || cancelled) return;
+      roomEventRevision += 1;
       if (eventType === "DELETE") {
         setMessages((current) => current.filter((item) => item.id !== row.id));
         return;
@@ -324,37 +330,40 @@ const Chats = () => {
     const recoverMissedMessages = async () => {
       if (cancelled) return;
       const roomMessages = uniqueMessages(messagesRef.current.filter((message) => message.room_id === activeRoom.id));
-      let cursor = roomMessages[roomMessages.length - 1];
-      const recoveredRows: ChatMessage[] = [];
+      const targetSize = Math.min(1_200, Math.max(
+        PAGE_SIZE,
+        roomMessages.filter((message) => !message.id.startsWith("optimistic-")).length,
+      ));
+      const authoritativeRows: ChatMessage[] = [];
+      let before: ChatMessage | undefined;
+      const revisionAtStart = roomEventRevision;
 
-      if (!cursor) {
-        const { data, error } = await supabase.from("messages").select("*")
+      // Re-read the entire rendered database window, newest first. A cursor
+      // that only asks for newer rows cannot repair an older edit or deletion
+      // missed while the browser was hidden.
+      while (!cancelled && authoritativeRows.length < targetSize) {
+        const pageSize = Math.min(500, targetSize - authoritativeRows.length);
+        let query = supabase.from("messages").select("*")
           .eq("room_id", activeRoom.id)
           .order("created_at", { ascending: false }).order("id", { ascending: false })
-          .limit(PAGE_SIZE);
-        if (cancelled || error || !data?.length) return;
-        recoveredRows.push(...((data as ChatMessage[]).reverse()));
-      } else {
-        // A sleeping mobile browser can miss more than one page of events.
-        // Walk the deterministic (created_at, id) cursor until caught up.
-        for (let page = 0; page < 100 && !cancelled; page += 1) {
-          const { data, error } = await supabase.from("messages").select("*")
-            .eq("room_id", activeRoom.id)
-            .or(`created_at.gt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.gt.${cursor.id})`)
-            .order("created_at", { ascending: true }).order("id", { ascending: true })
-            .limit(100);
-          if (error || !data?.length) break;
-          const pageRows = data as ChatMessage[];
-          recoveredRows.push(...pageRows);
-          cursor = pageRows[pageRows.length - 1];
-          if (pageRows.length < 100) break;
+          .limit(pageSize);
+        if (before) {
+          query = query.or(`created_at.lt.${before.created_at},and(created_at.eq.${before.created_at},id.lt.${before.id})`);
         }
+        const { data, error } = await query;
+        if (cancelled || error) return;
+        const pageRows = (data || []) as ChatMessage[];
+        authoritativeRows.push(...pageRows);
+        if (pageRows.length < pageSize) break;
+        before = pageRows[pageRows.length - 1];
       }
-      if (cancelled || recoveredRows.length === 0) return;
-      const recovered = await hydrateChatMedia(recoveredRows);
-      if (!cancelled) setMessages((existing) => uniqueMessages([...existing, ...recovered]));
+      const recovered = await hydrateChatMedia(authoritativeRows.reverse());
+      if (cancelled) return;
+      setMessages((existing) => reconcileChatTimeline(existing, recovered, activeRoom.id));
+      if (roomEventRevision !== revisionAtStart) void recoveryController?.recoverNow();
     };
-    const bindTyping = (channel: ReturnType<typeof supabase.channel>) => channel.on("broadcast", { event: "typing" }, ({ payload }) => {
+    const bindTyping = (channel: ReturnType<typeof supabase.channel>, active = () => true) => channel.on("broadcast", { event: "typing" }, ({ payload }) => {
+        if (!active()) return;
         if (!payload?.userId || payload.userId === user.id) return;
         const name = payload.name || "Someone";
         setTypingUsers((current) => payload.typing
@@ -364,27 +373,37 @@ const Chats = () => {
       });
     function scheduleFallbackRestart() {
       if (cancelled || fallbackRestartTimer !== null) return;
-      fallbackHealthy = false;
-      const previous = fallbackChannel;
-      fallbackChannel = null;
-      fallbackStarted = false;
-      if (previous) void supabase.removeChannel(previous);
+      fallback.retire();
+      roomChannelRef.current = broadcastChannel;
       fallbackRestartTimer = setTimeout(() => {
         fallbackRestartTimer = null;
-        startFallback();
+        if (!broadcastHealthy) startFallback();
       }, 1_500);
     }
+    function retireFallback() {
+      if (fallbackRestartTimer !== null) clearTimeout(fallbackRestartTimer);
+      fallbackRestartTimer = null;
+      fallback.retire();
+      roomChannelRef.current = broadcastChannel;
+    }
     function startFallback() {
-      if (fallbackStarted || cancelled) return;
-      fallbackStarted = true;
-      const channel = bindTyping(supabase.channel(`room-${activeRoom.id}`, { config: { broadcast: { self: false } } }))
+      if (fallback.hasChannel() || cancelled || broadcastHealthy) return;
+      const rawChannel = supabase.channel(`room-${activeRoom.id}`, { config: { broadcast: { self: false } } });
+      const channel = (appSyncRealtimeEnabled
+        ? rawChannel
+        : bindTyping(rawChannel, () => fallback.isCurrent(rawChannel)))
         .on("postgres_changes", {
           event: "*", schema: "public", table: "messages", filter: `room_id=eq.${activeRoom.id}`,
-        }, (payload: any) => { void applyMessage(payload.eventType, (payload.eventType === "DELETE" ? payload.old : payload.new) as ChatMessage); })
-        .subscribe((status) => {
-          if (cancelled || fallbackChannel !== channel) return;
+        }, (payload: any) => {
+          if (fallback.isCurrent(channel)) {
+            void applyMessage(payload.eventType, (payload.eventType === "DELETE" ? payload.old : payload.new) as ChatMessage);
+          }
+        });
+      if (!fallback.attach(channel)) { void supabase.removeChannel(channel); return; }
+      channel.subscribe((status) => {
+          if (cancelled || !fallback.isCurrent(channel)) return;
           if (status === "SUBSCRIBED") {
-            fallbackHealthy = true;
+            fallback.markHealthy(channel);
             void (recoveryController?.recoverNow() || recoverMissedMessages());
             return;
           }
@@ -392,13 +411,12 @@ const Chats = () => {
             scheduleFallbackRestart();
           }
         });
-      fallbackChannel = channel;
-      roomChannelRef.current = channel;
+      roomChannelRef.current = selectChatTypingChannel(appSyncRealtimeEnabled, broadcastChannel, channel);
     }
     recoveryController = createRealtimeRecoveryController({
       recover: recoverMissedMessages,
       ensureConnected: () => {
-        if (!broadcastHealthy && !fallbackHealthy) startFallback();
+        if (!broadcastHealthy && !fallback.isHealthy()) startFallback();
       },
     });
     if (appSyncRealtimeEnabled) {
@@ -424,6 +442,7 @@ const Chats = () => {
         if (cancelled) return;
         if (status === "SUBSCRIBED") {
           broadcastHealthy = true;
+          retireFallback();
           void (recoveryController?.recoverNow() || recoverMissedMessages());
         } else if (status === "CHANNEL_ERROR" || status === "CLOSED") {
           broadcastHealthy = false;
@@ -453,6 +472,7 @@ const Chats = () => {
           if (cancelled) return;
           if (status === "SUBSCRIBED") {
             broadcastHealthy = true;
+            retireFallback();
             void (recoveryController?.recoverNow() || recoverMissedMessages());
           }
           if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
@@ -470,17 +490,19 @@ const Chats = () => {
       if (fallbackRestartTimer !== null) clearTimeout(fallbackRestartTimer);
       roomChannelRef.current = null;
       if (broadcastChannel) void supabase.removeChannel(broadcastChannel);
-      if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
+      fallback.retire();
       if (readTimerRef.current) clearTimeout(readTimerRef.current);
       unsubscribeAppSyncMessage?.();
     };
   }, [activeRoom, markReadSoon, queryClient, realtimeActive, user]);
 
   useEffect(() => {
-    if (!activeRoom || !messages.length) return;
+    if (!activeRoom) return;
     messagesRef.current = messages;
     if (user?.id) void cacheMessages(user.id, activeRoom.id, messages);
-    if (!prependRef.current && followLiveRef.current) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messages.length && !prependRef.current && followLiveRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
     prependRef.current = false;
   }, [activeRoom, messages, user?.id]);
 

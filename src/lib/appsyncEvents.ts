@@ -10,7 +10,16 @@ type Listener = {
   onEvent: (event: AppSyncEvent) => void;
   onStatus?: (status: AppSyncStatus) => void;
   retryAttempt: number;
+  recoverOnNextData: boolean;
+  authorizationRejected: boolean;
 };
+
+class AppSyncAuthorizationError extends Error {
+  constructor() {
+    super("Realtime connection authorization was rejected");
+    this.name = "AppSyncAuthorizationError";
+  }
+}
 
 const provider = import.meta.env.VITE_CHAT_REALTIME_PROVIDER;
 const realtimeEndpoint = import.meta.env.VITE_APPSYNC_REALTIME_ENDPOINT;
@@ -58,25 +67,31 @@ class AppSyncEventsClient {
   private reconnectAttempt = 0;
   private connecting: Promise<void> | null = null;
   private intentionallyClosedSockets = new WeakSet<WebSocket>();
+  private terminallyRejectedSockets = new WeakSet<WebSocket>();
   private tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private keepAliveTimer: ReturnType<typeof setTimeout> | null = null;
   private keepAliveTimeoutMs = DEFAULT_KEEP_ALIVE_TIMEOUT_MS;
+  private foreground = typeof document === "undefined" || !document.hidden;
 
   constructor() {
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", () => {
-        if (document.hidden) this.closeSocket();
+        if (document.hidden) this.suspendBackground();
         else this.resumeForeground();
       });
       // Mobile browsers can freeze JavaScript as soon as the page is moved to
       // the background, so every hidden lifecycle closes synchronously.
-      document.addEventListener("freeze", () => this.closeSocket());
-      window.addEventListener("pagehide", () => this.closeSocket());
+      document.addEventListener("freeze", () => this.suspendBackground());
+      window.addEventListener("pagehide", () => this.suspendBackground());
+      // Losing OS/window focus covers switching from the browser to another
+      // application even when the browser leaves the page technically visible.
+      window.addEventListener("blur", () => this.suspendBackground());
       window.addEventListener("pageshow", () => this.resumeForeground());
-      window.addEventListener("online", () => { if (this.listeners.size) this.ensureConnection(); });
+      window.addEventListener("focus", () => this.resumeForeground());
+      window.addEventListener("online", () => { if (this.listeners.size && this.foreground) this.ensureConnection(); });
       subscribeToAuthChanges((event) => {
         this.closeSocket();
-        if (event !== "SIGNED_OUT" && this.listeners.size && !document.hidden) this.ensureConnection();
+        if (event !== "SIGNED_OUT" && this.listeners.size && this.foreground && !document.hidden) this.ensureConnection();
       });
     }
   }
@@ -87,7 +102,9 @@ class AppSyncEventsClient {
       return () => undefined;
     }
     const id = crypto.randomUUID();
-    this.listeners.set(id, { id, channel, onEvent, onStatus, retryAttempt: 0 });
+    this.listeners.set(id, {
+      id, channel, onEvent, onStatus, retryAttempt: 0, recoverOnNextData: false, authorizationRejected: false,
+    });
     onStatus?.("CONNECTING");
     if (this.readySocket?.readyState === WebSocket.OPEN) {
       void this.sendSubscription(id).catch(() => this.scheduleSubscriptionRetry(id));
@@ -175,8 +192,14 @@ class AppSyncEventsClient {
           }
           if (!acknowledged && (payload.type === "connection_error" || payload.type === "error")) {
             clearTimeout(timeout);
+            const failure = this.isAuthorizationError(payload)
+              ? new AppSyncAuthorizationError()
+              : new Error("Realtime connection was rejected");
+            if (failure instanceof AppSyncAuthorizationError) this.terminallyRejectedSockets.add(socket);
+            // Settle with the structured failure before closing. Test doubles
+            // and some runtimes can dispatch `close` synchronously.
+            reject(failure);
             socket.close();
-            reject(new Error("Realtime connection was rejected"));
             return;
           }
           this.handleMessage(payload);
@@ -190,6 +213,7 @@ class AppSyncEventsClient {
             this.clearKeepAliveTimer();
           }
           const intentionallyClosed = this.intentionallyClosedSockets.delete(socket);
+          const terminallyRejected = this.terminallyRejectedSockets.delete(socket);
           if (!acknowledged) {
             if (intentionallyClosed) resolve();
             else reject(new Error("Realtime connection closed"));
@@ -198,12 +222,13 @@ class AppSyncEventsClient {
           // compatibility fallback; foreground recovery queries the DB.
           if (!intentionallyClosed) {
             this.listeners.forEach((listener) => listener.onStatus?.("CLOSED"));
-            if (this.listeners.size && (typeof document === "undefined" || !document.hidden)) this.scheduleReconnect();
+            if (!terminallyRejected && this.listeners.size && this.foreground
+              && (typeof document === "undefined" || !document.hidden)) this.scheduleReconnect();
           }
         };
       });
       if (this.readySocket?.readyState !== WebSocket.OPEN) {
-        if (this.listeners.size && (typeof document === "undefined" || !document.hidden)) {
+        if (this.listeners.size && this.foreground && (typeof document === "undefined" || !document.hidden)) {
           throw new Error("Realtime connection closed before it became ready");
         }
         return;
@@ -222,6 +247,7 @@ class AppSyncEventsClient {
     // Refreshing an expiring JWT emits TOKEN_REFRESHED and intentionally
     // replaces the socket. Never send on the stale instance after the await.
     if (this.socket !== socket || this.readySocket !== socket || socket.readyState !== WebSocket.OPEN) return;
+    listener.authorizationRejected = false;
     socket.send(JSON.stringify({
       id,
       type: "subscribe",
@@ -234,6 +260,8 @@ class AppSyncEventsClient {
     const listener = message.id ? this.listeners.get(message.id) : null;
     if (message.type === "subscribe_success" && listener) {
       listener.retryAttempt = 0;
+      listener.recoverOnNextData = false;
+      listener.authorizationRejected = false;
       const retryTimer = this.subscriptionRetryTimers.get(listener.id);
       if (retryTimer) clearTimeout(retryTimer);
       this.subscriptionRetryTimers.delete(listener.id);
@@ -242,19 +270,41 @@ class AppSyncEventsClient {
     if (message.type === "broadcast_error" && listener) {
       // The subscription remains registered after a single broadcast failure;
       // trigger durable recovery without sending a duplicate subscribe ID.
+      listener.recoverOnNextData = true;
       listener.onStatus?.("CHANNEL_ERROR");
     }
     if ((message.type === "subscribe_error" || message.type === "error") && listener) {
+      const authorizationRejected = this.isAuthorizationError(message);
+      listener.authorizationRejected = authorizationRejected;
+      listener.recoverOnNextData = false;
       listener.onStatus?.("CHANNEL_ERROR");
-      if (!this.isAuthorizationError(message)) this.scheduleSubscriptionRetry(listener.id);
+      if (!authorizationRejected) this.scheduleSubscriptionRetry(listener.id);
+      else if ([...this.listeners.values()].every((candidate) => candidate.authorizationRejected)) {
+        // No accepted subscription remains on this connection. Holding an idle
+        // rejected AppSync socket adds cost without any recovery path; a later
+        // auth/session change will explicitly reconnect retained listeners.
+        this.closeSocket();
+      }
     }
     if (message.type !== "data" || !listener) return;
     // HTTP-published AppSync Events currently arrive as one string in `event`,
     // while some SDK/protocol examples use arrays. Accept both wire shapes.
-    const events = getAppSyncEventFrames(message);
-    events.forEach((raw: unknown) => {
-      try { listener.onEvent(typeof raw === "string" ? JSON.parse(raw) : raw as AppSyncEvent); }
-      catch { /* Ignore malformed third-party realtime payloads; durable recovery remains authoritative. */ }
+    const events = getAppSyncEventFrames(message).flatMap((raw: unknown): AppSyncEvent[] => {
+      try {
+        const event = typeof raw === "string" ? JSON.parse(raw) : raw;
+        return event && typeof event === "object" && !Array.isArray(event) ? [event as AppSyncEvent] : [];
+      } catch { return []; }
+    });
+    if (events.length && listener.recoverOnNextData) {
+      // A valid data frame proves the subscription recovered after a
+      // per-broadcast failure. Retire Socket.IO fallback before dispatching the
+      // frame so the two transports do not remain active together.
+      listener.recoverOnNextData = false;
+      listener.onStatus?.("SUBSCRIBED");
+    }
+    events.forEach((event) => {
+      try { listener.onEvent(event); }
+      catch { /* An application callback cannot corrupt the shared transport. */ }
     });
   }
 
@@ -265,18 +315,20 @@ class AppSyncEventsClient {
     const delay = Math.min(15_000, 500 * 2 ** Math.min(listener.retryAttempt++, 5)) + Math.random() * 750;
     const timer = setTimeout(() => {
       this.subscriptionRetryTimers.delete(id);
-      if (!this.listeners.has(id) || (typeof document !== "undefined" && document.hidden)) return;
+      if (!this.listeners.has(id) || !this.foreground || (typeof document !== "undefined" && document.hidden)) return;
       if (this.socket?.readyState === WebSocket.OPEN && this.readySocket === this.socket) {
         void this.sendSubscription(id).catch(() => this.scheduleSubscriptionRetry(id));
       } else {
-        void this.connect().catch(() => this.scheduleReconnect());
+        void this.connect().catch((error: unknown) => {
+          if (!(error instanceof AppSyncAuthorizationError)) this.scheduleReconnect();
+        });
       }
     }, delay);
     this.subscriptionRetryTimers.set(id, timer);
   }
 
   private scheduleReconnect() {
-    if (this.reconnectTimer || !this.listeners.size || !readSession()) return;
+    if (this.reconnectTimer || !this.listeners.size || !this.foreground || !readSession()) return;
     const delay = Math.min(30_000, 500 * 2 ** this.reconnectAttempt++) + Math.random() * 500;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -285,9 +337,12 @@ class AppSyncEventsClient {
   }
 
   private ensureConnection() {
-    void this.connect().catch(() => {
+    if (!this.foreground || (typeof document !== "undefined" && document.hidden)) return;
+    void this.connect().catch((error: unknown) => {
       this.listeners.forEach((listener) => listener.onStatus?.("CHANNEL_ERROR"));
-      this.scheduleReconnect();
+      // Invalid/revoked credentials do not become valid through exponential
+      // reconnects. Auth/session changes explicitly start a fresh connection.
+      if (!(error instanceof AppSyncAuthorizationError)) this.scheduleReconnect();
     });
   }
 
@@ -329,7 +384,14 @@ class AppSyncEventsClient {
     this.readySocket = null;
   }
 
+  private suspendBackground() {
+    this.foreground = false;
+    this.closeSocket();
+  }
+
   private resumeForeground() {
+    if (typeof document !== "undefined" && document.hidden) return;
+    this.foreground = true;
     if (this.listeners.size) this.ensureConnection();
   }
 }

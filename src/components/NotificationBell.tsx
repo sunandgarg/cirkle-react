@@ -12,12 +12,14 @@ import {
   type CirkleNotification,
 } from "@/lib/notifications";
 import { useDailyCallsEnabled } from "@/hooks/useRuntimeFeatures";
+import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 
 const NotificationBell = () => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const callsEnabled = useDailyCallsEnabled();
+  const realtimeActive = useRealtimeActivity();
   const [open, setOpen] = useState(false);
 
   const { data: notifications = [] } = useQuery({
@@ -35,7 +37,7 @@ const NotificationBell = () => {
   const unreadCount = notifications.filter((notification) => !notification.is_read).length;
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !realtimeActive) return;
     const channel = supabase
       .channel(`notifications-realtime-${user.id}`)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` }, () => {
@@ -44,7 +46,7 @@ const NotificationBell = () => {
       })
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
-  }, [user, queryClient]);
+  }, [user, queryClient, realtimeActive]);
 
   const markRead = async (notificationId: string) => {
     if (!user) return;

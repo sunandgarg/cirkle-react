@@ -10,6 +10,7 @@ import type { RequestContext } from "../types.js";
 import { writeAudit } from "./audit.js";
 import { isDeletedForEveryone, mediaReferencesRevoked } from "../security/tombstone.js";
 import { deleteObjectBytes, putObjectNew, readObjectBytes } from "./objectStore.js";
+import { hasActiveChatMembership } from "../realtime/chatMembership.js";
 
 interface BucketPolicy { visibility: "public" | "private"; max: number; mime: RegExp; admin?: boolean }
 const mb = 1024 * 1024;
@@ -205,9 +206,7 @@ export async function storeUpload(bucket: string, objectPathValue: string, file:
 }
 
 async function chatMember(userId: string, roomId: unknown): Promise<boolean> {
-  if (typeof roomId !== "string") return false;
-  const members = await prisma.legacyRecord.findMany({ where: { table_name: "chat_members", owner_id: userId }, take: 1000 });
-  return members.some((record) => (record.data as Record<string, unknown>).room_id === roomId);
+  return hasActiveChatMembership(prisma, userId, roomId);
 }
 
 export const storyIsActive = (row: Record<string, unknown>, now = new Date()): boolean => {
@@ -228,7 +227,7 @@ async function storyRecords(objectPath: string) {
   return prisma.legacyRecord.findMany({ where: {
     table_name: "stories",
     data: { path: "$.image_path", equals: objectPath },
-  }, take: 20 });
+  }, select: { owner_id: true, data: true } });
 }
 
 export function messageReferencesObject(row: Record<string, unknown>, bucket: string, objectPath: string): boolean {
@@ -311,12 +310,12 @@ async function privateObjectRevoked(bucket: string, objectPath: string): Promise
   const [posts, messages] = await Promise.all([
     checkPosts ? prisma.post.findMany({
       where: { OR: postFields },
-      select: { deleted_at: true, is_deleted_for_everyone: true }, take: 20,
+      select: { deleted_at: true, is_deleted_for_everyone: true },
     }) : Promise.resolve([]),
     checkMessages ? prisma.legacyRecord.findMany({ where: {
       table_name: "messages",
       OR: messagePathFields.map((field) => ({ data: { path: `$.${field}`, equals: objectPath } })),
-    }, take: 100 }) : Promise.resolve([]),
+    }, select: { data: true } }) : Promise.resolve([]),
   ]);
   const linkedMessages = messages.map((record) => record.data as Record<string, unknown>)
     .filter((row) => messageReferencesObject(row, bucket, objectPath));
@@ -328,40 +327,61 @@ async function canReadPrivate(bucket: string, objectPath: string, ctx: RequestCo
   if (!file || file.deleted_at || file.status !== "ready") return false;
   if (await privateObjectRevoked(bucket, objectPath)) return false;
   if (bucket === "stories") return canReadStoryObject(objectPath, ctx);
-  if (admin(ctx) || file.uploaded_by === ctx.auth.id) return true;
+  if (admin(ctx)) return true;
+  const uploadedByViewer = file.uploaded_by === ctx.auth.id;
   if (bucket === "post-images" || bucket === "forum-files") {
+    let hasPublishedReference = false;
     const pathFilter = bucket === "post-images" ? { OR: [{ image_path: objectPath }, { media_path: objectPath }] } : { file_path: objectPath };
-    const post = await prisma.post.findFirst({ where: { ...pathFilter, deleted_at: null, is_deleted_for_everyone: false } });
-    if (post && (post.author_id === ctx.auth.id || await canUseForumScope(ctx.auth.id, ctx.auth.is_verified, ctx.auth.role, post.scope_type, post.scope_key))) return true;
+    const posts = await prisma.post.findMany({
+      where: { ...pathFilter, deleted_at: null, is_deleted_for_everyone: false },
+      select: { author_id: true, scope_type: true, scope_key: true },
+    });
+    hasPublishedReference ||= posts.length > 0;
+    for (const post of posts) {
+      if (post.author_id === ctx.auth.id || await canUseForumScope(ctx.auth.id, ctx.auth.is_verified, ctx.auth.role, post.scope_type, post.scope_key)) return true;
+    }
     if (bucket === "post-images") {
       const messages = await prisma.legacyRecord.findMany({ where: {
         table_name: "messages",
         AND: [{ data: { path: "$.media_path", equals: objectPath } }, { data: { path: "$.media_bucket", equals: "post-images" } }],
-      }, take: 20 });
+      }, select: { data: true } });
       for (const record of messages) {
         const message = record.data as Record<string, unknown>;
-        if (messageReferencesObject(message, bucket, objectPath) && !isDeletedForEveryone(message) && await chatMember(ctx.auth.id, message.room_id)) return true;
+        if (!messageReferencesObject(message, bucket, objectPath) || isDeletedForEveryone(message)) continue;
+        hasPublishedReference = true;
+        if (await chatMember(ctx.auth.id, message.room_id)) return true;
       }
     }
-    return false;
+    // Ownership grants access only while an upload is unattached. Once durable
+    // content references it, that content's current audience is authoritative.
+    return !hasPublishedReference && uploadedByViewer;
   }
   if (bucket === "chat-media" || bucket === "voice-notes") {
+    let hasPublishedReference = false;
     if (bucket === "voice-notes") {
-      const post = await prisma.post.findFirst({ where: { voice_path: objectPath, deleted_at: null, is_deleted_for_everyone: false } });
-      if (post) return post.author_id === ctx.auth.id || canUseForumScope(ctx.auth.id, ctx.auth.is_verified, ctx.auth.role, post.scope_type, post.scope_key);
+      const posts = await prisma.post.findMany({
+        where: { voice_path: objectPath, deleted_at: null, is_deleted_for_everyone: false },
+        select: { author_id: true, scope_type: true, scope_key: true },
+      });
+      hasPublishedReference ||= posts.length > 0;
+      for (const post of posts) {
+        if (post.author_id === ctx.auth.id || await canUseForumScope(ctx.auth.id, ctx.auth.is_verified, ctx.auth.role, post.scope_type, post.scope_key)) return true;
+      }
     }
     const fields = bucket === "voice-notes" ? ["voice_path"] : ["media_path", "file_path", "image_path"];
     const messages = await prisma.legacyRecord.findMany({ where: {
       table_name: "messages",
       OR: fields.map((field) => ({ data: { path: `$.${field}`, equals: objectPath } })),
-    }, take: 20 });
+    }, select: { data: true } });
     for (const record of messages) {
       const message = record.data as Record<string, unknown>;
-      if (messageReferencesObject(message, bucket, objectPath) && !isDeletedForEveryone(message) && await chatMember(ctx.auth.id, message.room_id)) return true;
+      if (!messageReferencesObject(message, bucket, objectPath) || isDeletedForEveryone(message)) continue;
+      hasPublishedReference = true;
+      if (await chatMember(ctx.auth.id, message.room_id)) return true;
     }
-    return false;
+    return !hasPublishedReference && uploadedByViewer;
   }
-  return false;
+  return uploadedByViewer;
 }
 
 export async function createSignedUrl(bucket: string, objectPathValue: string, expiresIn: number, ctx: RequestContext): Promise<string> {

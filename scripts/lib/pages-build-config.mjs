@@ -1,4 +1,6 @@
 const EXPECTED_API_URL = "https://api-react.cirkle.world";
+const EXPECTED_APPSYNC_HTTP_ENDPOINT = "https://hzrd5pmdhvfobbzonf2hffeq5e.appsync-api.ap-south-1.amazonaws.com/event";
+const EXPECTED_APPSYNC_REALTIME_ENDPOINT = "wss://hzrd5pmdhvfobbzonf2hffeq5e.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime";
 const ALLOWED_PUBLIC_VARIABLES = new Set([
   "VITE_API_URL",
   "VITE_CHAT_REALTIME_PROVIDER",
@@ -18,11 +20,14 @@ export function validatePagesBuildEnvironment(environment) {
   if (apiUrl !== EXPECTED_API_URL) {
     throw new Error(`Cloudflare Pages builds require VITE_API_URL=${EXPECTED_API_URL}`);
   }
-  if (environment.VITE_CHAT_REALTIME_PROVIDER?.trim() !== "socketio") {
-    throw new Error("Cloudflare Pages builds require cost-bounded Socket.IO realtime");
+  if (environment.VITE_CHAT_REALTIME_PROVIDER?.trim() !== "appsync") {
+    throw new Error("Cloudflare Pages builds require AppSync as the durable-event transport");
   }
-  if (environment.VITE_APPSYNC_HTTP_ENDPOINT?.trim() || environment.VITE_APPSYNC_REALTIME_ENDPOINT?.trim()) {
-    throw new Error("Cloudflare Pages builds refuse AppSync endpoints while Socket.IO is selected");
+  if (environment.VITE_APPSYNC_HTTP_ENDPOINT?.trim() !== EXPECTED_APPSYNC_HTTP_ENDPOINT) {
+    throw new Error(`Cloudflare Pages builds require VITE_APPSYNC_HTTP_ENDPOINT=${EXPECTED_APPSYNC_HTTP_ENDPOINT}`);
+  }
+  if (environment.VITE_APPSYNC_REALTIME_ENDPOINT?.trim() !== EXPECTED_APPSYNC_REALTIME_ENDPOINT) {
+    throw new Error(`Cloudflare Pages builds require VITE_APPSYNC_REALTIME_ENDPOINT=${EXPECTED_APPSYNC_REALTIME_ENDPOINT}`);
   }
 
   const dailyCalls = environment.VITE_DAILY_CALLS_ENABLED?.trim();
@@ -32,7 +37,7 @@ export function validatePagesBuildEnvironment(environment) {
 
   return {
     apiUrl,
-    realtimeProvider: "socketio",
+    realtimeProvider: "appsync",
     // Omitted is deliberately equivalent to false. Even true remains gated by
     // GET /api/features, which only enables calls when DAILY_API_KEY exists.
     dailyCallsEnabled: dailyCalls === "true",

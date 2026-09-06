@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { applyForumRealtimeBatch, applyForumRealtimeEvent, getForumBroadcastRow } from "@/lib/forumRealtime";
+import {
+  applyForumRealtimeBatch, applyForumRealtimeEvent, getForumBroadcastRow, reconcileForumRoomSnapshot,
+} from "@/lib/forumRealtime";
 
 type VirtualAgent = {
   id: string;
@@ -121,6 +123,28 @@ describe("forum burst and isolation simulation", () => {
       eventType: "UPDATE",
       new: { id: "not-loaded", scope_type: scope.type, scope_key: scope.key, reactions: { "👍": 2 } },
     }], scope)).toEqual([]);
+  });
+
+  it("authoritatively reconciles an old forum edit and a missed delete after foreground resume", () => {
+    const scope = { type: "GLOBAL", key: "IIT_ALL" };
+    const current = [
+      { id: "old-edited", ...scope, scope_type: scope.type, scope_key: scope.key,
+        content: "before edit", created_at: "2026-08-31T10:00:01.000Z", profile: { name: "Member" } },
+      { id: "old-deleted", ...scope, scope_type: scope.type, scope_key: scope.key,
+        content: "delete me", created_at: "2026-08-31T10:00:02.000Z" },
+      { id: "newest", ...scope, scope_type: scope.type, scope_key: scope.key,
+        content: "latest", created_at: "2026-08-31T10:00:03.000Z" },
+    ];
+    const authoritative = [
+      { id: "old-edited", scope_type: scope.type, scope_key: scope.key,
+        content: "after edit", created_at: "2026-08-31T10:00:01.000Z" },
+      { id: "newest", scope_type: scope.type, scope_key: scope.key,
+        content: "latest", created_at: "2026-08-31T10:00:03.000Z" },
+    ];
+
+    const recovered = reconcileForumRoomSnapshot(current, authoritative, scope);
+    expect(recovered.map((post) => post.id)).toEqual(["old-edited", "newest"]);
+    expect(recovered[0]).toMatchObject({ content: "after edit", profile: { name: "Member" } });
   });
 
   it("keeps a 1,500-message IIT Delhi MBA General 2026 conversation ordered and threads isolated", () => {

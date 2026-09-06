@@ -17,9 +17,9 @@ type RealtimeActivityControllerOptions = {
 };
 
 /**
- * Keeps expensive room subscriptions alive only while the realtime screen is
- * visible. Browsers may throttle or freeze background JavaScript immediately,
- * so visibilitychange, pagehide and freeze all suspend synchronously.
+ * Keeps realtime subscriptions alive only while the browser page has foreground
+ * focus. Browsers may throttle or freeze background JavaScript immediately, so
+ * visibilitychange, blur, pagehide and freeze all suspend synchronously.
  */
 export const createRealtimeActivityController = ({
   onActiveChange,
@@ -41,7 +41,7 @@ export const createRealtimeActivityController = ({
   const handlePageHide: EventListener = () => {
     setActive(false);
   };
-  const handlePageShow: EventListener = () => {
+  const handleForeground: EventListener = () => {
     const hidden = documentTarget?.hidden || documentTarget?.visibilityState === "hidden";
     if (!hidden) setActive(true);
   };
@@ -49,7 +49,9 @@ export const createRealtimeActivityController = ({
   documentTarget?.addEventListener("visibilitychange", handleVisibility);
   documentTarget?.addEventListener("freeze", handlePageHide);
   windowTarget?.addEventListener("pagehide", handlePageHide);
-  windowTarget?.addEventListener("pageshow", handlePageShow);
+  windowTarget?.addEventListener("blur", handlePageHide);
+  windowTarget?.addEventListener("pageshow", handleForeground);
+  windowTarget?.addEventListener("focus", handleForeground);
 
   return {
     isActive: () => active,
@@ -58,7 +60,9 @@ export const createRealtimeActivityController = ({
       documentTarget?.removeEventListener("visibilitychange", handleVisibility);
       documentTarget?.removeEventListener("freeze", handlePageHide);
       windowTarget?.removeEventListener("pagehide", handlePageHide);
-      windowTarget?.removeEventListener("pageshow", handlePageShow);
+      windowTarget?.removeEventListener("blur", handlePageHide);
+      windowTarget?.removeEventListener("pageshow", handleForeground);
+      windowTarget?.removeEventListener("focus", handleForeground);
     },
   };
 };

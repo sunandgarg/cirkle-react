@@ -9,6 +9,7 @@ import { realtimeEvents, type DbChangeEvent } from "./events.js";
 import { canUseForumScope } from "../security/forumScope.js";
 import { isCanonicalRealtimeRecordId } from "./appsyncChannels.js";
 import { materializeForumReactionChange } from "./forumReactions.js";
+import { hasActiveChatMembership, revokedChatMembership } from "./chatMembership.js";
 
 export interface Binding { type?: string; filter?: Record<string, unknown> }
 export interface Subscription { channel: string; bindings: Binding[] }
@@ -21,6 +22,16 @@ type AuthedSocket = Socket & { data: {
   presence?: Map<string, Record<string, unknown>>;
   clientEventWindows?: Map<string, ClientEventWindow>;
 } };
+
+export interface RevocableRealtimeSocket {
+  data: {
+    auth: { id: string };
+    subscriptions?: Map<string, Subscription>;
+    presence?: Map<string, Record<string, unknown>>;
+  };
+  leave: (channel: string) => Promise<unknown> | unknown;
+  conn?: { close: () => unknown };
+}
 
 export const MAX_REALTIME_SUBSCRIPTIONS = 50;
 export const CLIENT_EVENT_WINDOW_MS = 10_000;
@@ -121,12 +132,7 @@ async function canSubscribe(socket: AuthedSocket, channel: string): Promise<bool
   if (requestedUser) return canUsePersonalChannel(channel, socket.data.auth.id);
   const roomId = channelRoomId(channel);
   if (roomId) {
-    const membership = await prisma.legacyRecord.findFirst({ where: {
-      table_name: "chat_members",
-      owner_id: socket.data.auth.id,
-      data: { path: "$.room_id", equals: roomId },
-    }, select: { id: true } });
-    return !!membership;
+    return hasActiveChatMembership(prisma, socket.data.auth.id, roomId);
   }
   if (channel.startsWith("forum-thread:") || channel.startsWith("forum-thread-pg:")) {
     const prefix = channel.startsWith("forum-thread-pg:") ? "forum-thread-pg:" : "forum-thread:";
@@ -220,6 +226,44 @@ export function envelopeForChange(subscription: Subscription, change: DbChangeEv
 
 function emitEnvelope(socket: Socket, channel: string, payload: Record<string, unknown>): void {
   socket.emit("realtime:event", payload);
+}
+
+/**
+ * Clears every subscription on the affected Socket.IO connection before the
+ * same EventEmitter turn can fan out a later message, then closes the engine
+ * transport so the client reconnects and re-authorizes its remaining channels.
+ * Clearing the whole subscription map also revokes the personal DM-sidebar
+ * fallback, whose topic is user-scoped rather than room-scoped.
+ */
+export function revokeChatMembershipSubscriptions(
+  sockets: Iterable<RevocableRealtimeSocket>,
+  change: DbChangeEvent,
+): number {
+  const revoked = revokedChatMembership(change);
+  if (!revoked) return 0;
+  let removed = 0;
+  for (const socket of sockets) {
+    if (socket.data.auth.id !== revoked.userId) continue;
+    const channels = [...(socket.data.subscriptions?.keys() ?? [])];
+    socket.data.subscriptions?.clear();
+    socket.data.presence?.clear();
+    for (const channel of channels) {
+      removed += 1;
+      try {
+        void Promise.resolve(socket.leave(channel)).catch((error: unknown) => {
+          logger.warn({ err: error, channel }, "Failed to leave a revoked realtime room");
+        });
+      } catch (error) {
+        logger.warn({ err: error, channel }, "Failed to leave a revoked realtime room");
+      }
+    }
+    try {
+      socket.conn?.close();
+    } catch (error) {
+      logger.warn({ err: error, user_id: revoked.userId }, "Failed to close a revoked realtime transport");
+    }
+  }
+  return removed;
 }
 
 export function attachSocketServer(server: HttpServer): Server {
@@ -324,6 +368,7 @@ export function attachSocketServer(server: HttpServer): Server {
     }
   };
   const listener = (change: DbChangeEvent) => {
+    revokeChatMembershipSubscriptions(io.sockets.sockets.values() as Iterable<AuthedSocket>, change);
     if (change.table === "profiles" && typeof change.row.user_id === "string"
       && (change.row.is_verified === false || change.row.force_reauthenticate === true)) {
       for (const rawSocket of io.sockets.sockets.values()) {

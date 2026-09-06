@@ -7,6 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { appSyncRealtimeEnabled, subscribeAppSync } from "@/lib/appsyncEvents";
+import { createRealtimeFallbackSlot } from "@/lib/realtimeFallback";
 import {
   getConnectionMessageNavigationTarget,
   getDirectMessageNavigationTarget,
@@ -80,22 +81,42 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
       void queryClient.invalidateQueries({ queryKey: ["chat-rooms", user.id] });
     };
 
-    const connectionChannel = supabase.channel(`direct-message-connections-${user.id}-${subscriptionId}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "connections" }, refresh)
-      .subscribe();
-
-    let fallbackChannel: ReturnType<typeof supabase.channel> | null = null;
+    const connectionFallback = createRealtimeFallbackSlot<ReturnType<typeof supabase.channel>>(
+      (channel) => supabase.removeChannel(channel),
+    );
+    const messageFallback = createRealtimeFallbackSlot<ReturnType<typeof supabase.channel>>(
+      (channel) => supabase.removeChannel(channel),
+    );
     let appSyncErrorReported = false;
     const startFallback = () => {
-      if (fallbackChannel) return;
-      fallbackChannel = supabase.channel(`direct-message-sidebar-${user.id}-${subscriptionId}`)
-        .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, refresh)
-        .subscribe();
+      if (!connectionFallback.hasChannel()) {
+        const connectionChannel = supabase.channel(`direct-message-connections-${user.id}-${subscriptionId}`)
+          .on("postgres_changes", { event: "*", schema: "public", table: "connections" }, () => {
+            if (connectionFallback.isCurrent(connectionChannel)) refresh();
+          });
+        if (connectionFallback.attach(connectionChannel)) connectionChannel.subscribe();
+        else void supabase.removeChannel(connectionChannel);
+      }
+      if (messageFallback.hasChannel()) return;
+      const messageChannel = supabase.channel(`direct-message-sidebar-${user.id}-${subscriptionId}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => {
+          if (messageFallback.isCurrent(messageChannel)) refresh();
+        });
+      if (messageFallback.attach(messageChannel)) messageChannel.subscribe();
+      else void supabase.removeChannel(messageChannel);
+    };
+    const retireFallback = () => {
+      connectionFallback.retire();
+      messageFallback.retire();
     };
 
     if (appSyncRealtimeEnabled) {
       const unsubscribeInbox = subscribeAppSync(`/inbox/${user.id}`, refresh, (status) => {
-        if (status === "CHANNEL_ERROR") {
+        if (status === "SUBSCRIBED") {
+          appSyncErrorReported = false;
+          retireFallback();
+          refresh();
+        } else if (status === "CHANNEL_ERROR" || status === "CLOSED") {
           if (!appSyncErrorReported) {
             appSyncErrorReported = true;
             reportError(new Error("Direct-message inbox realtime subscription failed; durable fallback activated"), {
@@ -107,15 +128,13 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
       });
       return () => {
         unsubscribeInbox();
-        void supabase.removeChannel(connectionChannel);
-        if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
+        retireFallback();
       };
     }
 
     startFallback();
     return () => {
-      void supabase.removeChannel(connectionChannel);
-      if (fallbackChannel) void supabase.removeChannel(fallbackChannel);
+      retireFallback();
     };
   }, [queryClient, realtimeActive, subscriptionId, user?.id]);
 

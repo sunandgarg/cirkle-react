@@ -117,3 +117,24 @@ export const applyForumRealtimeBatch = <T extends Record<string, any>>(
 
   return [...postsById.values()].sort(compareMessages).slice(-maxMessages);
 };
+
+/**
+ * Reconciles a room from a complete, authorized database window. Fields that
+ * are enriched only in the browser survive for rows still present, while rows
+ * omitted by the server are removed so a missed edit/tombstone/delete cannot
+ * linger after foreground recovery.
+ */
+export const reconcileForumRoomSnapshot = <T extends Record<string, any>>(
+  currentPosts: T[],
+  authoritativePosts: T[],
+  scope: ForumScopeIdentity,
+  maxMessages = 1_200,
+): T[] => {
+  const currentById = new Map(currentPosts.map((post) => [post.id, post]));
+  return authoritativePosts
+    .filter((post) => post?.id && post.scope_type === scope.type && post.scope_key === scope.key
+      && !post.reply_to_id && !post.deleted_at)
+    .map((post) => ({ ...currentById.get(post.id), ...post }))
+    .sort(compareMessages)
+    .slice(-maxMessages) as T[];
+};

@@ -104,11 +104,12 @@ export const readForumHistory = async <T extends CachedForumPost>(
 
 const writeQueues = new Map<string, Promise<void>>();
 
-export const persistForumHistory = <T extends CachedForumPost>(
+const queueForumHistoryWrite = <T extends CachedForumPost>(
   viewerId: string,
   scopeType: string,
   scopeKey: string,
   posts: T[],
+  replace: boolean,
 ) => {
   const key = roomKey(viewerId, scopeType, scopeKey);
   const previous = writeQueues.get(key) || Promise.resolve();
@@ -118,7 +119,7 @@ export const persistForumHistory = <T extends CachedForumPost>(
     try {
       const readTransaction = db.transaction(STORE_NAME, "readonly");
       const stored = await requestResult(readTransaction.objectStore(STORE_NAME).get(key)) as RoomHistory | null;
-      const merged = mergeForumHistoryPosts((stored?.posts || []) as T[], posts);
+      const merged = mergeForumHistoryPosts(replace ? [] : (stored?.posts || []) as T[], posts);
       const writeTransaction = db.transaction(STORE_NAME, "readwrite");
       const store = writeTransaction.objectStore(STORE_NAME);
       store.put({ roomKey: key, updatedAt: Date.now(), posts: merged } satisfies RoomHistory);
@@ -145,6 +146,21 @@ export const persistForumHistory = <T extends CachedForumPost>(
   writeQueues.set(key, next);
   return next;
 };
+
+export const persistForumHistory = <T extends CachedForumPost>(
+  viewerId: string,
+  scopeType: string,
+  scopeKey: string,
+  posts: T[],
+) => queueForumHistoryWrite(viewerId, scopeType, scopeKey, posts, false);
+
+/** Writes a complete authorized room snapshot, removing rows no longer present. */
+export const replaceForumHistory = <T extends CachedForumPost>(
+  viewerId: string,
+  scopeType: string,
+  scopeKey: string,
+  posts: T[],
+) => queueForumHistoryWrite(viewerId, scopeType, scopeKey, posts, true);
 
 export const clearForumHistoryCache = async (): Promise<void> => {
   writeQueues.clear();
