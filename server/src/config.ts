@@ -40,6 +40,9 @@ const schema = z.object({
   ZEPTOMAIL_API_URL: z.string().url().default("https://api.zeptomail.in/v1.1/email"),
   ZEPTOMAIL_FROM_EMAIL: z.string().email().default("noreply@cirkle.world"),
   ZEPTOMAIL_FROM_NAME: z.string().default("Cirkle"),
+  ZAVU_API_KEY: z.string().optional(),
+  ZAVU_API_URL: z.string().url().default("https://api.zavu.dev/v1/messages"),
+  ZAVU_SENDER_ID: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().url().optional(),
@@ -112,6 +115,16 @@ export function productionConfigIssues(value: ServerConfig): string[] {
     ] as const;
     for (const key of providers) if (!value[key]?.trim()) issues.push(`${key} is required in production`);
   }
+  if (!value.ZAVU_API_KEY?.trim()) issues.push("ZAVU_API_KEY is required in production for IIT email delivery");
+  else if (!/^zv_live_[A-Za-z0-9_-]{20,}$/.test(value.ZAVU_API_KEY.trim())) issues.push("ZAVU_API_KEY must be a Zavu live server key");
+  if (!value.ZAVU_SENDER_ID?.trim()) issues.push("ZAVU_SENDER_ID is required in production for IIT email delivery");
+  else if (!/^[a-z0-9]{16,128}$/i.test(value.ZAVU_SENDER_ID.trim())) issues.push("ZAVU_SENDER_ID is invalid");
+  try {
+    const zavuApiUrl = new URL(value.ZAVU_API_URL);
+    if (zavuApiUrl.protocol !== "https:" || zavuApiUrl.username || zavuApiUrl.password
+      || zavuApiUrl.hostname.toLowerCase() !== "api.zavu.dev" || zavuApiUrl.pathname !== "/v1/messages"
+      || zavuApiUrl.search || zavuApiUrl.hash) throw new Error("invalid");
+  } catch { issues.push("ZAVU_API_URL must be the HTTPS Zavu /v1/messages endpoint"); }
   const productionUrl = (key: "APP_BASE_URL" | "FRONTEND_URL", raw: string): URL | null => {
     try {
       const url = new URL(raw);

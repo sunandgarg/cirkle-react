@@ -3,7 +3,13 @@ import { config } from "../src/config.js";
 import { ApiError } from "../src/lib/errors.js";
 import { prisma } from "../src/lib/prisma.js";
 import { issueEmailOtp, requestPasswordReset } from "../src/services/auth.js";
-import { sendMail } from "../src/services/mail.js";
+import {
+  sendInstituteCode,
+  sendLoginCode,
+  sendMail,
+  sendPasswordReset,
+  sendVerificationDecision,
+} from "../src/services/mail.js";
 import {
   instituteVerificationEmail,
   loginCodeEmail,
@@ -17,6 +23,9 @@ const originalMailConfig = {
   ZEPTOMAIL_API_URL: config.ZEPTOMAIL_API_URL,
   ZEPTOMAIL_FROM_EMAIL: config.ZEPTOMAIL_FROM_EMAIL,
   ZEPTOMAIL_FROM_NAME: config.ZEPTOMAIL_FROM_NAME,
+  ZAVU_API_KEY: config.ZAVU_API_KEY,
+  ZAVU_API_URL: config.ZAVU_API_URL,
+  ZAVU_SENDER_ID: config.ZAVU_SENDER_ID,
 };
 
 describe("active Cirkle email templates", () => {
@@ -24,7 +33,7 @@ describe("active Cirkle email templates", () => {
     const message = loginCodeEmail('482913<img src=x onerror="alert(1)">');
 
     expect(message.subject).toBe("Your Cirkle.World sign-in code");
-    expect(message.subject).not.toContain("482913");
+    expect(loginCodeEmail("482913").subject).toBe("482913 is your Cirkle.World sign-in code");
     expect(message.html).toContain("Cirkle.World");
     expect(message.html).toContain("Verified communities. Useful connections.");
     expect(message.html).toContain('src="cid:cirkle-logo"');
@@ -41,6 +50,7 @@ describe("active Cirkle email templates", () => {
     const decision = verificationDecisionEmail(false, "<script>alert('x')</script>");
 
     expect(institute.html).toContain("123456");
+    expect(institute.subject).toBe("123456 is your Cirkle.World institute verification code");
     expect(institute.text).toContain("used only once");
     expect(decision.html).not.toContain("<script>");
     expect(decision.html).toContain("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;");
@@ -60,7 +70,7 @@ describe("active Cirkle email templates", () => {
   });
 });
 
-describe("active ZeptoMail REST delivery", () => {
+describe("active routed transactional email delivery", () => {
   const fetchMock = vi.fn<typeof fetch>();
 
   beforeEach(() => {
@@ -69,6 +79,9 @@ describe("active ZeptoMail REST delivery", () => {
     config.ZEPTOMAIL_API_URL = "https://api.zeptomail.in/v1.1/email";
     config.ZEPTOMAIL_FROM_EMAIL = "noreply@cirkle.world";
     config.ZEPTOMAIL_FROM_NAME = "Cirkle";
+    config.ZAVU_API_KEY = `zv_live_${"z".repeat(32)}`;
+    config.ZAVU_API_URL = "https://api.zavu.dev/v1/messages";
+    config.ZAVU_SENDER_ID = "kd7fzyavqtfcq4xs1s0s17qf8s8df22d";
     vi.stubGlobal("fetch", fetchMock);
   });
 
@@ -86,7 +99,7 @@ describe("active ZeptoMail REST delivery", () => {
     }));
 
     const receipt = await sendMail({
-      to: "member@iitd.ac.in",
+      to: "member@example.com",
       ...loginCodeEmail("482913"),
     });
 
@@ -101,7 +114,7 @@ describe("active ZeptoMail REST delivery", () => {
     });
     const payload = JSON.parse(String(init?.body));
     expect(payload.from).toEqual({ address: "noreply@cirkle.world", name: "Cirkle" });
-    expect(payload.to).toEqual([{ email_address: { address: "member@iitd.ac.in" } }]);
+    expect(payload.to).toEqual([{ email_address: { address: "member@example.com" } }]);
     expect(payload.track_clicks).toBe(false);
     expect(payload.track_opens).toBe(false);
     expect(payload.client_reference).toMatch(/^cirkle-[0-9a-f-]{36}$/);
@@ -117,11 +130,75 @@ describe("active ZeptoMail REST delivery", () => {
     });
   });
 
+  it("routes every IIT destination through Zavu with an explicit sender and idempotency key", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ message: { id: "zavu-message-123" } }), {
+      status: 202,
+      headers: { "content-type": "application/json" },
+    }));
+
+    await sendLoginCode("student@iitd.ac.in", "482913");
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.zavu.dev/v1/messages");
+    expect(init?.headers).toMatchObject({
+      Authorization: `Bearer zv_live_${"z".repeat(32)}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "Zavu-Sender": "kd7fzyavqtfcq4xs1s0s17qf8s8df22d",
+      "Idempotency-Key": expect.stringMatching(/^cirkle-[0-9a-f-]{36}$/),
+    });
+    const payload = JSON.parse(String(init?.body));
+    expect(payload).toMatchObject({
+      to: "student@iitd.ac.in",
+      channel: "email",
+      subject: "482913 is your Cirkle.World sign-in code",
+      text: expect.stringContaining("482913"),
+      htmlBody: expect.stringContaining('src="cid:cirkle-logo"'),
+    });
+    expect(payload.attachments).toEqual([expect.objectContaining({
+      filename: "cirkle-logo.png",
+      content_type: "image/png",
+      content_id: "cirkle-logo",
+      content: expect.stringMatching(/^[A-Za-z0-9+/]+=*$/),
+    })]);
+  });
+
+  it("forces institute verification through Zavu and never falls back to ZeptoMail", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 202 }));
+
+    await sendInstituteCode("member@campus.example", "123456");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.zavu.dev/v1/messages");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      to: "member@campus.example",
+      subject: "123456 is your Cirkle.World institute verification code",
+    });
+  });
+
+  it("fails IIT delivery closed when Zavu is missing even if ZeptoMail is configured", async () => {
+    config.NODE_ENV = "production";
+    config.ZAVU_API_KEY = undefined;
+
+    await expect(sendLoginCode("student@iitd.ac.in", "482913"))
+      .rejects.toMatchObject({ status: 503, code: "mail_not_configured" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps password-reset and verification-decision mail on Zavu for IIT recipients", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 202 }));
+
+    await sendPasswordReset("member@alumni.iitb.ac.in", "https://cirkle.world/reset-password?token=safe");
+    await sendVerificationDecision("member@iitm.ac.in", true);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [url] of fetchMock.mock.calls) expect(url).toBe("https://api.zavu.dev/v1/messages");
+  });
+
   it("accepts a prefixed token without duplicating the authorization scheme", async () => {
     config.ZEPTOMAIL_TOKEN = "Zoho-enczapikey unit-test-send-key";
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
 
-    await sendMail({ to: "member@iitd.ac.in", ...loginCodeEmail("482913") });
+    await sendMail({ to: "member@example.com", ...loginCodeEmail("482913") });
 
     const [, init] = fetchMock.mock.calls[0] ?? [];
     expect(init?.headers).toMatchObject({ Authorization: "Zoho-enczapikey unit-test-send-key" });
@@ -131,7 +208,7 @@ describe("active ZeptoMail REST delivery", () => {
     config.NODE_ENV = "production";
     config.ZEPTOMAIL_TOKEN = undefined;
 
-    await expect(sendMail({ to: "member@iitd.ac.in", ...loginCodeEmail("482913") }))
+    await expect(sendMail({ to: "member@example.com", ...loginCodeEmail("482913") }))
       .rejects.toMatchObject({ status: 503, code: "mail_not_configured" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -144,7 +221,7 @@ describe("active ZeptoMail REST delivery", () => {
 
     let error: unknown;
     try {
-      await sendMail({ to: "member@iitd.ac.in", ...loginCodeEmail("482913") });
+      await sendMail({ to: "member@example.com", ...loginCodeEmail("482913") });
     } catch (caught) {
       error = caught;
     }
@@ -160,17 +237,17 @@ describe("active ZeptoMail REST delivery", () => {
 
   it("distinguishes provider throttling, network failure, and timeout", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 429 }));
-    await expect(sendMail({ to: "member@iitd.ac.in", ...loginCodeEmail("111111") }))
+    await expect(sendMail({ to: "member@example.com", ...loginCodeEmail("111111") }))
       .rejects.toMatchObject({ status: 503, code: "mail_provider_unavailable" });
 
     fetchMock.mockRejectedValueOnce(new TypeError("network unavailable"));
-    await expect(sendMail({ to: "member@iitd.ac.in", ...loginCodeEmail("222222") }))
+    await expect(sendMail({ to: "member@example.com", ...loginCodeEmail("222222") }))
       .rejects.toMatchObject({ status: 502, code: "mail_delivery_failed" });
 
     const timeout = new Error("provider timeout");
     timeout.name = "TimeoutError";
     fetchMock.mockRejectedValueOnce(timeout);
-    await expect(sendMail({ to: "member@iitd.ac.in", ...loginCodeEmail("333333") }))
+    await expect(sendMail({ to: "member@example.com", ...loginCodeEmail("333333") }))
       .rejects.toMatchObject({ status: 504, code: "mail_delivery_timeout" });
   });
 

@@ -10,7 +10,7 @@ import { allowedForumScopes, canUseForumScope, forumSegment } from "../security/
 import { enrichForumPosts, forumPostMediaHandles, hiddenForumPostIds, redactAnonymousPostForViewer } from "./forum.js";
 import { contentTombstone } from "../security/tombstone.js";
 import { normalizeHttpUrl, normalizeSocialLinks, serializeProfile } from "./profile.js";
-import { instituteDomains } from "./functions.js";
+import { instituteDomains } from "./iitDomains.js";
 import { assertOwnedReadyObject } from "./storage.js";
 import { applyProfileEntryModeration, moderationReferenceDefinitions, type CatalogOption, type ModeratedProfileTable } from "./moderation.js";
 import { forumAppSyncChannels, isCanonicalRealtimeRecordId } from "../realtime/appsyncChannels.js";

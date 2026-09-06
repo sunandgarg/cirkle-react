@@ -11,7 +11,7 @@ workflows.
 - Database: MySQL with Prisma ORM
 - Authentication: short-lived JWT access tokens, rotating refresh sessions,
   Google OpenID Connect, email OTP, and password recovery
-- Transactional email: Zoho ZeptoMail
+- Transactional email: Zavu for supported IIT domains; Zoho ZeptoMail otherwise
 - AI: OpenAI Responses API and the Google Gemini API
 - Realtime: AWS AppSync Events for durable forum/chat/inbox invalidations;
   authorized Socket.IO runs in parallel for personal-state compatibility and
@@ -82,6 +82,7 @@ External integrations are enabled only when configured:
 - ZeptoMail: `ZEPTOMAIL_TOKEN`, `ZEPTOMAIL_API_URL`,
   `ZEPTOMAIL_FROM_EMAIL`, `ZEPTOMAIL_FROM_NAME` (India REST endpoint;
   `noreply@cirkle.world`; no SMTP runtime)
+- Zavu IIT routing: `ZAVU_API_KEY`, `ZAVU_API_URL`, `ZAVU_SENDER_ID`
 - OpenAI: `OPENAI_API_KEY`, optionally `OPENAI_MODEL`
 - Gemini: `GEMINI_API_KEY`, optionally `GEMINI_MODEL`
 - Daily calls: `DAILY_API_KEY`
@@ -153,7 +154,7 @@ The repository also includes `wrangler.jsonc`, SPA redirects, static security
 headers, a PM2 ecosystem file, an Nginx site template, MySQL backup helpers, and
 an atomic API deployment procedure under `deploy/`.
 
-Never place MySQL, JWT, Google client secret, ZeptoMail, OpenAI, Gemini, or any
+Never place MySQL, JWT, Google client secret, ZeptoMail, Zavu, OpenAI, Gemini, or any
 AppSync publisher/authorizer secret in Cloudflare Pages browser variables.
 Those belong only on the API server. The `cirkle-react` deployment uses a
 Lightsail API, private Lightsail managed MySQL, private S3, AppSync Events for

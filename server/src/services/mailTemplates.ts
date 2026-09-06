@@ -117,8 +117,11 @@ export function renderCirkleEmail(input: CirkleTemplateInput): string {
 }
 
 export function loginCodeEmail(code: string): TransactionalMailContent {
+  const subject = /^\d{6}$/.test(code)
+    ? `${code} is your Cirkle.World sign-in code`
+    : "Your Cirkle.World sign-in code";
   return {
-    subject: "Your Cirkle.World sign-in code",
+    subject,
     text: `Your Cirkle.World sign-in code is ${code}. It expires in 10 minutes and can be used only once. Never share this code. If you did not request it, you can safely ignore this email.`,
     html: renderCirkleEmail({
       eyebrow: "Secure sign-in",
@@ -132,8 +135,11 @@ export function loginCodeEmail(code: string): TransactionalMailContent {
 }
 
 export function instituteVerificationEmail(code: string): TransactionalMailContent {
+  const subject = /^\d{6}$/.test(code)
+    ? `${code} is your Cirkle.World institute verification code`
+    : "Verify your institute email on Cirkle.World";
   return {
-    subject: "Verify your institute email on Cirkle.World",
+    subject,
     text: `Use code ${code} to verify your institute email on Cirkle.World. It expires in 10 minutes and can be used only once. Never share this code.`,
     html: renderCirkleEmail({
       eyebrow: "IIT identity verification",

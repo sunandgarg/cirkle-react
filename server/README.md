@@ -27,6 +27,7 @@ optional feature must then fail closed. Daily calls use both the Pages flag and
 `DAILY_DOMAIN` remains optional because Daily normally returns the room URL.
 
 - ZeptoMail: `ZEPTOMAIL_TOKEN`, `ZEPTOMAIL_API_URL`, `ZEPTOMAIL_FROM_EMAIL`, `ZEPTOMAIL_FROM_NAME`. The checked production configuration uses the India REST endpoint and `noreply@cirkle.world`; SMTP credentials are not used. A 2xx response records provider acceptance, not final inbox delivery, and delivery/bounce webhooks still require a separate authenticated receiver.
+- Zavu IIT delivery: `ZAVU_API_KEY`, `ZAVU_API_URL`, `ZAVU_SENDER_ID`. All mail to the supported IIT student/alumni domains, including main-login OTP and password reset, routes through the verified `verify@cirkle.world` sender. Institute-verification OTP is always forced through Zavu. The route fails closed and never silently falls back to ZeptoMail.
 - Google OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`.
 - AI extraction: `OPENAI_API_KEY`, `OPENAI_MODEL`, `GEMINI_API_KEY`, `GEMINI_MODEL`.
 - GIF and calling: `KLIPY_API_KEY`, `DAILY_API_KEY`, optionally `DAILY_DOMAIN`.
@@ -105,7 +106,7 @@ The JSON shape is `{ "tables": { "education": [{ "id": "existing-uuid", ... }] }
 - Production object bytes use private, encrypted S3; local development can use
   hardened filesystem storage under `STORAGE_ROOT`. MySQL stores metadata and
   authorization references, not file bytes.
-- Production SMS/Fast2SMS is not enabled; only an allowlisted, non-production phone OTP path exists. Email OTP and recovery use ZeptoMail.
+- Production SMS/Fast2SMS is not enabled; only an allowlisted, non-production phone OTP path exists. Email OTP and recovery use Zavu for supported IIT domains and ZeptoMail otherwise.
 - OpenAI and Gemini extract only evidence grounded in supplied, SSRF-checked HTTPS documents. Grounded OpenAI discovery is enabled only for a reviewed web-search-capable configured model; unsupported configurations report `openai_web_discovery: false` instead of generating unverified listings.
 - AI scans have a 50-second end-to-end ceiling: source retrieval is capped at 12 seconds, provider calls at 30 seconds with retries disabled, and all item/run/audit writes commit in one bounded transaction. A timeout imports nothing and returns an explicit `504` before Nginx's request ceiling.
 - `LegacyRecord` exists for UI compatibility, not as the long-term domain model. Chat membership, inbox, message-history, and exact scalar compatibility filters are scoped in MySQL rather than sampled from a global row window. Queries requiring flexible JSON sorting or non-exact predicates may still materialize their matching logical table in the API process; promote every high-volume compatibility table to an indexed typed Prisma model before large-scale traffic.

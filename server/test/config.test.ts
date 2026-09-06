@@ -18,6 +18,8 @@ const production = {
   IP_HASH_SECRET: "d".repeat(40),
   OTP_PEPPER: "e".repeat(40),
   ZEPTOMAIL_TOKEN: "zepto-key",
+  ZAVU_API_KEY: `zv_live_${"z".repeat(32)}`,
+  ZAVU_SENDER_ID: "kd7fzyavqtfcq4xs1s0s17qf8s8df22d",
   GOOGLE_CLIENT_ID: "google-client",
   GOOGLE_CLIENT_SECRET: "google-secret-value",
   GOOGLE_REDIRECT_URI: "https://api.cirkle.world/api/auth/google/callback",
@@ -65,6 +67,9 @@ describe("production configuration", () => {
       .toContain("ZEPTOMAIL_API_URL must use this account's India data-center endpoint");
     expect(productionConfigIssues({ ...production, ZEPTOMAIL_FROM_EMAIL: "other@cirkle.world" }))
       .toContain("ZEPTOMAIL_FROM_EMAIL must equal the verified noreply@cirkle.world sender");
+    expect(productionConfigIssues({ ...production, ZAVU_API_URL: "https://attacker.invalid/v1/messages" })
+      .some((issue) => issue.includes("ZAVU_API_URL"))).toBe(true);
+    expect(productionConfigIssues({ ...production, ZAVU_API_URL: "https://api.zavu.dev/v1/messages" })).toEqual([]);
   });
 
   it("requires a loopback and a reviewed proxy topology", () => {
@@ -87,7 +92,7 @@ describe("production configuration", () => {
     }
   });
 
-  it("can boot an isolated staging environment with external providers disabled explicitly", () => {
+  it("can disable optional staging providers while retaining essential IIT mail", () => {
     expect(productionConfigIssues({
       ...production,
       REQUIRE_PROVIDER_CONFIG: false,
@@ -99,8 +104,19 @@ describe("production configuration", () => {
       GEMINI_API_KEY: undefined,
       KLIPY_API_KEY: undefined,
       DAILY_API_KEY: undefined,
+      ZAVU_API_KEY: `zv_live_${"z".repeat(32)}`,
+      ZAVU_SENDER_ID: "kd7fzyavqtfcq4xs1s0s17qf8s8df22d",
       TRUST_PROXY_HOPS: 2,
     })).toEqual([]);
+  });
+
+  it("requires a live Zavu key and sender for fail-closed IIT delivery", () => {
+    expect(productionConfigIssues({ ...production, ZAVU_API_KEY: undefined }))
+      .toContain("ZAVU_API_KEY is required in production for IIT email delivery");
+    expect(productionConfigIssues({ ...production, ZAVU_API_KEY: "zv_test_not-production" }))
+      .toContain("ZAVU_API_KEY must be a Zavu live server key");
+    expect(productionConfigIssues({ ...production, ZAVU_SENDER_ID: undefined }))
+      .toContain("ZAVU_SENDER_ID is required in production for IIT email delivery");
   });
 
   it("requires a host-only cookie and the Nginx-compatible upload limit", () => {

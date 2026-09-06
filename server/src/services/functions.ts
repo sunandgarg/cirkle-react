@@ -33,6 +33,9 @@ import {
   normalizeActiveChatMembership,
   type ChatMembershipRecord,
 } from "../realtime/chatMembership.js";
+import { instituteDomains } from "./iitDomains.js";
+
+export { instituteDomains } from "./iitDomains.js";
 
 type Body = Record<string, unknown>;
 type Row = Record<string, unknown>;
@@ -41,21 +44,6 @@ export const MANAGED_MEMBER_PASSWORD_MIN_LENGTH = 10;
 const MANAGED_MEMBER_PASSWORD_MAX_LENGTH = 128;
 const MEMBER_DELETE_BATCH_SIZE = 100;
 const klipyRateLimiter = new AppSyncFixedWindowRateLimiter(60_000, 60);
-
-export const instituteDomains: Record<string, readonly [student: string, alumni: string]> = {
-  "IIT Delhi": ["iitd.ac.in", "alumni.iitd.ac.in"], "IIT Bombay": ["iitb.ac.in", "alumni.iitb.ac.in"],
-  "IIT Madras": ["iitm.ac.in", "alumni.iitm.ac.in"], "IIT Kanpur": ["iitk.ac.in", "alumni.iitk.ac.in"],
-  "IIT Kharagpur": ["iitkgp.ac.in", "alumni.iitkgp.ac.in"], "IIT Roorkee": ["iitr.ac.in", "alumni.iitr.ac.in"],
-  "IIT Guwahati": ["iitg.ac.in", "alumni.iitg.ac.in"], "IIT Hyderabad": ["iith.ac.in", "alumni.iith.ac.in"],
-  "IIT BHU": ["iitbhu.ac.in", "alumni.iitbhu.ac.in"], "IIT Indore": ["iiti.ac.in", "alumni.iiti.ac.in"],
-  "IIT Ropar": ["iitrpr.ac.in", "alumni.iitrpr.ac.in"], "IIT Patna": ["iitp.ac.in", "alumni.iitp.ac.in"],
-  "IIT Bhubaneswar": ["iitbbs.ac.in", "alumni.iitbbs.ac.in"], "IIT Gandhinagar": ["iitgn.ac.in", "alumni.iitgn.ac.in"],
-  "IIT Jodhpur": ["iitj.ac.in", "alumni.iitj.ac.in"], "IIT Mandi": ["iitmandi.ac.in", "alumni.iitmandi.ac.in"],
-  "IIT Tirupati": ["iittp.ac.in", "alumni.iittp.ac.in"], "IIT Palakkad": ["iitpkd.ac.in", "alumni.iitpkd.ac.in"],
-  "IIT Dharwad": ["iitdh.ac.in", "alumni.iitdh.ac.in"], "IIT Bhilai": ["iitbhilai.ac.in", "alumni.iitbhilai.ac.in"],
-  "IIT Goa": ["iitgoa.ac.in", "alumni.iitgoa.ac.in"], "IIT Jammu": ["iitjammu.ac.in", "alumni.iitjammu.ac.in"],
-  "IIT Dhanbad (ISM)": ["iitism.ac.in", "alumni.iitism.ac.in"],
-};
 
 const string = (body: Body, key: string, required = false): string => {
   const value = typeof body[key] === "string" ? body[key].trim() : "";

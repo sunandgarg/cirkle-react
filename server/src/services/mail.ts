@@ -11,6 +11,7 @@ import {
   passwordResetEmail,
   verificationDecisionEmail,
 } from "./mailTemplates.js";
+import { isIitEmailAddress } from "./iitDomains.js";
 
 export interface MailInput {
   to: string;
@@ -20,10 +21,16 @@ export interface MailInput {
 }
 
 export interface MailDeliveryReceipt {
-  provider: "zeptomail";
+  provider: "zeptomail" | "zavu";
   accepted: true;
   clientReference: string;
   providerRequestId?: string;
+}
+
+export type MailProvider = MailDeliveryReceipt["provider"];
+
+export interface MailRoutingOptions {
+  forceProvider?: MailProvider;
 }
 
 interface ZeptoMailPayload extends Record<string, unknown> {
@@ -36,6 +43,20 @@ interface ZeptoMailPayload extends Record<string, unknown> {
   track_clicks: false;
   track_opens: false;
   inline_images?: Array<{ cid: string; content: string; mime_type: "image/png" }>;
+}
+
+interface ZavuMailPayload extends Record<string, unknown> {
+  to: string;
+  channel: "email";
+  subject: string;
+  text: string;
+  htmlBody: string;
+  attachments?: Array<{
+    filename: "cirkle-logo.png";
+    content: string;
+    content_type: "image/png";
+    content_id: typeof CIRKLE_LOGO_CID;
+  }>;
 }
 
 const LOGO_PATH = fileURLToPath(new URL("../../../public/cirkle-logo.png", import.meta.url));
@@ -73,11 +94,37 @@ async function providerRequestId(response: Response): Promise<string | undefined
   try {
     const body = await response.text();
     if (!body || body.length > 16_384) return undefined;
-    const parsed = JSON.parse(body) as { request_id?: unknown; error?: { request_id?: unknown } };
-    return sanitizedRequestId(parsed.request_id) ?? sanitizedRequestId(parsed.error?.request_id);
+    const parsed = JSON.parse(body) as {
+      id?: unknown;
+      request_id?: unknown;
+      message?: { id?: unknown };
+      data?: { id?: unknown };
+      error?: { request_id?: unknown };
+    };
+    return sanitizedRequestId(parsed.request_id)
+      ?? sanitizedRequestId(parsed.message?.id)
+      ?? sanitizedRequestId(parsed.data?.id)
+      ?? sanitizedRequestId(parsed.id)
+      ?? sanitizedRequestId(parsed.error?.request_id);
   } catch {
     return undefined;
   }
+}
+
+function zavuAuthorizationHeader(tokenValue: string): string {
+  const token = tokenValue.trim();
+  if (!/^zv_live_[A-Za-z0-9_-]{20,}$/.test(token) || /[\r\n]/.test(token)) {
+    throw new ApiError(503, "mail_not_configured", "IIT email delivery is not configured correctly");
+  }
+  return `Bearer ${token}`;
+}
+
+function zavuSenderHeader(senderValue: string): string {
+  const sender = senderValue.trim();
+  if (!/^[a-z0-9]{16,128}$/i.test(sender)) {
+    throw new ApiError(503, "mail_not_configured", "IIT email delivery is not configured correctly");
+  }
+  return sender;
 }
 
 function publicLogoUrl(): string {
@@ -112,10 +159,45 @@ async function zeptoMailPayload(input: MailInput): Promise<ZeptoMailPayload> {
   };
 }
 
-export async function sendMail(input: MailInput): Promise<MailDeliveryReceipt | undefined> {
-  if (!config.ZEPTOMAIL_TOKEN?.trim()) {
+async function zavuMailPayload(input: MailInput): Promise<ZavuMailPayload> {
+  let htmlBody = input.html;
+  let attachments: ZavuMailPayload["attachments"];
+  try {
+    attachments = [{
+      filename: "cirkle-logo.png",
+      content: await inlineLogoContent(),
+      content_type: "image/png",
+      content_id: CIRKLE_LOGO_CID,
+    }];
+  } catch {
+    htmlBody = htmlBody.replaceAll(`cid:${CIRKLE_LOGO_CID}`, publicLogoUrl());
+    logger.warn("Cirkle email logo could not be embedded; using the public HTTPS logo URL");
+  }
+
+  return {
+    to: input.to,
+    channel: "email",
+    subject: input.subject,
+    text: input.text,
+    htmlBody,
+    ...(attachments ? { attachments } : {}),
+  };
+}
+
+function routedProvider(input: MailInput, options: MailRoutingOptions): MailProvider {
+  return options.forceProvider ?? (isIitEmailAddress(input.to) ? "zavu" : "zeptomail");
+}
+
+export async function sendMail(input: MailInput, options: MailRoutingOptions = {}): Promise<MailDeliveryReceipt | undefined> {
+  const provider = routedProvider(input, options);
+  const providerConfigured = provider === "zavu"
+    ? Boolean(config.ZAVU_API_KEY?.trim() && config.ZAVU_SENDER_ID?.trim())
+    : Boolean(config.ZEPTOMAIL_TOKEN?.trim());
+  if (!providerConfigured) {
     if (config.NODE_ENV === "production") {
-      throw new ApiError(503, "mail_not_configured", "Email delivery is not configured");
+      throw new ApiError(503, "mail_not_configured", provider === "zavu"
+        ? "IIT email delivery is not configured"
+        : "Email delivery is not configured");
     }
     return undefined;
   }
@@ -123,16 +205,27 @@ export async function sendMail(input: MailInput): Promise<MailDeliveryReceipt | 
     throw new ApiError(400, "invalid_email", "A valid destination email is required");
   }
 
-  const payload = await zeptoMailPayload(input);
+  const clientReference = `cirkle-${randomUUID()}`;
+  const payload = provider === "zavu" ? await zavuMailPayload(input) : await zeptoMailPayload(input);
+  const url = provider === "zavu" ? config.ZAVU_API_URL : config.ZEPTOMAIL_API_URL;
+  const headers: Record<string, string> = provider === "zavu"
+    ? {
+      Authorization: zavuAuthorizationHeader(config.ZAVU_API_KEY ?? ""),
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "Zavu-Sender": zavuSenderHeader(config.ZAVU_SENDER_ID ?? ""),
+      "Idempotency-Key": clientReference,
+    }
+    : {
+      Authorization: authorizationHeader(config.ZEPTOMAIL_TOKEN ?? ""),
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
   let response: Response;
   try {
-    response = await fetch(config.ZEPTOMAIL_API_URL, {
+    response = await fetch(url, {
       method: "POST",
-      headers: {
-        Authorization: authorizationHeader(config.ZEPTOMAIL_TOKEN),
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers,
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(12_000),
     });
@@ -160,9 +253,11 @@ export async function sendMail(input: MailInput): Promise<MailDeliveryReceipt | 
   }
 
   return {
-    provider: "zeptomail",
+    provider,
     accepted: true,
-    clientReference: payload.client_reference,
+    clientReference: provider === "zeptomail"
+      ? (payload as ZeptoMailPayload).client_reference
+      : clientReference,
     ...(requestId ? { providerRequestId: requestId } : {}),
   };
 }
@@ -172,7 +267,7 @@ export async function sendLoginCode(email: string, code: string): Promise<void> 
 }
 
 export async function sendInstituteCode(email: string, code: string): Promise<void> {
-  await sendMail({ to: email, ...instituteVerificationEmail(code) });
+  await sendMail({ to: email, ...instituteVerificationEmail(code) }, { forceProvider: "zavu" });
 }
 
 export async function sendPasswordReset(email: string, url: string): Promise<void> {
