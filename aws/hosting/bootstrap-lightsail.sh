@@ -62,6 +62,19 @@ server {
   }
   location = /readyz { deny all; }
   location = /api/readyz { deny all; }
+  # Socket.IO is mounted by the Node API at /api/socket.io. Keep this more
+  # specific location ahead of /api/ so Nginx forwards the hop-by-hop
+  # WebSocket upgrade headers instead of treating the handshake as HTTP.
+  location /api/socket.io/ {
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection \$connection_upgrade;
+    proxy_read_timeout 3600s;
+    proxy_pass http://127.0.0.1:3001;
+  }
   location /socket.io/ {
     proxy_http_version 1.1;
     proxy_set_header Host \$host;

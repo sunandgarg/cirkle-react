@@ -243,6 +243,25 @@ curl --fail --show-error 'https://api-react.cirkle.world/api/socket.io/?EIO=4&tr
 curl --fail --show-error https://api-react.cirkle.world/api/features
 ```
 
+Polling HTTP 200 alone does not prove that WebSocket upgrades work. Socket.IO
+is mounted at `/api/socket.io`, so Nginx must route `/api/socket.io/` through a
+dedicated HTTP/1.1 proxy location that forwards both `Upgrade` and
+`Connection`; the generic `/api/` location is insufficient. Verify the public
+upgrade separately:
+
+```sh
+curl --http1.1 --max-time 3 --dump-header - --output /dev/null \
+  --header 'Connection: Upgrade' \
+  --header 'Upgrade: websocket' \
+  --header 'Sec-WebSocket-Version: 13' \
+  --header 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  'https://api-react.cirkle.world/api/socket.io/?EIO=4&transport=websocket'
+```
+
+The response must start with `HTTP/1.1 101 Switching Protocols`. Curl can then
+exit with code 28 because this diagnostic intentionally leaves the established
+WebSocket idle until the three-second timeout.
+
 `/readyz` is intentionally restricted at Nginx and should not be treated as a
 public endpoint.
 
