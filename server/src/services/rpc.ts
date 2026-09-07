@@ -860,7 +860,10 @@ async function directSidebar(ctx: RequestContext): Promise<Row[]> {
     const profile = profiles.find((row) => row.user_id === peerId);
     const key = pairKey(ctx.auth.id, peerId);
     const room = inbox.find((row) => row.direct_key === key);
-    if (!room?.room_id || !room.last_message) return [];
+    // Keep an accepted direct room addressable before its first message. The
+    // Chats page needs the peer identity immediately so profile, audio-call,
+    // and video-call controls do not depend on sending a placeholder message.
+    if (!room?.room_id) return [];
     return [{ connection_id: connection.id, peer_id: peerId, room_id: room.room_id, display_name: profile?.name ?? "Member", display_avatar: profile?.avatar_url ?? null, last_message: room.last_message, unread_count: room.unread_count ?? 0 }];
   });
 }

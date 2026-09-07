@@ -346,6 +346,39 @@ describe("direct chat and inbox membership policy", () => {
     expect(globalQueryRaw).not.toHaveBeenCalled();
   });
 
+  it("returns peer identity for an accepted direct room before its first message", async () => {
+    const roomRecord = {
+      id: "room-record", data: { id: "room-one", is_group: false, direct_key: "member:peer" },
+    };
+    const findMany = vi.fn()
+      .mockResolvedValueOnce([membership()])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([roomRecord]);
+    const queryRaw = vi.fn()
+      .mockResolvedValueOnce([membership()])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    vi.spyOn(prisma, "$transaction").mockImplementation(async (callback: any) => callback({
+      $queryRaw: queryRaw,
+      legacyRecord: { findMany },
+    }));
+    vi.spyOn(prisma.connection, "findMany").mockResolvedValue([{
+      id: "connection-one", requester_id: "member", receiver_id: "peer",
+      pair_key: "member:peer", status: "accepted", note: null,
+      created_at: new Date(), responded_at: new Date(),
+    }] as any);
+    vi.spyOn(prisma.profile, "findMany").mockResolvedValue([{
+      user_id: "peer", name: "QA Recipient", avatar_url: null,
+    }] as any);
+
+    await expect(callRpc("get_direct_message_sidebar", {}, ctx)).resolves.toEqual([
+      expect.objectContaining({
+        connection_id: "connection-one", peer_id: "peer", room_id: "room-one",
+        display_name: "QA Recipient", last_message: null, unread_count: 0,
+      }),
+    ]);
+  });
+
   it("reactivates only the confirmed consultation participants and clears their removal markers", async () => {
     const memberMembership = membership({ data: { status: "removed", removed_at: "2026-09-04T00:00:00.000Z" } });
     const peerMembership = membership({
