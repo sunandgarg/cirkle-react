@@ -38,9 +38,13 @@ Browser
   CloudWatch, and every other charge in that account. The AppSync
   CloudFormation stack has termination protection enabled.
 - Secrets are held in AWS Secrets Manager and installed as root-owned host environment files. Secrets must never be stored in MySQL or exposed through `VITE_*` browser variables.
-- Audio/video calls remain hidden while `DAILY_API_KEY` is absent. Even after
-  Pages opts in, the UI enables calls only when `GET /api/features` confirms
-  that the server-side provider is configured.
+- Daily audio/video calls are available only inside an accepted one-to-one
+  chat. Forum and group-chat surfaces never expose call controls. Calls remain
+  hidden while `DAILY_API_KEY` is absent; even after Pages opts in, the UI
+  enables them only when `GET /api/features` confirms the server-side provider.
+- Each call uses a private, expiring Daily room, a room-bound per-user meeting
+  token, a provider-side two-participant ceiling, and unique Daily user IDs.
+  The Daily API key remains server-only.
 
 ## Media flow and immutability
 

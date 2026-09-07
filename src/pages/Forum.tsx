@@ -68,7 +68,6 @@ import {
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { shouldAnchorLatestDuringKeyboard, useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
 import { safeHttpUrl } from "@/lib/safeUrl";
-import IncomingCallButton from "@/components/IncomingCallButton";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
@@ -2115,7 +2114,6 @@ const Forum = () => {
               </button>
             )}
 
-            <IncomingCallButton />
             <button onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); setSearchTab("messages"); }} className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-colors ${showSearch ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`} aria-label="Search messages">
               <Search className="w-4 h-4" />
             </button>

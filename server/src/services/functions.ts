@@ -15,6 +15,9 @@ import {
   DailyRoomProvisionError,
   activeDailyRoomNamesForUser,
   closeDailySessionsForRooms,
+  dailyAuthorizationFailureInvalidatesRoom,
+  dailyDirectCallMemberIds,
+  dailyDirectCallPeerId,
   dailyMeetingTokenPayload,
   dailyParticipantLeaseIsFresh,
   dailyRoomNameForSession,
@@ -912,11 +915,85 @@ async function dailyRoom(body: Body, ctx: RequestContext): Promise<Row> {
   if (!(await hasActiveChatMembership(prisma, ctx.auth.id, roomId))) {
     throw new ApiError(403, "chat_membership_required", "Chat membership is required");
   }
-  const chatRoomRecord = await prisma.legacyRecord.findFirst({ where: {
+  const chatRoomRecords = await prisma.legacyRecord.findMany({ where: {
     table_name: "chat_rooms",
     data: { path: "$.id", equals: roomId },
-  }, select: { id: true } });
-  if (!chatRoomRecord) throw new ApiError(404, "chat_room_not_found", "Chat room was not found");
+  }, select: { id: true, data: true }, take: 2 });
+  if (chatRoomRecords.length !== 1) {
+    throw new ApiError(
+      chatRoomRecords.length ? 409 : 404,
+      chatRoomRecords.length ? "ambiguous_chat_room" : "chat_room_not_found",
+      chatRoomRecords.length ? "The chat room identity is ambiguous" : "Chat room was not found",
+    );
+  }
+  const chatRoomRecord = chatRoomRecords[0]!;
+  const initialRoom = chatRoomRecord.data as Row | null;
+  const initialPeerId = dailyDirectCallPeerId(initialRoom, ctx.auth.id);
+  const initialDirectKey = initialRoom && typeof initialRoom === "object" && !Array.isArray(initialRoom)
+    && typeof initialRoom.direct_key === "string"
+    ? initialRoom.direct_key
+    : "";
+  if (!initialPeerId || !initialDirectKey) {
+    throw new ApiError(403, "direct_call_only", "Calls are available only in an accepted one-to-one chat");
+  }
+
+  const authorizeDirectCall = async (
+    tx: Prisma.TransactionClient,
+    roomLockMode: "share" | "update",
+  ): Promise<[string, string]> => {
+    // Match the direct-chat creation lock order: accepted connection first,
+    // then room, then memberships. This prevents a connection revocation or
+    // room conversion from racing token issuance.
+    const lockedConnection = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM connections WHERE pair_key = ${initialDirectKey} LIMIT 1 FOR SHARE
+    `);
+    const connection = lockedConnection.length === 1
+      ? await tx.connection.findUnique({ where: { pair_key: initialDirectKey } })
+      : null;
+    if (!connection || connection.status !== "accepted"
+      || [connection.requester_id, connection.receiver_id].sort().join(":") !== initialDirectKey) {
+      throw new ApiError(403, "connection_required", "An accepted connection is required for calls");
+    }
+
+    const roomLock = roomLockMode === "update" ? Prisma.sql`FOR UPDATE` : Prisma.sql`FOR SHARE`;
+    const lockedRoom = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM legacy_records
+      WHERE id = ${chatRoomRecord.id} AND table_name = 'chat_rooms'
+      LIMIT 1 ${roomLock}
+    `);
+    const currentRoomRecord = lockedRoom.length === 1
+      ? await tx.legacyRecord.findUnique({ where: { id: chatRoomRecord.id } })
+      : null;
+    const currentRoom = currentRoomRecord?.data as Row | undefined;
+    if (!currentRoom || currentRoom.id !== roomId
+      || dailyDirectCallPeerId(currentRoom, ctx.auth.id) !== initialPeerId
+      || currentRoom.direct_key !== initialDirectKey) {
+      throw new ApiError(403, "direct_call_only", "Calls are available only in an accepted one-to-one chat");
+    }
+
+    const callerMembership = await lockedActiveChatMembership(tx, ctx.auth.id, roomId);
+    const peerMembership = await lockedActiveChatMembership(tx, initialPeerId, roomId);
+    if (!callerMembership || !peerMembership) {
+      throw new ApiError(403, "chat_membership_required", "Both connected members must still belong to this chat");
+    }
+    const allMemberships = await tx.legacyRecord.findMany({ where: {
+      table_name: "chat_members",
+      OR: [
+        { data: { path: "$.room_id", equals: roomId } },
+        { record_id: { startsWith: `${roomId}:` } },
+      ],
+    }, select: { id: true, record_id: true, owner_id: true, community_id: true, data: true } });
+    const members = dailyDirectCallMemberIds(
+      currentRoom,
+      ctx.auth.id,
+      activeChatAudienceUserIds(allMemberships as ChatMembershipRecord[], roomId),
+    );
+    if (!members) {
+      throw new ApiError(403, "direct_call_only", "Calls require exactly two active members in a direct chat");
+    }
+    return members;
+  };
+
   const requestedSessionId = string(body, "sessionId");
   let session: { record: LegacyRecord; row: Row; created: boolean } = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT id FROM users WHERE id = ${ctx.auth.id} LIMIT 1 FOR UPDATE`);
@@ -924,17 +1001,14 @@ async function dailyRoom(body: Body, ctx: RequestContext): Promise<Row> {
       tx.user.findUnique({ where: { id: ctx.auth.id }, select: { role: true, status: true } }),
       tx.profile.findUnique({ where: { user_id: ctx.auth.id }, select: { is_verified: true } }),
     ]);
-    const currentMembershipActive = !!await lockedActiveChatMembership(tx, ctx.auth.id, roomId);
     const privileged = currentUser?.role === "admin" || currentUser?.role === "owner";
     if (!currentUser || currentUser.status !== "active" || (!privileged && !currentProfile?.is_verified)) {
       throw new ApiError(403, "verification_required", "Verified membership is required for calls");
     }
-    if (!currentMembershipActive) throw new ApiError(403, "chat_membership_required", "Chat membership is required");
+    await authorizeDirectCall(tx, "update");
     // The chat-room row is the canonical lock for starting a call. Every
     // participant in the room therefore observes or creates the same active
     // session even when call buttons are pressed concurrently.
-    const lockedRoom = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT id FROM legacy_records WHERE id = ${chatRoomRecord.id} AND table_name = 'chat_rooms' LIMIT 1 FOR UPDATE`);
-    if (lockedRoom.length !== 1) throw new ApiError(404, "chat_room_not_found", "Chat room was not found");
     const sessionCandidates = await tx.legacyRecord.findMany({ where: {
       table_name: "call_sessions",
       data: { path: "$.room_id", equals: roomId },
@@ -1048,25 +1122,17 @@ async function dailyRoom(body: Body, ctx: RequestContext): Promise<Row> {
       tx.user.findUnique({ where: { id: ctx.auth.id }, select: { role: true, status: true } }),
       tx.profile.findUnique({ where: { user_id: ctx.auth.id }, select: { is_verified: true } }),
     ]);
-    const currentMembershipActive = !!await lockedActiveChatMembership(tx, ctx.auth.id, roomId);
     const privileged = currentUser?.role === "admin" || currentUser?.role === "owner";
     if (!currentUser || currentUser.status !== "active" || (!privileged && !currentProfile?.is_verified)) {
       throw new ApiError(403, "verification_required", "Verified membership is required for calls");
     }
-    if (!currentMembershipActive) throw new ApiError(403, "chat_membership_required", "Chat membership is required");
+    const directMembers = await authorizeDirectCall(tx, "share");
     await tx.$queryRaw(Prisma.sql`SELECT id FROM legacy_records WHERE id = ${session.record.id} AND table_name = 'call_sessions' LIMIT 1 FOR UPDATE`);
     const freshRecord = await tx.legacyRecord.findUnique({ where: { id: session.record.id } });
     const freshSession = freshRecord?.data as Row | undefined;
     if (!freshRecord || !freshSession || freshSession.ended_at) throw new ApiError(410, "call_invite_expired", "This call invitation has expired");
     if (freshSession.invite_sent_at) return null;
-    const allMemberships = await tx.legacyRecord.findMany({ where: {
-      table_name: "chat_members",
-      OR: [
-        { data: { path: "$.room_id", equals: roomId } },
-        { record_id: { startsWith: `${roomId}:` } },
-      ],
-    }, select: { id: true, record_id: true, owner_id: true, community_id: true, data: true } });
-    const memberIds = activeChatAudienceUserIds(allMemberships as ChatMembershipRecord[], roomId);
+    const memberIds = directMembers;
     const startedBy = typeof freshSession.started_by === "string" ? freshSession.started_by : ctx.auth.id;
     const inviter = startedBy === ctx.auth.id ? profile : await tx.profile.findUnique({ where: { user_id: startedBy } });
     const inviteMode = freshSession.mode === "video" ? "video" : "audio";
@@ -1094,7 +1160,7 @@ async function dailyRoom(body: Body, ctx: RequestContext): Promise<Row> {
   } catch (error) {
     await closeNewFailedSession("call_authorization_changed");
     const authorizationChanged = error instanceof ApiError
-      && new Set(["verification_required", "chat_membership_required", "call_invite_expired"]).has(error.code);
+      && dailyAuthorizationFailureInvalidatesRoom(error.code);
     if (session.created || authorizationChanged) {
       const cleanup = await revokeDailyUserRooms([roomName], ctx.auth.id, config.DAILY_API_KEY ?? "");
       if (cleanup.failed > 0) {

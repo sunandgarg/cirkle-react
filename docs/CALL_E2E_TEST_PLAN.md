@@ -1,8 +1,9 @@
 # Daily calls: browser acceptance plan
 
 Run this plan against an isolated test database with two ordinary email/Google
-accounts that have an accepted connection and a direct chat room. Production
-phone OTP is intentionally not a login method.
+accounts that have an accepted connection and a direct chat room. Calls must
+not appear in Forum or group chats. Production phone OTP is intentionally not
+a login method.
 
 1. Start an audio call from account A. Confirm Daily prompts for microphone
    access, account B receives the invitation, both can join, mute, leave, and
@@ -30,6 +31,9 @@ phone OTP is intentionally not a login method.
    Confirm the stale row is closed and a fresh invitation and unique room are
    created. During a healthy call, confirm the 30-second lease heartbeat keeps
    calls longer than five minutes active.
+10. Confirm the Daily room is private, limited to two participants, rejects a
+    second device using the same Daily user ID, and cannot be joined with a
+    token issued for another room.
 
 Configure `DAILY_API_KEY` server-side and optionally a hostname-only
 `DAILY_DOMAIN`. The API creates rooms; the key is never sent to the browser.

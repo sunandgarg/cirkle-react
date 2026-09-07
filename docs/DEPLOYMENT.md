@@ -75,9 +75,11 @@ forwarded-address headers. `api-react.cirkle.world` remains DNS-only so Nginx
 terminates publicly trusted TLS directly.
 
 Provider credentials are optional only when the corresponding product feature
-fails closed. The current API has no `DAILY_API_KEY`, so Pages must keep
-`VITE_DAILY_CALLS_ENABLED=false`. Calls can be enabled later only when both
-conditions are true:
+fails closed. Pages must keep `VITE_DAILY_CALLS_ENABLED=false` until the API has
+a validated `DAILY_API_KEY`. Daily calls are restricted to accepted one-to-one
+chats: Forum and group chats expose no call control, and the API rechecks the
+accepted connection plus both active memberships before every token issue.
+Calls can be enabled only when both conditions are true:
 
 1. The protected API environment contains a valid `DAILY_API_KEY` and
    `GET /api/features` reports `{ "daily_calls": true }`.
@@ -85,7 +87,9 @@ conditions are true:
 
 The UI defaults to disabled if either gate is false, the feature endpoint is
 unavailable, or its response is malformed. The endpoint exposes capability
-booleans only and never returns provider credentials.
+booleans only and never returns provider credentials. Rooms are private and
+expiring, meeting tokens are room/user-bound and expiring, and Daily enforces a
+maximum of two unique user IDs per room.
 
 ## Managed MySQL TLS and credential split
 

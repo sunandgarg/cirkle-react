@@ -4,6 +4,9 @@ import {
   DailyRoomProvisionError,
   activeDailyRoomNamesForUser,
   closeDailySessionsForRooms,
+  dailyAuthorizationFailureInvalidatesRoom,
+  dailyDirectCallMemberIds,
+  dailyDirectCallPeerId,
   dailyMeetingTokenPayload,
   dailyParticipantLeaseIsFresh,
   dailyRoomCreatePayload,
@@ -42,7 +45,7 @@ describe("Daily call room privacy", () => {
     expect(JSON.parse(String(calls[1]?.init?.body))).toMatchObject({
       name: "room",
       privacy: "private",
-      properties: { start_video_off: true },
+      properties: { start_video_off: true, max_participants: 2, enforce_unique_user_ids: true },
     });
   });
 
@@ -86,11 +89,43 @@ describe("Daily call room privacy", () => {
 
   it("keeps the creation payload private for both call modes", () => {
     expect(dailyRoomCreatePayload("audio-room", "audio", 1_000)).toMatchObject({
-      privacy: "private", properties: { eject_at_room_exp: true },
+      privacy: "private", properties: { eject_at_room_exp: true, max_participants: 2, enforce_unique_user_ids: true },
     });
     expect(dailyRoomCreatePayload("video-room", "video", 1_000)).toMatchObject({
-      privacy: "private", properties: { eject_at_room_exp: true },
+      privacy: "private", properties: { eject_at_room_exp: true, max_participants: 2, enforce_unique_user_ids: true },
     });
+  });
+
+  it("accepts only the exact connected pair in a canonical direct room", () => {
+    const caller = "11111111-1111-4111-8111-111111111111";
+    const peer = "22222222-2222-4222-8222-222222222222";
+    const room = { is_group: false, direct_key: `${caller}:${peer}` };
+    expect(dailyDirectCallPeerId(room, caller)).toBe(peer);
+    expect(dailyDirectCallMemberIds(room, caller, [peer, caller])).toEqual([caller, peer]);
+    expect(dailyDirectCallMemberIds(room, caller, [caller, peer, "third-member"])).toBeNull();
+  });
+
+  it("rejects group, malformed, and non-member rooms", () => {
+    const caller = "11111111-1111-4111-8111-111111111111";
+    const peer = "22222222-2222-4222-8222-222222222222";
+    expect(dailyDirectCallPeerId({ is_group: true, direct_key: `${caller}:${peer}` }, caller)).toBeNull();
+    expect(dailyDirectCallPeerId({ is_group: false, direct_key: `${peer}:${caller}` }, caller)).toBeNull();
+    expect(dailyDirectCallPeerId({ is_group: false, direct_key: `${peer}:third` }, caller)).toBeNull();
+    expect(dailyDirectCallMemberIds({ is_group: false, direct_key: `${caller}:${peer}` }, caller, [caller])).toBeNull();
+  });
+
+  it("invalidates an existing provider room when any direct-call entitlement disappears", () => {
+    for (const code of [
+      "verification_required",
+      "chat_membership_required",
+      "connection_required",
+      "direct_call_only",
+      "call_invite_expired",
+    ]) {
+      expect(dailyAuthorizationFailureInvalidatesRoom(code)).toBe(true);
+    }
+    expect(dailyAuthorizationFailureInvalidatesRoom("daily_unavailable")).toBe(false);
+    expect(dailyAuthorizationFailureInvalidatesRoom(null)).toBe(false);
   });
 
   it("ejects joined participants when their one-hour token expires", () => {

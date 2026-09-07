@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { getCallInvitePath, parseCallInviteNotification, parseCallInviteQuery } from "@/lib/callInvites";
+import { getCallInvitePath, isDirectCallRoom, parseCallInviteNotification, parseCallInviteQuery } from "@/lib/callInvites";
 
 const now = Date.parse("2026-09-04T10:00:00.000Z");
 const roomId = "11111111-1111-4111-8111-111111111111";
 const sessionId = "22222222-2222-4222-8222-222222222222";
 
 describe("call invitations", () => {
+  it("shows call controls only for a UUID-bound direct chat peer", () => {
+    expect(isDirectCallRoom({ id: roomId, is_group: false, peerId: sessionId })).toBe(true);
+    expect(isDirectCallRoom({ id: roomId, is_group: true, peerId: sessionId })).toBe(false);
+    expect(isDirectCallRoom({ id: roomId, is_group: false, peerId: null })).toBe(false);
+    expect(isDirectCallRoom({ id: roomId, is_group: false, peerId: "../member" })).toBe(false);
+  });
+
   it("builds a safe, expiring chat route from a structured notification", () => {
     const invite = parseCallInviteNotification({
       type: "call_invite",

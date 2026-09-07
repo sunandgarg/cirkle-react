@@ -63,9 +63,52 @@ export function dailyRoomCreatePayload(roomName: string, mode: "audio" | "video"
       enable_chat: false,
       start_video_off: mode === "audio",
       start_audio_off: false,
-      max_participants: 50,
+      // Cirkle calls are deliberately limited to accepted one-to-one chats.
+      // Keep the provider-side limit aligned with the application authorization
+      // boundary so a leaked invitation cannot turn into a group room.
+      max_participants: 2,
+      // A Cirkle identity may occupy only one seat. Reusing a captured token
+      // cannot create a third participant under the same user ID.
+      enforce_unique_user_ids: true,
     },
   };
+}
+
+export function dailyDirectCallPeerId(room: unknown, callerId: string): string | null {
+  if (!room || typeof room !== "object" || Array.isArray(room) || !callerId) return null;
+  const value = room as Row;
+  if (value.is_group !== false || typeof value.direct_key !== "string") return null;
+  const pair = value.direct_key.split(":");
+  if (pair.length !== 2 || pair.some((userId) => !userId) || pair[0] === pair[1]) return null;
+  const sortedPair = [...pair].sort();
+  if (sortedPair.join(":") !== value.direct_key || !sortedPair.includes(callerId)) return null;
+  return sortedPair.find((userId) => userId !== callerId) ?? null;
+}
+
+export function dailyDirectCallMemberIds(
+  room: unknown,
+  callerId: string,
+  activeMemberIds: string[],
+): [string, string] | null {
+  const peerId = dailyDirectCallPeerId(room, callerId);
+  if (!peerId) return null;
+  const expected = [callerId, peerId].sort();
+  const actual = [...new Set(activeMemberIds.filter(Boolean))].sort();
+  return actual.length === 2 && actual.every((userId, index) => userId === expected[index])
+    ? [callerId, peerId]
+    : null;
+}
+
+const DAILY_ROOM_INVALIDATING_AUTH_ERRORS = new Set([
+  "verification_required",
+  "chat_membership_required",
+  "connection_required",
+  "direct_call_only",
+  "call_invite_expired",
+]);
+
+export function dailyAuthorizationFailureInvalidatesRoom(errorCode: unknown): boolean {
+  return typeof errorCode === "string" && DAILY_ROOM_INVALIDATING_AUTH_ERRORS.has(errorCode);
 }
 
 export function dailyMeetingTokenPayload(

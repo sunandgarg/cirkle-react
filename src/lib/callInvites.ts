@@ -20,6 +20,13 @@ const parseExpiry = (value: unknown): number | null => {
 export const isCallId = (value: unknown): value is string =>
   typeof value === "string" && UUID_PATTERN.test(value);
 
+export const isDirectCallRoom = (room: unknown): boolean => {
+  if (!isRecord(room)) return false;
+  return room.is_group === false
+    && isCallId(room.id)
+    && isCallId(room.peerId);
+};
+
 export const parseCallInviteNotification = (value: unknown, now = Date.now()): CallInvite | null => {
   if (!isRecord(value) || value.type !== "call_invite") return null;
   const roomId = value.room_id;
