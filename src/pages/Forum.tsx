@@ -68,6 +68,7 @@ import {
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { shouldAnchorLatestDuringKeyboard, useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
 import { safeHttpUrl } from "@/lib/safeUrl";
+import { forumPostProfileSignature, resolveForumPostProfile } from "@/lib/forumProfiles";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
@@ -582,7 +583,7 @@ const Forum = () => {
       const q = buildScopeQuery(activeScope.type, activeScope.key);
       const { data: posts } = await q;
       if (!posts?.length) return [];
-      const authorIds = [...new Set((posts as any[]).map((p: any) => p.author_id).filter(Boolean))].slice(0, 30) as string[];
+      const authorIds = [...new Set((posts as any[]).map((p: any) => p.author_id).filter(Boolean))] as string[];
       if (!authorIds.length) return [];
       const { data: profiles } = await supabase.from("profiles").select("user_id, name, avatar_url, headline, iit_name, is_verified, slug").in("user_id", authorIds);
       return profiles || [];
@@ -833,6 +834,7 @@ const Forum = () => {
       : undefined,
     initialDataUpdatedAt: initialCachedPosts ? 0 : undefined,
     staleTime: 60_000,
+    refetchOnMount: "always",
     refetchOnWindowFocus: false,
   });
 
@@ -2284,7 +2286,7 @@ const Forum = () => {
               <div className="flex items-center bg-accent/80 rounded-t-lg mb-1 overflow-hidden animate-fade-in">
                 <div className="w-1 self-stretch bg-primary flex-shrink-0" />
                 <div className="flex-1 px-3 py-1.5 min-w-0">
-                  <p className="text-[11px] font-semibold text-primary truncate">{replyTo.is_anonymous ? "Anonymous" : replyTo.profile?.name || "User"}</p>
+                  <p className="text-[11px] font-semibold text-primary truncate">{replyTo.is_anonymous ? "Anonymous" : resolveForumPostProfile(replyTo, profileMap)?.name || "Cirkle member"}</p>
                   <p className="text-[11px] text-muted-foreground truncate">{replyTo.content}</p>
                 </div>
                 <button onClick={() => setReplyTo(null)} className="w-8 h-8 flex items-center justify-center text-muted-foreground hover:text-foreground flex-shrink-0">
@@ -2804,15 +2806,16 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
   const swipeThreshold = 60;
 
   const isMine = post.viewer_is_author === true || post.author_id === userId;
-  const displayName = post.is_anonymous ? (isMine ? "You · Anonymous" : "Anonymous") : (post.profile?.name || "User");
-  const avatar = post.is_anonymous ? null : post.profile?.avatar_url;
+  const authorProfile = resolveForumPostProfile(post, profileMap);
+  const displayName = post.is_anonymous ? (isMine ? "You · Anonymous" : "Anonymous") : (authorProfile?.name || "Cirkle member");
+  const avatar = post.is_anonymous ? null : authorProfile?.avatar_url;
   const colors = getUserColor(post.is_anonymous ? "anon" : post.author_id);
   const time = format(new Date(post.created_at), "h:mm a");
   const fullTime = format(new Date(post.created_at), "MMM d, yyyy h:mm a");
   const poll = post.poll;
   const reactions: Record<string, number> = post.reactions || {};
   const myReactions: string[] = post.myReactions || [];
-  const profileSlug = post.profile?.slug;
+  const profileSlug = authorProfile?.slug;
   const isHighlighted = highlightedPostId === post.id;
   const isDeleted = !!post.deleted_at || !!post.is_deleted_for_everyone;
   const isEdited = !!post.edited_at;
@@ -2821,6 +2824,7 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
   const voiceUrl = safeHttpUrl(post.voice_url);
   const replyCount = post.replyCount || 0;
   const parentPost = findParentPost(post.reply_to_id);
+  const parentProfile = resolveForumPostProfile(parentPost, profileMap);
   const canDeleteForEveryone = isMine && !isDeleted && ((Date.now() - new Date(post.created_at).getTime()) < 3 * 60 * 1000);
   const goToProfile = () => {
     if (post.is_anonymous) return;
@@ -2912,16 +2916,16 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
           className="flex items-center gap-1.5 text-[11px] text-muted-foreground px-3 sm:px-4 pl-[60px] sm:pl-[72px] pt-1 hover:text-foreground transition-colors">
           <Reply className="w-3 h-3 flex-shrink-0" />
           <span className="w-4 h-4 rounded-full overflow-hidden flex-shrink-0">
-            {parentPost.profile?.avatar_url ? (
-              <img src={parentPost.profile.avatar_url} className="w-full h-full object-cover" alt="" />
+            {parentProfile?.avatar_url ? (
+              <img src={parentProfile.avatar_url} className="w-full h-full object-cover" alt="" />
             ) : (
               <div className={`w-full h-full ${getUserColor(parentPost.author_id).bg} flex items-center justify-center`}>
-                <span className="text-[6px] font-bold text-white">{getInitials(parentPost.profile?.name)}</span>
+                <span className="text-[6px] font-bold text-white">{getInitials(parentProfile?.name)}</span>
               </div>
             )}
           </span>
           <span className={`font-semibold ${getUserColor(parentPost.author_id).text}`}>
-            {parentPost.is_anonymous ? "Anonymous" : parentPost.profile?.name || "User"}
+            {parentPost.is_anonymous ? "Anonymous" : parentProfile?.name || "Cirkle member"}
           </span>
           <span className="truncate">{parentPost.content}</span>
         </button>
@@ -2936,7 +2940,7 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
                 <img src={avatar} alt="" className="w-8 h-8 sm:w-9 sm:h-9 rounded-full object-cover" loading="lazy" />
               ) : (
                 <div className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full ${post.is_anonymous ? "bg-muted" : colors.bg} flex items-center justify-center`}>
-                  <span className="text-xs font-bold text-white">{post.is_anonymous ? "?" : getInitials(post.profile?.name)}</span>
+                  <span className="text-xs font-bold text-white">{post.is_anonymous ? "?" : getInitials(authorProfile?.name)}</span>
                 </div>
               )}
             </button>
@@ -3091,7 +3095,8 @@ const MemoizedDiscordMessage = React.memo(DiscordMessage, (prev, next) => {
     prev.post === next.post &&
     prev.isUserPinned === next.isUserPinned &&
     prev.highlightedPostId === next.highlightedPostId &&
-    prev.isGrouped === next.isGrouped
+    prev.isGrouped === next.isGrouped &&
+    forumPostProfileSignature(prev.post, prev.profileMap) === forumPostProfileSignature(next.post, next.profileMap)
   );
 });
 

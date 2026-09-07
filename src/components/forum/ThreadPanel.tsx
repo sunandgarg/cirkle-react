@@ -27,6 +27,7 @@ import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { safeHttpUrl } from "@/lib/safeUrl";
 import { reconcileThreadSnapshot, resolveThreadAppSyncInvalidation } from "@/lib/threadRealtime";
 import { createRealtimeFallbackSlot } from "@/lib/realtimeFallback";
+import { resolveForumPostProfile } from "@/lib/forumProfiles";
 
 const THREAD_PAGE_SIZE = 50;
 const MAX_THREAD_RECOVERY = 1_200;
@@ -422,9 +423,9 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
     }
   };
 
-  const parentProfile = parentPost.profile;
+  const parentProfile = resolveForumPostProfile(parentPost, profileMap);
   const parentIsMine = parentPost.viewer_is_author === true || parentPost.author_id === user?.id;
-  const parentName = parentPost.is_anonymous ? (parentIsMine ? "You · Anonymous" : "Anonymous") : parentProfile?.name || "User";
+  const parentName = parentPost.is_anonymous ? (parentIsMine ? "You · Anonymous" : "Anonymous") : parentProfile?.name || "Cirkle member";
   const parentImageUrl = safeHttpUrl(parentPost.image_url);
 
   return (
@@ -490,13 +491,14 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
           {threadVirtualizer.getVirtualItems().map((virtualReply) => {
             const reply: any = replies[virtualReply.index];
             const replyIsMine = reply.viewer_is_author === true || reply.author_id === user?.id;
-            const rName = reply.is_anonymous ? (replyIsMine ? "You · Anonymous" : "Anonymous") : reply.profile?.name || "User";
+            const replyProfile = resolveForumPostProfile(reply, profileMap);
+            const rName = reply.is_anonymous ? (replyIsMine ? "You · Anonymous" : "Anonymous") : replyProfile?.name || "Cirkle member";
             return (
               <div key={reply.id} data-index={virtualReply.index} ref={threadVirtualizer.measureElement}
                 style={{ position: "absolute", left: 0, top: 0, width: "100%", transform: `translateY(${virtualReply.start}px)` }}
                 className={`flex items-start gap-2 rounded-xl p-1.5 ${reply.is_anonymous && replyIsMine ? "bg-primary/5 ring-1 ring-primary/10" : ""}`}>
-                {reply.profile?.avatar_url ? (
-                  <img src={reply.profile.avatar_url} className="w-7 h-7 rounded-full object-cover" alt="" />
+                {replyProfile?.avatar_url ? (
+                  <img src={replyProfile.avatar_url} className="w-7 h-7 rounded-full object-cover" alt="" />
                 ) : (
                   <div className={`w-7 h-7 rounded-full ${reply.is_anonymous ? "bg-muted" : getUserColor(reply.author_id)} flex items-center justify-center`}>
                     <span className="text-[8px] font-bold text-white">{getInitials(rName)}</span>
