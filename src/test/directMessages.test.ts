@@ -7,6 +7,7 @@ import {
   getDirectMessagePreview,
   hasStartedDirectMessageConversation,
   normalizeDirectMessageSidebarRow,
+  shouldShowConversationNotificationBell,
   type DirectMessageSidebarRow,
 } from "@/lib/directMessages";
 
@@ -25,6 +26,11 @@ describe("direct message sidebar", () => {
   it("returns a private chat to the open Forum channel panel", () => {
     expect(getDirectChatBackTarget()).toBe("/cirkle-forum?channels=open");
     expect(getDirectChatProfileTarget("peer/with space")).toBe("/profile/peer%2Fwith%20space");
+  });
+
+  it("keeps the global notification bell out of one-to-one conversations", () => {
+    expect(shouldShowConversationNotificationBell(false)).toBe(false);
+    expect(shouldShowConversationNotificationBell(true)).toBe(true);
   });
 
   it("opens an existing room directly", () => {

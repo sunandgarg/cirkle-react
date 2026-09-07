@@ -33,7 +33,11 @@ import {
   subscribeAppSync,
 } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
-import { getDirectChatBackTarget, getDirectChatProfileTarget } from "@/lib/directMessages";
+import {
+  getDirectChatBackTarget,
+  getDirectChatProfileTarget,
+  shouldShowConversationNotificationBell,
+} from "@/lib/directMessages";
 import { isDirectCallRoom, parseCallInviteQuery } from "@/lib/callInvites";
 import NotificationBell from "@/components/NotificationBell";
 import { useDailyCallAvailability } from "@/hooks/useRuntimeFeatures";
@@ -821,7 +825,7 @@ const Chats = () => {
           </button>
           {directCallsAvailable && <button onClick={() => { setCallSessionId(null); setCallMode("video"); }} className="grid h-10 w-10 place-items-center rounded-xl text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary" aria-label={`Start video call with ${activeRoom.displayName}`} title="Start video call"><Video className="w-5 h-5" /></button>}
           {directCallsAvailable && <button onClick={() => { setCallSessionId(null); setCallMode("audio"); }} className="grid h-10 w-10 place-items-center rounded-xl text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary" aria-label={`Start audio call with ${activeRoom.displayName}`} title="Start audio call"><Phone className="w-5 h-5" /></button>}
-          <NotificationBell />
+          {shouldShowConversationNotificationBell(activeRoom.is_group) && <NotificationBell />}
           <button onClick={() => setShowConversationInfo(true)} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Conversation options"><MoreVertical className="w-5 h-5" /></button>
         </header>
 

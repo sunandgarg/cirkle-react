@@ -609,10 +609,10 @@ const Profile = () => {
       </div>
 
       <main className="relative z-10 mx-auto -mt-14 w-full max-w-3xl px-3 sm:-mt-16 sm:px-5">
-        {/* Avatar + Name */}
+        {/* Profile identity */}
         <div className="rounded-[24px] border border-border/80 bg-card p-4 shadow-[0_14px_35px_-22px_rgba(15,23,42,0.45)] sm:p-5">
-          <div className="mb-3 flex items-end gap-3.5 -mt-[58px] sm:gap-4">
-            <div className="flex-shrink-0 relative">
+          <div className="-mt-[58px] mb-3 flex flex-col items-center sm:flex-row sm:items-end sm:gap-4">
+            <div className="relative flex-shrink-0">
               {(displayProfile as any)?.avatar_url ? (
                 <div className="h-[104px] w-[104px] overflow-hidden rounded-full border-[5px] border-card bg-secondary shadow-lg"><img src={(displayProfile as any).avatar_url} alt="Profile" className="h-full w-full object-cover" decoding="async" /></div>
               ) : (
@@ -625,17 +625,17 @@ const Profile = () => {
                 </>
               )}
             </div>
-            <div className="min-w-0 flex-1 overflow-hidden pb-1.5">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <h1 className="break-words text-xl font-black tracking-tight text-foreground">{(displayProfile as any)?.name || "Anonymous"}</h1>
-                {(displayProfile as any)?.is_verified && <BadgeCheck className="w-5 h-5 text-primary flex-shrink-0" />}
+            <div className="mt-3 min-w-0 w-full overflow-hidden text-center sm:mb-1.5 sm:mt-0 sm:flex-1 sm:text-left">
+              <div className="flex min-w-0 items-start justify-center gap-1.5 sm:justify-start">
+                <h1 className="min-w-0 max-w-full break-words text-xl font-black leading-tight tracking-tight text-foreground sm:text-2xl">{(displayProfile as any)?.name || "Anonymous"}</h1>
+                {(displayProfile as any)?.is_verified && <BadgeCheck className="mt-0.5 h-5 w-5 flex-shrink-0 text-primary" />}
               </div>
-              {(displayProfile as any)?.headline && <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{(displayProfile as any).headline}</p>}
+              {(displayProfile as any)?.headline && <p className="mx-auto mt-1 max-w-lg line-clamp-2 text-xs leading-5 text-muted-foreground sm:mx-0">{(displayProfile as any).headline}</p>}
               {/* Slug URL display */}
               {profileSlug && (
-                <div className="flex items-center gap-1 mt-1">
+                <div className="mt-1 flex min-w-0 items-center justify-center gap-1 sm:justify-start">
                   <Link2 className="w-3 h-3 text-muted-foreground flex-shrink-0" />
-                  <span className="text-[10px] text-muted-foreground truncate">cirkle.app/u/{profileSlug}</span>
+                  <span className="min-w-0 truncate text-[10px] text-muted-foreground">cirkle.world/u/{profileSlug}</span>
                   {isOwn && !slugUpdatedAt && (
                     <button onClick={() => { setSlugInput(profileSlug); setEditingSlug(true); }} className="text-[10px] text-primary hover:underline ml-1 flex-shrink-0">Edit</button>
                   )}
