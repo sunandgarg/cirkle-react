@@ -266,4 +266,21 @@ describe("AppSync Events browser client", () => {
     await flushAsyncWork();
     expect(sockets).toHaveLength(2);
   });
+
+  it("closes when the last routed screen unmounts and stays offline beyond 30 seconds", async () => {
+    const { socket, subscribe, unsubscribe } = await connectSubscription(
+      "/forum/iit-all",
+    );
+    socket.receive({ type: "subscribe_success", id: subscribe.id });
+
+    // React route cleanup removes the final listener synchronously. There is
+    // deliberately no grace period that could accumulate AppSync connection
+    // minutes while the member uses another page in Cirkle.
+    unsubscribe();
+    expect(frames(socket)).toContainEqual({ id: subscribe.id, type: "unsubscribe" });
+    expect(socket.closeCalls).toContainEqual({ code: 1000, reason: "idle" });
+
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(sockets).toHaveLength(1);
+  });
 });

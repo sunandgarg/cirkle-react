@@ -2074,9 +2074,8 @@ const Forum = () => {
             <ArrowLeft className="w-5 h-5" />
           </button>
 
-          <div className="relative w-10 h-10 rounded-2xl bg-card flex items-center justify-center flex-shrink-0 shadow-sm ring-1 ring-primary/10 overflow-hidden">
-            <img src="/cirkle-logo.png" alt="" className="w-9 h-9 rounded-xl" />
-            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-[hsl(142,68%,42%)] border-2 border-card" aria-label="Community active" />
+          <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-card p-1.5 shadow-sm ring-1 ring-primary/10">
+            <img src="/cirkle-logo.png" alt="" className="h-full w-full object-contain" />
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[14px] sm:text-[15px] font-bold text-foreground truncate leading-tight">{(activeScopeDef as any)?.label}</p>
