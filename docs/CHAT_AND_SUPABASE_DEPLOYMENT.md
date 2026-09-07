@@ -28,7 +28,7 @@ VITE_API_URL=https://api-react.cirkle.world
 VITE_CHAT_REALTIME_PROVIDER=appsync
 VITE_APPSYNC_HTTP_ENDPOINT=https://hzrd5pmdhvfobbzonf2hffeq5e.appsync-api.ap-south-1.amazonaws.com/event
 VITE_APPSYNC_REALTIME_ENDPOINT=wss://hzrd5pmdhvfobbzonf2hffeq5e.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime
-VITE_DAILY_CALLS_ENABLED=false
+VITE_DAILY_CALLS_ENABLED=true
 ```
 
 Set the API host to `APPSYNC_ENABLED=true` with the matching HTTP endpoint and

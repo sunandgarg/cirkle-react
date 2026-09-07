@@ -137,7 +137,7 @@ instance.
 
 Cloudflare Pages settings:
 
-- Project: `cirkle-react` in Sunand's Cloudflare account (`https://cirkle-react.pages.dev`)
+- Project: `cirkle` in Sunand's Cloudflare account (`https://cirkle-react.pages.dev`)
 - Canonical custom domain after cutover: `https://cirkle.world`
 - Rollout/rollback domain: `https://cirkle-react.cirkle.world`
 - Build command: `pnpm build:pages`
@@ -147,7 +147,7 @@ Cloudflare Pages settings:
 - Public environment value: `VITE_CHAT_REALTIME_PROVIDER=appsync`
 - Public environment value: `VITE_APPSYNC_HTTP_ENDPOINT=https://hzrd5pmdhvfobbzonf2hffeq5e.appsync-api.ap-south-1.amazonaws.com/event`
 - Public environment value: `VITE_APPSYNC_REALTIME_ENDPOINT=wss://hzrd5pmdhvfobbzonf2hffeq5e.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime`
-- Public environment value: `VITE_DAILY_CALLS_ENABLED=false` until Daily is configured on the API
+- Public environment value: `VITE_DAILY_CALLS_ENABLED=true` (the API independently gates this on its protected Daily key)
 - Build environment value: `PNPM_VERSION=11.19.0`
 
 The repository also includes `wrangler.jsonc`, SPA redirects, static security
@@ -156,7 +156,7 @@ an atomic API deployment procedure under `deploy/`.
 
 Never place MySQL, JWT, Google client secret, ZeptoMail, Zavu, OpenAI, Gemini, or any
 AppSync publisher/authorizer secret in Cloudflare Pages browser variables.
-Those belong only on the API server. The `cirkle-react` deployment uses a
+Those belong only on the API server. The `cirkle` Pages deployment uses a
 Lightsail API, private Lightsail managed MySQL, private S3, AppSync Events for
 content-free durable forum/chat/inbox invalidations, and authorized Socket.IO
 for room fallback, personal-state compatibility, and typing/presence. See

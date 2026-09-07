@@ -2,7 +2,7 @@
 
 This is the AWS-backed `cirkle-react` production deployment. The apex and
 `www` hostnames completed their cutover to the Cloudflare Pages project
-`cirkle-react` on 6 September 2026; the API, managed MySQL database, and private
+`cirkle` on 6 September 2026; the API, managed MySQL database, and private
 S3 storage are live on AWS. The existing Supabase project and legacy
 Cloudflare Pages project remain intact as rollback sources; the cutover did not
 delete either one. A separate AWS account now hosts only the AppSync Events
@@ -12,7 +12,7 @@ transport and its required Lambda authorizer/IAM/logging support resources.
 
 ```text
 Browser
-  -> Cloudflare Pages project cirkle-react
+  -> Cloudflare Pages project cirkle
        https://cirkle.world (canonical)
        https://www.cirkle.world
        (rollout/rollback origin: https://cirkle-react.cirkle.world)
@@ -245,7 +245,7 @@ credential is exposed to the browser.
 1. Create/fix the `sunandgarg@cirkle.world` mailbox if that address should receive mail; the ZeptoMail India transport and branded login template are already live-verified with a deliverable Gmail recipient.
 2. Monitor the open CloudFront account-verification case. After AWS removes the account hold, deploy the conditional distribution and test signed/private/public media behavior and cache headers.
 3. Monitor Amazon SES production-access reconsideration. The `cirkle.world` SES identity and DKIM are verified, but do not use SES until AWS approves regional production access and delivery/bounce/complaint acceptance passes.
-4. Configure and live-test OpenAI, Gemini, and Daily credentials where those features are required.
+4. Configure and live-test OpenAI and Gemini credentials where those features are required. Daily is configured for accepted one-to-one chats only.
 5. Confirm that Lightsail changes the Gmail contact from `PendingVerification` to `Valid` and allow the API burst balance to recover after release builds. The isolated MySQL 8.4 restore rehearsal passed with the exact 20-table schema, all 7 migrations, 23 foreign keys, and zero orphan rows.
 6. Enroll root MFA/passkey, configure IAM Identity Center with a scoped operator permission set, switch routine CLI use to `aws configure sso`, and stop using the browser-backed root CLI session. Do not create a permanent root access key.
 7. Retain the complete version-2 manifest, digest, reconciliation output, source-freeze/change-control evidence, and object-hash report in restricted storage. The digest and reconciliation result alone do not prove that every source writer was frozen.
@@ -254,7 +254,7 @@ credential is exposed to the browser.
 ## Apex cutover and rollback
 
 The apex and `www` production hostnames are now attached to Cloudflare Pages
-project `cirkle-react`; `https://cirkle.world` is the canonical frontend. The
+project `cirkle`; `https://cirkle.world` is the canonical frontend. The
 API allowlist contains
 `https://cirkle.world`, `https://www.cirkle.world`,
 `https://cirkle-react.cirkle.world`, and `https://cirkle-react.pages.dev`.
@@ -262,9 +262,9 @@ Keep both hostnames associated through the Pages custom-domain workflow;
 changing a CNAME alone can leave a hostname associated with the wrong Pages
 project. `www` currently serves the same verified Pages artifact as the apex;
 no redirect is configured. If a canonical redirect is added later, verify that
-it preserves paths and query parameters. Retain the legacy `cirkle` Pages
+it preserves paths and query parameters. Retain the legacy `cirkle-supa` Pages
 project, its default `cirkle.pages.dev` hostname, and the last known-good
-`cirkle-react` deployment throughout the rollback window.
+`cirkle` deployment throughout the rollback window.
 
 For frontend rollback, reattach `www` and then the apex to the legacy Pages
 project through its custom-domain workflow and verify DNS/SSL before declaring

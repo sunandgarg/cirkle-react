@@ -1,12 +1,13 @@
 # Cirkle production deployment and apex cutover
 
 This runbook describes the selected production topology and the ordered move of
-`cirkle.world` from the retained legacy Pages project to `cirkle-react`.
+`cirkle.world` from the retained legacy `cirkle-supa` Pages project to the
+production `cirkle` project.
 
 ## Production topology
 
 ```text
-Browser -> Cloudflare Pages project cirkle-react
+Browser -> Cloudflare Pages project cirkle
            -> https://cirkle.world (canonical after cutover)
            -> https://www.cirkle.world (serves the same canonical-tagged artifact)
            -> https://cirkle-react.cirkle.world (rollback/diagnostic origin)
@@ -21,7 +22,7 @@ Background state: both transports close immediately; MySQL is refetched on resum
 Durable truth: MySQL; AppSync envelopes are content-free invalidations only
 ```
 
-The legacy Cloudflare `cirkle` project, its `cirkle.pages.dev` hostname, and the
+The legacy Cloudflare `cirkle-supa` project, its `cirkle.pages.dev` hostname, and the
 Supabase source remain intact during the rollback window. A cutover changes
 routing; it does not authorize deletion from Supabase, the legacy Pages project,
 or AWS.
@@ -39,7 +40,7 @@ Do not move a production hostname until all gates are satisfied:
    ownership, row-count, and S3 object-count parity is recorded.
 5. A fresh encrypted database backup exists outside the managed database's
    primary failure boundary and its checksum is valid.
-6. The old Pages project, previous `cirkle-react` deployment, and prior API
+6. The old `cirkle-supa` project, previous `cirkle` deployment, and prior API
    release remain available for rollback.
 
 MySQL schema changes must be backward-compatible with the immediately previous
@@ -76,7 +77,8 @@ terminates publicly trusted TLS directly.
 
 Provider credentials are optional only when the corresponding product feature
 fails closed. Pages must keep `VITE_DAILY_CALLS_ENABLED=false` until the API has
-a validated `DAILY_API_KEY`. Daily calls are restricted to accepted one-to-one
+a validated `DAILY_API_KEY`; production now satisfies both gates and uses
+`VITE_DAILY_CALLS_ENABLED=true`. Daily calls are restricted to accepted one-to-one
 chats: Forum and group chats expose no call control, and the API rechecks the
 accepted connection plus both active memberships before every token issue.
 Calls can be enabled only when both conditions are true:
@@ -271,10 +273,11 @@ public endpoint.
 
 ## Cloudflare Pages configuration
 
-Use the existing `cirkle-react` project in Sunand's Cloudflare account:
+Use the existing `cirkle` project in Sunand's Cloudflare account. Its retained
+default hostname is `cirkle-react.pages.dev` after the project-name swap:
 
 ```text
-Project: cirkle-react
+Project: cirkle
 Default production URL: https://cirkle-react.pages.dev
 Production branch: main
 Build command: pnpm build:pages
@@ -291,7 +294,7 @@ VITE_API_URL=https://api-react.cirkle.world
 VITE_CHAT_REALTIME_PROVIDER=appsync
 VITE_APPSYNC_HTTP_ENDPOINT=https://hzrd5pmdhvfobbzonf2hffeq5e.appsync-api.ap-south-1.amazonaws.com/event
 VITE_APPSYNC_REALTIME_ENDPOINT=wss://hzrd5pmdhvfobbzonf2hffeq5e.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime
-VITE_DAILY_CALLS_ENABLED=false
+VITE_DAILY_CALLS_ENABLED=true
 PNPM_VERSION=11.19.0
 ```
 
@@ -308,7 +311,7 @@ VITE_API_URL=https://api-react.cirkle.world \
 VITE_CHAT_REALTIME_PROVIDER=appsync \
 VITE_APPSYNC_HTTP_ENDPOINT=https://hzrd5pmdhvfobbzonf2hffeq5e.appsync-api.ap-south-1.amazonaws.com/event \
 VITE_APPSYNC_REALTIME_ENDPOINT=wss://hzrd5pmdhvfobbzonf2hffeq5e.appsync-realtime-api.ap-south-1.amazonaws.com/event/realtime \
-VITE_DAILY_CALLS_ENABLED=false \
+VITE_DAILY_CALLS_ENABLED=true \
 pnpm pages:deploy
 ```
 
@@ -325,9 +328,9 @@ with the legacy Pages project.
 1. Confirm the API CORS allowlist contains apex, `www`, rollback subdomain, and
    Pages default origins. Test both accepted origins and an attacker origin.
 2. Record the legacy project/deployment and current DNS values for rollback.
-3. In the legacy `cirkle` Pages project, remove only the `www.cirkle.world`
+3. In the legacy `cirkle-supa` Pages project, remove only the `www.cirkle.world`
    custom-domain association. Do not delete the project or deployment.
-4. Add `www.cirkle.world` to `cirkle-react`, wait until Cloudflare reports the
+4. Add `www.cirkle.world` to `cirkle`, wait until Cloudflare reports the
    domain and certificate Active, and verify DNS points to the new Pages
    project.
 5. Use `www` as a canary: hard-refresh, open a deep link, complete login and
@@ -369,20 +372,20 @@ production API only after its exact HTTPS origin is temporarily allowlisted.
 
 ### Frontend/domain rollback
 
-If the canary fails, move `www` back to the legacy `cirkle` Pages project
+If the canary fails, move `www` back to the legacy `cirkle-supa` Pages project
 through the custom-domain UI and wait for DNS/certificate Active status. The
 apex remains untouched.
 
 If the apex fails after cutover:
 
 1. Preserve logs and the failing deployment identifier.
-2. Reattach the apex to the legacy `cirkle` Pages project through the
+2. Reattach the apex to the legacy `cirkle-supa` Pages project through the
    custom-domain workflow; verify DNS and TLS.
 3. Reattach or redirect `www` consistently with the restored apex.
 4. Keep the AWS API/database/S3 and imported Supabase source unchanged unless a
    separate, explicitly authorized data incident requires action.
 
-A frontend rollback can also redeploy the previous known-good `cirkle-react`
+A frontend rollback can also redeploy the previous known-good `cirkle`
 commit when the fault is limited to its newest bundle. Never delete the legacy
 project until the rollback window has formally closed.
 

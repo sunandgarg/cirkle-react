@@ -29,7 +29,7 @@ object-hash evidence are sensitive migration artifacts and belong in restricted 
 do not infer the omitted digest suffix from this runbook. AWS managed MySQL and
 private S3 are now the durable production stores, while the API is live on
 Lightsail. Both `cirkle.world` and `www.cirkle.world` are attached to the
-Cloudflare Pages project `cirkle-react`. Supabase remains intact for the agreed
+Cloudflare Pages project `cirkle`. Supabase remains intact for the agreed
 rollback/evidence window but is not a production frontend dependency. Because
 the unchanged legacy `cirkle.pages.dev` remains reachable, the matching final
 exports demonstrate source stability during their observation window rather
