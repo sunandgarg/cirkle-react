@@ -2723,10 +2723,11 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContaine
             const item = timelineItems[virtualRow.index];
             return (
               <div key={item.key} ref={virtualizer.measureElement} data-index={virtualRow.index}
+                className="timeline-virtual-row"
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)` }}>
                 {item.type === "date" ? (
                   <div className="my-3 flex justify-center px-4 pointer-events-none">
-                    <span className="rounded-full border border-white/60 bg-card/80 px-3 py-1 text-[11px] font-semibold text-muted-foreground shadow-sm backdrop-blur-xl dark:border-border/70">{item.date}</span>
+                    <span className="rounded-full border border-white/60 bg-card px-3 py-1 text-[11px] font-semibold text-muted-foreground shadow-sm dark:border-border/70">{item.date}</span>
                   </div>
                 ) : (() => {
               const post = item.post;
@@ -2950,10 +2951,10 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
         </div>}
 
         {/* Compact group-chat bubble */}
-        <div className={`relative min-w-0 max-w-[84%] sm:max-w-[min(72%,44rem)] px-3.5 py-2 shadow-[0_3px_14px_-9px_hsl(var(--foreground)/0.55)] border border-border/30 backdrop-blur-sm ${
+        <div className={`relative min-w-0 max-w-[84%] sm:max-w-[min(72%,44rem)] px-3.5 py-2 shadow-[0_3px_14px_-9px_hsl(var(--foreground)/0.55)] border border-border/30 ${
           isMine
             ? "bg-gradient-to-br from-[hsl(142,54%,91%)] to-[hsl(142,48%,87%)] dark:from-[hsl(152,50%,22%)] dark:to-[hsl(152,48%,18%)] rounded-2xl rounded-br-[5px]"
-            : "bg-card/95 rounded-2xl rounded-bl-[5px]"
+            : "bg-card rounded-2xl rounded-bl-[5px]"
         }`}>
           {!isGrouped && (!isMine || post.is_anonymous) && (
             <div className="flex items-baseline gap-1.5 mb-0.5">

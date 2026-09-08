@@ -217,6 +217,12 @@
     contain-intrinsic-size: auto 76px;
   }
 
+  /* Isolate virtual-row layout without paint containment, which would clip
+     reply affordances and shadows that intentionally extend past a row. */
+  .timeline-virtual-row {
+    contain: layout style;
+  }
+
   .story-ring {
     background: conic-gradient(
       hsl(var(--story-ring)),

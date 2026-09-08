@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   appendForumTestPost,
+  flushForumSnapshotCache,
   getCachedPosts,
   getForumDraft,
   getForumScroll,
@@ -14,7 +15,10 @@ import {
 } from "@/hooks/useForumCache";
 
 describe("forum test-mode messages", () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => {
+    flushForumSnapshotCache();
+    localStorage.clear();
+  });
 
   it("shares the test sandbox between test participants in the same community", () => {
     appendForumTestPost("CAMPUS", "IIT_DELHI", { id: "test-1", author_id: "test-user-1", content: "hello" });
@@ -57,9 +61,21 @@ describe("forum test-mode messages", () => {
 
     expect(getCachedPosts("CAMPUS", "IIT_DELHI", "viewer-a")).toHaveLength(125);
     expect(getCachedPosts("CAMPUS", "IIT_DELHI", "viewer-b")).toEqual([{ id: "viewer-b-message" }]);
+    expect(localStorage.getItem("forum_cache_viewer-a_CAMPUS_IIT_DELHI")).toBeNull();
+    flushForumSnapshotCache();
     const persisted = JSON.parse(localStorage.getItem("forum_cache_viewer-a_CAMPUS_IIT_DELHI") || "[]");
     expect(persisted).toHaveLength(100);
     expect(persisted[0].id).toBe("message-25");
+  });
+
+  it("coalesces rapid room snapshots before touching localStorage", () => {
+    setCachedPosts("GLOBAL", "IIT_ALL", [{ id: "old" }], "viewer-cache");
+    setCachedPosts("GLOBAL", "IIT_ALL", [{ id: "new" }], "viewer-cache");
+
+    expect(localStorage.getItem("forum_cache_viewer-cache_GLOBAL_IIT_ALL")).toBeNull();
+    flushForumSnapshotCache();
+    expect(JSON.parse(localStorage.getItem("forum_cache_viewer-cache_GLOBAL_IIT_ALL") || "[]"))
+      .toEqual([{ id: "new" }]);
   });
 
   it("isolates drafts, scroll positions, and unread state per signed-in user", () => {

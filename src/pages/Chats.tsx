@@ -3,7 +3,7 @@ import {
   X, Phone, Video, MoreVertical, Mic, Paperclip, Lock, Loader2, RotateCcw,
 } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { formatDistanceToNow, format, isToday, isYesterday } from "date-fns";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { cacheMessages, getCachedMessages } from "@/lib/chatCache";
+import { cacheMessages, flushChatCache, getCachedMessages, scheduleChatCache } from "@/lib/chatCache";
 import { convertToWebP } from "@/lib/imageUtils";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -139,6 +139,35 @@ const hydrateChatMedia = async (items: ChatMessage[]): Promise<ChatMessage[]> =>
     : item);
 };
 
+const ChatMessageBubble = memo(({ message, replied, isMine, onRetry, onReply }: {
+  message: ChatMessage;
+  replied?: ChatMessage;
+  isMine: boolean;
+  onRetry: (message: ChatMessage) => void;
+  onReply: (message: ChatMessage) => void;
+}) => {
+  const legacyImage = message.content.startsWith("📷 http") ? message.content.replace("📷 ", "") : null;
+  const imageUrl = message.message_type === "image" ? message.media_url : legacyImage;
+  return (
+    <div className={`flex ${isMine ? "justify-end" : "justify-start"} pb-1`}>
+      <button onClick={() => onRetry(message)} disabled={message.status !== "failed"} className={`text-left max-w-[80%] rounded-2xl px-3.5 py-2 shadow-sm relative group ${isMine ? "bg-primary text-primary-foreground rounded-br-md" : "bg-card text-foreground rounded-bl-md"} ${message.status === "failed" ? "opacity-70" : ""}`}>
+        {replied && <div className={`text-[11px] mb-1 px-2 py-1 rounded-lg border-l-2 truncate ${isMine ? "bg-white/10 border-white/30" : "bg-muted border-primary/30"}`}>{replied.message_type === "image" ? "Photo" : replied.content}</div>}
+        {imageUrl ? <img src={imageUrl} alt="Shared" className="rounded-xl max-h-64 object-cover" loading="lazy" decoding="async" />
+          : message.message_type === "voice" && message.media_url
+            ? <audio controls preload="metadata" src={message.media_url} className="h-10 max-w-full" aria-label="Voice message" />
+            : <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{message.content}</p>}
+        <div className={`flex items-center justify-end gap-1 mt-0.5 ${isMine ? "text-primary-foreground/60" : "text-muted-foreground"}`}>
+          {message.status === "failed" && <><RotateCcw className="w-3 h-3" /><span className="text-[10px]">Retry</span></>}
+          <span className="text-[10px]">{new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+          {isMine && (message.status === "sending" ? <Check className="w-3.5 h-3.5 opacity-50" /> : message.read_by && message.read_by.length > 1 ? <CheckCheck className="w-3.5 h-3.5 text-blue-300" /> : <Check className="w-3.5 h-3.5" />)}
+        </div>
+        <span onClick={(event) => { event.stopPropagation(); onReply(message); }} className="absolute -top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-card border border-border rounded-full p-1 shadow-sm"><Reply className="w-3 h-3 text-muted-foreground" /></span>
+      </button>
+    </div>
+  );
+});
+ChatMessageBubble.displayName = "ChatMessageBubble";
+
 const Chats = () => {
   const navigate = useNavigate();
   const { roomId } = useParams<{ roomId: string }>();
@@ -163,7 +192,6 @@ const Chats = () => {
   const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
   const [showConversationInfo, setShowConversationInfo] = useState(false);
   const [newMessageCount, setNewMessageCount] = useState(0);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const roomChannelRef = useRef<{
@@ -182,6 +210,7 @@ const Chats = () => {
   const outboxPreviewUrlsRef = useRef(new Map<string, string>());
   const messagesRef = useRef<ChatMessage[]>([]);
   const realtimeRoomIdRef = useRef<string | null>(null);
+  const cacheReadyRoomRef = useRef<string | null>(null);
 
   const { data: friendIds = [] } = useQuery({
     queryKey: ["friend-ids-chat", user?.id],
@@ -287,6 +316,7 @@ const Chats = () => {
     const changedRoom = realtimeRoomIdRef.current !== activeRoom.id;
     realtimeRoomIdRef.current = activeRoom.id;
     if (changedRoom) {
+      cacheReadyRoomRef.current = null;
       setMessages([]);
       messagesRef.current = [];
       setHasOlder(false);
@@ -297,7 +327,10 @@ const Chats = () => {
     let authoritativeFailed = false;
     void getCachedMessages<ChatMessage>(user.id, activeRoom.id).then((cached) => {
       if (!cancelled && !authoritativeFailed && cached.length) void hydrateChatMedia(cached).then((hydrated) => {
-        if (!cancelled && !authoritativeFailed) setMessages((current) => mergeChatTimeline(current, hydrated, activeRoom.id));
+        if (!cancelled && !authoritativeFailed) {
+          cacheReadyRoomRef.current = activeRoom.id;
+          setMessages((current) => mergeChatTimeline(current, hydrated, activeRoom.id));
+        }
       });
     });
 
@@ -311,6 +344,7 @@ const Chats = () => {
       if (error) { authoritativeFailed = true; setMessages([]); toast.error("Could not refresh messages"); return; }
       const page = await hydrateChatMedia(((data || []) as ChatMessage[]).reverse());
       if (cancelled) return;
+      cacheReadyRoomRef.current = activeRoom.id;
       // Cache hydration, the server query and Realtime all run concurrently.
       // Merge instead of replacing so a message arriving during initial load
       // can never be erased by a slower response.
@@ -508,12 +542,14 @@ const Chats = () => {
   useEffect(() => {
     if (!activeRoom) return;
     messagesRef.current = messages;
-    if (user?.id) void cacheMessages(user.id, activeRoom.id, messages);
-    if (messages.length && !prependRef.current && followLiveRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (user?.id && cacheReadyRoomRef.current === activeRoom.id) {
+      scheduleChatCache(user.id, activeRoom.id, messages);
     }
-    prependRef.current = false;
   }, [activeRoom, messages, user?.id]);
+
+  useEffect(() => () => {
+    if (user?.id && activeRoom?.id) void flushChatCache(user.id, activeRoom.id);
+  }, [activeRoom?.id, user?.id]);
 
   const loadOlder = async () => {
     if (!activeRoom || !messages.length || loadingOlder) return;
@@ -646,7 +682,7 @@ const Chats = () => {
     try { await persistOutboxItem(item); } catch { toast.error("Message queued. It will retry automatically."); }
   };
 
-  const retryMessage = async (message: ChatMessage) => {
+  const retryMessage = useCallback(async (message: ChatMessage) => {
     if (message.status !== "failed") return;
     const queued = await listChatOutboxItems(message.sender_id);
     const item = queued.find((candidate) => candidate.id === message.client_id);
@@ -655,7 +691,7 @@ const Chats = () => {
     await putChatOutboxItem(retry);
     setMessages((current) => current.map((entry) => entry.client_id === retry.id ? { ...entry, status: "sending" } : entry));
     try { await persistOutboxItem(retry); } catch { toast.error("Still offline. Retry is scheduled."); }
-  };
+  }, [persistOutboxItem]);
 
   const sendImage = async (file: File) => {
     if (!user || !activeRoom) return;
@@ -772,6 +808,7 @@ const Chats = () => {
     });
     return rows;
   }, [messages]);
+  const messagesById = useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
   const messageVirtualizer = useVirtualizer({
     count: timelineRows.length,
     getScrollElement: () => scrollRef.current,
@@ -783,7 +820,9 @@ const Chats = () => {
       return 66;
     },
     getItemKey: (index) => timelineRows[index]?.key || index,
-    overscan: 14,
+    overscan: 6,
+    useAnimationFrameWithResizeObserver: true,
+    isScrollingResetDelay: 140,
   });
   const scrollToLatest = useCallback(() => {
     if (!timelineRows.length) return;
@@ -793,7 +832,12 @@ const Chats = () => {
   }, [messageVirtualizer, timelineRows.length]);
 
   useEffect(() => {
-    if (!activeRoom || !timelineRows.length || prependRef.current || !followLiveRef.current) return;
+    if (!activeRoom || !timelineRows.length) return;
+    if (prependRef.current) {
+      prependRef.current = false;
+      return;
+    }
+    if (!followLiveRef.current) return;
     requestAnimationFrame(() => messageVirtualizer.scrollToIndex(timelineRows.length - 1, { align: "end" }));
   }, [activeRoom, messageVirtualizer, timelineRows.length]);
 
@@ -842,38 +886,20 @@ const Chats = () => {
               if (!row) return null;
               return (
                 <div key={row.key} data-index={virtualRow.index} ref={messageVirtualizer.measureElement}
+                  className="timeline-virtual-row"
                   style={{ position: "absolute", left: 0, top: 0, width: "100%", transform: `translateY(${virtualRow.start}px)` }}>
                   {row.type === "date" ? (
                     <div className="flex items-center justify-center py-3"><span className="text-[11px] bg-card/90 text-muted-foreground px-3 py-1 rounded-lg shadow-sm font-medium">{row.label}</span></div>
                   ) : (() => {
                 const message = row.message;
-                const isMine = message.sender_id === user?.id;
-                const legacyImage = message.content.startsWith("📷 http") ? message.content.replace("📷 ", "") : null;
-                const imageUrl = message.message_type === "image" ? message.media_url : legacyImage;
-                const replied = message.reply_to_message_id ? messages.find((item) => item.id === message.reply_to_message_id) : null;
-                return (
-                  <div className={`flex ${isMine ? "justify-end" : "justify-start"} pb-1`}>
-                    <button onClick={() => retryMessage(message)} disabled={message.status !== "failed"} className={`text-left max-w-[80%] rounded-2xl px-3.5 py-2 shadow-sm relative group ${isMine ? "bg-primary text-primary-foreground rounded-br-md" : "bg-card text-foreground rounded-bl-md"} ${message.status === "failed" ? "opacity-70" : ""}`}>
-                      {replied && <div className={`text-[11px] mb-1 px-2 py-1 rounded-lg border-l-2 truncate ${isMine ? "bg-white/10 border-white/30" : "bg-muted border-primary/30"}`}>{replied.message_type === "image" ? "Photo" : replied.content}</div>}
-                      {imageUrl ? <img src={imageUrl} alt="Shared" className="rounded-xl max-h-64 object-cover" loading="lazy" decoding="async" />
-                        : message.message_type === "voice" && message.media_url
-                          ? <audio controls preload="metadata" src={message.media_url} className="h-10 max-w-full" aria-label="Voice message" />
-                          : <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{message.content}</p>}
-                      <div className={`flex items-center justify-end gap-1 mt-0.5 ${isMine ? "text-primary-foreground/60" : "text-muted-foreground"}`}>
-                        {message.status === "failed" && <><RotateCcw className="w-3 h-3" /><span className="text-[10px]">Retry</span></>}
-                        <span className="text-[10px]">{new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                        {isMine && (message.status === "sending" ? <Check className="w-3.5 h-3.5 opacity-50" /> : message.read_by && message.read_by.length > 1 ? <CheckCheck className="w-3.5 h-3.5 text-blue-300" /> : <Check className="w-3.5 h-3.5" />)}
-                      </div>
-                      <span onClick={(event) => { event.stopPropagation(); setReplyTo(message); }} className="absolute -top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-card border border-border rounded-full p-1 shadow-sm"><Reply className="w-3 h-3 text-muted-foreground" /></span>
-                    </button>
-                  </div>
-                );
+                const replied = message.reply_to_message_id ? messagesById.get(message.reply_to_message_id) : undefined;
+                return <ChatMessageBubble message={message} replied={replied}
+                  isMine={message.sender_id === user?.id} onRetry={retryMessage} onReply={setReplyTo} />;
                   })()}
                 </div>
               );
             })}
           </div>
-          <div ref={messagesEndRef} className="h-px" />
         </div>
 
         {newMessageCount > 0 && <button onClick={scrollToLatest} className="absolute bottom-24 right-4 z-30 rounded-full bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground shadow-lg">{newMessageCount} new {newMessageCount === 1 ? "message" : "messages"}</button>}

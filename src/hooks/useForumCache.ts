@@ -3,6 +3,17 @@ const CACHE_TS_PREFIX = "forum_cache_ts_";
 const MAX_CACHE_AGE_MS = 5 * 60 * 1000; // 5 minutes stale threshold
 const MAX_TOTAL_SIZE = 1024 * 1024; // keep localStorage lean; IndexedDB owns deep history
 const LOCAL_SNAPSHOT_MESSAGES = 100;
+const LOCAL_SNAPSHOT_WRITE_DELAY_MS = 700;
+
+type PendingLocalSnapshot = {
+  cacheKey: string;
+  timestampKey: string;
+  posts: any[];
+  updatedAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+};
+
+const pendingLocalSnapshots = new Map<string, PendingLocalSnapshot>();
 
 // ─── Layer 1: In-memory singleton cache ───
 class MessageCacheStore {
@@ -72,29 +83,62 @@ export const isCacheStale = (scopeType: string, scopeKey: string, viewerId = "an
   }
 };
 
-export const setCachedPosts = (scopeType: string, scopeKey: string, posts: any[], viewerId = "anonymous") => {
-  // Always set in memory
-  messageCache.set(scopeType, scopeKey, posts, viewerId);
-
+const persistLocalSnapshot = (snapshot: PendingLocalSnapshot) => {
   try {
-    const key = `${CACHE_PREFIX}${viewerId}_${scopeType}_${scopeKey}`;
-    const tsKey = `${CACHE_TS_PREFIX}${viewerId}_${scopeType}_${scopeKey}`;
-    const serialized = JSON.stringify(posts.slice(-LOCAL_SNAPSHOT_MESSAGES));
-    
+    const serialized = JSON.stringify(snapshot.posts);
     if (serialized.length > MAX_TOTAL_SIZE) return;
-    
+
     try {
-      localStorage.setItem(key, serialized);
-      localStorage.setItem(tsKey, Date.now().toString());
+      localStorage.setItem(snapshot.cacheKey, serialized);
+      localStorage.setItem(snapshot.timestampKey, snapshot.updatedAt.toString());
     } catch {
       evictOldCaches();
       try {
-        localStorage.setItem(key, serialized);
-        localStorage.setItem(tsKey, Date.now().toString());
+        localStorage.setItem(snapshot.cacheKey, serialized);
+        localStorage.setItem(snapshot.timestampKey, snapshot.updatedAt.toString());
       } catch {}
     }
   } catch {}
 };
+
+export const flushForumSnapshotCache = () => {
+  const snapshots = [...pendingLocalSnapshots.values()];
+  pendingLocalSnapshots.clear();
+  snapshots.forEach((snapshot) => {
+    if (snapshot.timer) clearTimeout(snapshot.timer);
+    persistLocalSnapshot(snapshot);
+  });
+};
+
+export const setCachedPosts = (scopeType: string, scopeKey: string, posts: any[], viewerId = "anonymous") => {
+  // Memory is the hot path. Synchronous JSON serialization/localStorage writes
+  // are deferred so realtime updates never block a scroll or touch frame.
+  messageCache.set(scopeType, scopeKey, posts, viewerId);
+  const identity = `${viewerId}_${scopeType}_${scopeKey}`;
+  const previous = pendingLocalSnapshots.get(identity);
+  if (previous?.timer) clearTimeout(previous.timer);
+  const snapshot: PendingLocalSnapshot = {
+    cacheKey: `${CACHE_PREFIX}${identity}`,
+    timestampKey: `${CACHE_TS_PREFIX}${identity}`,
+    posts: posts.slice(-LOCAL_SNAPSHOT_MESSAGES),
+    updatedAt: Date.now(),
+    timer: null,
+  };
+  snapshot.timer = setTimeout(() => {
+    pendingLocalSnapshots.delete(identity);
+    persistLocalSnapshot(snapshot);
+  }, LOCAL_SNAPSHOT_WRITE_DELAY_MS);
+  pendingLocalSnapshots.set(identity, snapshot);
+};
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushForumSnapshotCache();
+  });
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", flushForumSnapshotCache);
+}
 
 // ─── Unread dots persistence ───
 const UNREAD_PREFIX = "forum_v2_unread_dots_";
