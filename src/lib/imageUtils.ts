@@ -9,7 +9,9 @@
  * @param maxWidth - Max width in px, default 1200
  * @returns A new File in WebP format
  */
-export const COMMUNITY_IMAGE_TARGET_BYTES = 800 * 1024;
+export const COMMUNITY_IMAGE_TARGET_BYTES = 512 * 1024;
+export const FILE_UPLOAD_LIMIT_BYTES = 512 * 1024;
+export const IMAGE_SOURCE_LIMIT_BYTES = 10 * 1024 * 1024;
 
 export const nextCommunityImageCompression = (
   width: number,
@@ -29,6 +31,10 @@ export const convertToWebP = (
     // If not an image, return as-is
     if (!file.type.startsWith("image/")) {
       resolve(file);
+      return;
+    }
+    if (file.size > IMAGE_SOURCE_LIMIT_BYTES) {
+      reject(new Error("Image must be under 10 MB before compression"));
       return;
     }
 
@@ -85,60 +91,22 @@ const canvasBlob = (canvas: HTMLCanvasElement, type: string, quality?: number) =
   });
 
 /**
- * Compress a profile or cover photo without changing it to WebP.
- * JPEG remains JPEG and PNG remains PNG. The encoder targets at least a 30%
- * byte reduction and caps the result below the avatars bucket limit.
+ * Convert a profile or cover photo to WebP and keep it below the common
+ * 0.5 MiB stored-object limit.
  */
-export const compressProfileImage = async (
-  file: File,
-  maxWidth: number,
-  targetRatio = 0.7,
-): Promise<File> => {
-  if (!['image/jpeg', 'image/png'].includes(file.type)) {
-    throw new Error('Choose a JPEG or PNG image');
+export const compressProfileImage = async (file: File, maxWidth: number): Promise<File> => {
+  if (!file.type.startsWith("image/")) throw new Error("Choose an image file");
+  if (file.size > IMAGE_SOURCE_LIMIT_BYTES) throw new Error("Image must be under 10 MB");
+  return convertToWebP(file, 0.82, maxWidth, COMMUNITY_IMAGE_TARGET_BYTES);
+};
+
+export const assertSmallFile = (file: Pick<File, "size" | "type">): void => {
+  if (file.type.startsWith("image/")) {
+    if (file.size > IMAGE_SOURCE_LIMIT_BYTES) throw new Error("Image must be under 10 MB before compression");
+    return;
   }
-  if (file.size > 25 * 1024 * 1024) throw new Error('Image must be under 25 MB');
-
-  const image = new Image();
-  const objectUrl = URL.createObjectURL(file);
-  try {
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error('This image could not be opened'));
-      image.src = objectUrl;
-    });
-
-    let width = Math.min(image.naturalWidth, maxWidth);
-    let height = Math.max(1, Math.round(image.naturalHeight * (width / image.naturalWidth)));
-    const targetBytes = Math.min(Math.floor(file.size * targetRatio), 4_500_000);
-    const mime = file.type;
-    let quality = mime === 'image/jpeg' ? 0.88 : undefined;
-    let blob: Blob | null = null;
-
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(width));
-      canvas.height = Math.max(1, Math.round(height));
-      const context = canvas.getContext('2d', { alpha: mime === 'image/png' });
-      if (!context) throw new Error('Image processing is unavailable in this browser');
-      context.imageSmoothingEnabled = true;
-      context.imageSmoothingQuality = 'high';
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      blob = await canvasBlob(canvas, mime, quality);
-      if (blob.size <= targetBytes || width <= 64 || height <= 64) break;
-      if (mime === 'image/jpeg' && quality && quality > 0.54) quality = Math.max(0.54, quality - 0.09);
-      else {
-        width *= 0.86;
-        height *= 0.86;
-      }
-    }
-
-    if (!blob) throw new Error('Image compression failed');
-    const extension = mime === 'image/png' ? 'png' : 'jpg';
-    const baseName = file.name.replace(/\.[^.]+$/, '') || 'profile-photo';
-    return new File([blob], `${baseName}.${extension}`, { type: mime, lastModified: Date.now() });
-  } finally {
-    URL.revokeObjectURL(objectUrl);
+  if (file.size > FILE_UPLOAD_LIMIT_BYTES) {
+    throw new Error("PDFs, documents, audio, and video must be 0.5 MB or smaller");
   }
 };
 

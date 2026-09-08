@@ -68,7 +68,7 @@ const schema = z.object({
   CLOUDFRONT_KEY_PAIR_ID: z.string().min(8).max(128).optional(),
   CLOUDFRONT_PRIVATE_KEY_BASE64: z.string().min(100).optional(),
   STORAGE_SIGNING_SECRET: z.string().min(16),
-  MAX_UPLOAD_BYTES: z.coerce.number().int().positive().max(20 * 1024 * 1024).default(20 * 1024 * 1024),
+  MAX_UPLOAD_BYTES: z.coerce.number().int().positive().max(20 * 1024 * 1024).default(10 * 1024 * 1024),
   MOBILE_TEST_MODE: booleanString,
   MOBILE_TEST_PHONES: z.string().default(""),
   ENABLE_SEED_DATA: booleanString,

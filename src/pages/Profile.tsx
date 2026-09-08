@@ -503,8 +503,7 @@ const Profile = () => {
     setUploadingPhoto(profileField);
     try {
       const optimized = await compressProfileImage(file, field === "cover_photo_url" ? 1920 : 800);
-      const extension = optimized.type === "image/png" ? "png" : "jpg";
-      const path = `${user.id}/${field}-${Date.now()}.${extension}`;
+      const path = `${user.id}/${field}-${Date.now()}.webp`;
       const { error: uploadError } = await supabase.storage.from(bucket).upload(path, optimized, { upsert: false, contentType: optimized.type, cacheControl: "31536000" });
       if (uploadError) throw uploadError;
       const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
@@ -512,7 +511,7 @@ const Profile = () => {
       if (profileError) throw profileError;
       await refetchProfile();
       await refetchAuthProfile();
-      toast.success("Photo updated", { description: "Optimized toward a 30% size reduction while preserving JPEG/PNG format." });
+      toast.success("Photo updated", { description: "Converted to WebP and kept below 0.5 MB." });
     } catch (err: any) { toast.error(err.message || "Photo upload failed"); }
     finally { setUploadingPhoto(null); }
   };

@@ -5,7 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { convertToWebP } from "@/lib/imageUtils";
+import { convertToWebP, IMAGE_SOURCE_LIMIT_BYTES } from "@/lib/imageUtils";
 
 const getInitials = (name?: string | null): string => {
   if (!name) return "U";
@@ -60,7 +60,8 @@ const PostComposer = () => {
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 10 * 1024 * 1024) { toast.error("File must be under 10MB"); return; }
+    if (!file.type.startsWith("image/")) { toast.error("Choose an image file"); return; }
+    if (file.size > IMAGE_SOURCE_LIMIT_BYTES) { toast.error("Image must be under 10 MB before compression"); return; }
     setImageFile(file);
     setImagePreview(URL.createObjectURL(file));
     setExpanded(true);
@@ -142,7 +143,7 @@ const PostComposer = () => {
             )}
           </div>
         </div>
-        <input ref={fileInputRef} type="file" accept="image/*,video/*" className="hidden" onChange={handleImageSelect} />
+        <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
       </div>
     </div>
   );

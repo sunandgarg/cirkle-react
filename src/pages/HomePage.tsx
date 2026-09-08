@@ -1093,8 +1093,7 @@ const HomePage = () => {
                 if (!file || !user) return;
                 const { compressProfileImage } = await import("@/lib/imageUtils");
                 const optimized = await compressProfileImage(file, isAvatar ? 800 : 1920);
-                const extension = optimized.type === "image/png" ? "png" : "jpg";
-                const path = `${user.id}/${step.key}-${Date.now()}.${extension}`;
+                const path = `${user.id}/${step.key}-${Date.now()}.webp`;
                 const { error } = await supabase.storage.from("avatars").upload(path, optimized, { upsert: false, contentType: optimized.type, cacheControl: "31536000" });
                 if (error) {
                   toast.error("Upload failed");

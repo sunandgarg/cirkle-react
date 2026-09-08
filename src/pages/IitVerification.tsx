@@ -16,6 +16,7 @@ import { loadOnboardingProgress, saveOnboardingProgress } from "@/lib/onboarding
 import { readEdgeFunctionError } from "@/lib/edgeFunctionError";
 import { isMissingAuthIdentityError } from "@/lib/authSessionRecovery";
 import { reportError } from "@/lib/errorTelemetry";
+import { assertSmallFile, convertToWebP } from "@/lib/imageUtils";
 
 const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) => {
   const officialUrl = defaultIitLogo(iit.studentDomain);
@@ -419,18 +420,20 @@ const IitVerification = () => {
       toast.error("Upload a PDF, JPG, PNG, or WebP file");
       return;
     }
-    if (documentFile.size > 10 * 1024 * 1024) {
-      toast.error("Document must be smaller than 10 MB");
-      return;
-    }
     setLoading(true);
     try {
       if (!user) throw new Error("Your session expired. Please sign in again.");
-      const extension = documentFile.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
+      assertSmallFile(documentFile);
+      const uploadFile = documentFile.type.startsWith("image/")
+        ? await convertToWebP(documentFile, 0.8, 1600)
+        : documentFile;
+      const extension = uploadFile.type === "image/webp"
+        ? "webp"
+        : uploadFile.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
       const path = `${user.id}/${crypto.randomUUID()}.${extension}`;
-      const { error: uploadError } = await supabase.storage.from("verification-documents").upload(path, documentFile, {
+      const { error: uploadError } = await supabase.storage.from("verification-documents").upload(path, uploadFile, {
         cacheControl: "3600",
-        contentType: documentFile.type,
+        contentType: uploadFile.type,
         upsert: false,
       });
       if (uploadError) throw uploadError;
@@ -441,8 +444,8 @@ const IitVerification = () => {
         document_type: documentType,
         document_path: path,
         original_filename: documentFile.name,
-        mime_type: documentFile.type,
-        file_size: documentFile.size,
+        mime_type: uploadFile.type,
+        file_size: uploadFile.size,
       });
       if (insertError) {
         await supabase.storage.from("verification-documents").remove([path]);
@@ -778,7 +781,7 @@ const IitVerification = () => {
               <label className="min-h-40 rounded-2xl border-2 border-dashed border-border hover:border-primary bg-card flex flex-col items-center justify-center text-center px-6 cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-primary">
                 <FileUp className="w-7 h-7 text-primary mb-3" />
                 <span className="text-sm font-semibold text-foreground">{documentFile ? documentFile.name : "Choose your document"}</span>
-                <span className="text-xs text-muted-foreground mt-1">PDF, JPG, PNG, or WebP · maximum 10 MB</span>
+                <span className="text-xs text-muted-foreground mt-1">Images are converted to WebP; stored files must be 0.5 MB or smaller</span>
                 <input type="file" className="sr-only" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => setDocumentFile(event.target.files?.[0] || null)} />
               </label>
               <div className="rounded-xl bg-primary/5 border border-primary/15 p-3 flex gap-3">

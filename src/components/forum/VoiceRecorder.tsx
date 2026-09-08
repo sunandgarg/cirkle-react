@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { Trash2, Send, Pause, Play, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { FILE_UPLOAD_LIMIT_BYTES } from "@/lib/imageUtils";
 
 interface VoiceRecorderProps {
   userId: string;
@@ -43,7 +44,7 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false, bucket = "
   const onSendRef = useRef(onSend);
   const durationRef = useRef(0);
   const sendAfterStopRef = useRef(false);
-  const maxDuration = localOnly ? 120 : 300;
+  const maxDuration = localOnly ? 120 : 55;
 
   useEffect(() => { onCancelRef.current = onCancel; }, [onCancel]);
   useEffect(() => { onSendRef.current = onSend; }, [onSend]);
@@ -65,6 +66,7 @@ const VoiceRecorder = ({ userId, onSend, onCancel, localOnly = false, bucket = "
     setIsUploading(true);
     try {
       if (blob.size === 0 || seconds < 1) throw new Error("Record at least one second before sending.");
+      if (!localOnly && blob.size > FILE_UPLOAD_LIMIT_BYTES) throw new Error("Voice notes must be 0.5 MB or smaller. Record a shorter note.");
       if (localOnly) {
         const dataUrl = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();

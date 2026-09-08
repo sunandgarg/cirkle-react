@@ -1,30 +1,29 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { getSignedUrl as getCloudFrontSignedUrl } from "@aws-sdk/cloudfront-signer";
 import type { Express } from "express";
 import { config } from "../config.js";
 import { ApiError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
-import { sha256 } from "../security/crypto.js";
 import { canUseForumScope } from "../security/forumScope.js";
 import type { RequestContext } from "../types.js";
 import { writeAudit } from "./audit.js";
 import { isDeletedForEveryone, mediaReferencesRevoked } from "../security/tombstone.js";
 import { deleteObjectBytes, putObjectNew, readObjectBytes } from "./objectStore.js";
 import { hasActiveChatMembership } from "../realtime/chatMembership.js";
+import { normalizeUpload, STORED_UPLOAD_LIMIT_BYTES } from "./uploadTransform.js";
 
 interface BucketPolicy { visibility: "public" | "private"; max: number; mime: RegExp; admin?: boolean }
-const mb = 1024 * 1024;
 const buckets: Record<string, BucketPolicy> = {
-  avatars: { visibility: "public", max: 5 * mb, mime: /^image\/(jpeg|png|webp|gif)$/ },
-  "nav-icons": { visibility: "public", max: 2 * mb, mime: /^(image\/(jpeg|png|webp|svg\+xml))$/, admin: true },
-  "institute-logos": { visibility: "public", max: 2 * mb, mime: /^(image\/(jpeg|png|webp|svg\+xml))$/, admin: true },
-  "entity-logos": { visibility: "public", max: 2 * mb, mime: /^image\/(jpeg|png|webp)$/ },
-  stories: { visibility: "private", max: 20 * mb, mime: /^(image\/(jpeg|png|webp|gif)|video\/(mp4|webm))$/ },
-  "post-images": { visibility: "private", max: 20 * mb, mime: /^image\/(jpeg|png|webp|gif)$/ },
-  "forum-files": { visibility: "private", max: 20 * mb, mime: /^(application\/(pdf|zip|vnd\.openxmlformats-officedocument\..+)|text\/plain|image\/(jpeg|png|webp))$/ },
-  "voice-notes": { visibility: "private", max: 15 * mb, mime: /^audio\/(webm|ogg|mpeg|mp4|wav)$/ },
-  "chat-media": { visibility: "private", max: 20 * mb, mime: /^(image\/(jpeg|png|webp|gif)|audio\/(webm|ogg|mpeg|mp4|wav)|application\/pdf)$/ },
-  "verification-documents": { visibility: "private", max: 10 * mb, mime: /^(application\/pdf|image\/(jpeg|png|webp))$/ },
+  avatars: { visibility: "public", max: STORED_UPLOAD_LIMIT_BYTES, mime: /^image\/webp$/ },
+  "nav-icons": { visibility: "public", max: STORED_UPLOAD_LIMIT_BYTES, mime: /^image\/webp$/, admin: true },
+  "institute-logos": { visibility: "public", max: STORED_UPLOAD_LIMIT_BYTES, mime: /^image\/webp$/, admin: true },
+  "entity-logos": { visibility: "public", max: STORED_UPLOAD_LIMIT_BYTES, mime: /^image\/webp$/ },
+  stories: { visibility: "private", max: STORED_UPLOAD_LIMIT_BYTES, mime: /^(image\/webp|video\/(mp4|webm))$/ },
+  "post-images": { visibility: "private", max: STORED_UPLOAD_LIMIT_BYTES, mime: /^image\/webp$/ },
+  "forum-files": { visibility: "private", max: STORED_UPLOAD_LIMIT_BYTES, mime: /^(application\/(pdf|zip|msword|vnd\.ms-(excel|powerpoint)|vnd\.openxmlformats-officedocument\..+|vnd\.oasis\.opendocument\..+)|text\/plain|image\/webp)$/ },
+  "voice-notes": { visibility: "private", max: STORED_UPLOAD_LIMIT_BYTES, mime: /^audio\/(webm|ogg|mpeg|mp4|wav)$/ },
+  "chat-media": { visibility: "private", max: STORED_UPLOAD_LIMIT_BYTES, mime: /^(image\/webp|audio\/(webm|ogg|mpeg|mp4|wav)|application\/pdf)$/ },
+  "verification-documents": { visibility: "private", max: STORED_UPLOAD_LIMIT_BYTES, mime: /^(application\/pdf|image\/webp)$/ },
 };
 
 const admin = (ctx: RequestContext): boolean => ctx.auth.role === "admin" || ctx.auth.role === "owner";
@@ -157,11 +156,14 @@ export async function storeUpload(bucket: string, objectPathValue: string, file:
   }
   if (rules.admin && !admin(ctx)) throw new ApiError(403, "admin_required", "Administrator access is required for this bucket");
   if (!ownsPath(ctx, bucket, objectPath)) throw new ApiError(403, "invalid_storage_prefix", "Uploads must use your user ID as the first path segment");
-  if (!rules.mime.test(file.mimetype) || file.size > Math.min(rules.max, config.MAX_UPLOAD_BYTES)) throw new ApiError(415, "file_not_allowed", "File type or size is not allowed for this bucket");
+  const normalizedFile = await normalizeUpload(file);
+  if (!rules.mime.test(normalizedFile.mimetype) || normalizedFile.size > Math.min(rules.max, STORED_UPLOAD_LIMIT_BYTES)) {
+    throw new ApiError(415, "file_not_allowed", "File type or compressed size is not allowed for this bucket");
+  }
   const options = optionsValue && typeof optionsValue === "object" ? optionsValue as Record<string, unknown> : {};
   assertUploadOverwriteAllowed(bucket, options.upsert === true);
   const objectKey = `${bucket}/${objectPath}`;
-  const digest = sha256(file.buffer.toString("base64"));
+  const digest = createHash("sha256").update(normalizedFile.buffer).digest("hex");
   if (options.upsert === true) {
     const existing = await prisma.fileObject.findUnique({ where: { object_key: objectKey } });
     // Retried outbox uploads are idempotent. Never rewrite bytes that have
@@ -180,7 +182,7 @@ export async function storeUpload(bucket: string, objectPathValue: string, file:
       SELECT id FROM users WHERE id = ${ctx.auth.id} AND status = 'active' LIMIT 1 FOR SHARE
     `;
     if (active.length !== 1) throw new ApiError(401, "account_unavailable", "This account is unavailable");
-    try { await putObjectNew(objectKey, file.buffer, file.mimetype); }
+    try { await putObjectNew(objectKey, normalizedFile.buffer, normalizedFile.mimetype); }
     catch (error) {
       const code = (error as { code?: string; name?: string; $metadata?: { httpStatusCode?: number } }).code;
       const name = (error as { name?: string }).name;
@@ -191,8 +193,8 @@ export async function storeUpload(bucket: string, objectPathValue: string, file:
     try {
       return await tx.fileObject.upsert({
         where: { object_key: objectKey },
-        create: { uploaded_by: ctx.auth.id, bucket, object_key: objectKey, original_name: file.originalname.slice(0, 255), mime_type: file.mimetype, size_bytes: file.size, visibility: rules.visibility, sha256: digest },
-        update: { uploaded_by: ctx.auth.id, original_name: file.originalname.slice(0, 255), mime_type: file.mimetype, size_bytes: file.size, visibility: rules.visibility, sha256: digest, status: "ready", deleted_at: null },
+        create: { uploaded_by: ctx.auth.id, bucket, object_key: objectKey, original_name: normalizedFile.originalname.slice(0, 255), mime_type: normalizedFile.mimetype, size_bytes: normalizedFile.size, visibility: rules.visibility, sha256: digest },
+        update: { uploaded_by: ctx.auth.id, original_name: normalizedFile.originalname.slice(0, 255), mime_type: normalizedFile.mimetype, size_bytes: normalizedFile.size, visibility: rules.visibility, sha256: digest, status: "ready", deleted_at: null },
       });
     } catch (error) {
       // A brand-new path has no prior bytes to preserve. Avoid leaving an
@@ -201,7 +203,7 @@ export async function storeUpload(bucket: string, objectPathValue: string, file:
       throw error;
     }
   }, { timeout: 15_000 });
-  await writeAudit({ actor_id: ctx.auth.id, action: "storage.upload", resource_type: "file", resource_id: metadata.id, ip: ctx.ip, metadata: { bucket, path: objectPath, size: file.size, mime: file.mimetype } });
+  await writeAudit({ actor_id: ctx.auth.id, action: "storage.upload", resource_type: "file", resource_id: metadata.id, ip: ctx.ip, metadata: { bucket, path: objectPath, original_size: file.size, stored_size: normalizedFile.size, mime: normalizedFile.mimetype } });
   return { path: objectPath, fullPath: objectKey };
 }
 

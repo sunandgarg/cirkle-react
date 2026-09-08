@@ -1,15 +1,33 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { config } from "../config.js";
 import { ApiError, asyncHandler } from "../lib/errors.js";
 import { requireAuth } from "../security/middleware.js";
 import { createSignedUrl, loadObject, removeObjects, storeUpload, verifySignedUrl } from "../services/storage.js";
+import { IMAGE_SOURCE_LIMIT_BYTES } from "../services/uploadTransform.js";
 
 export const storageRouter: Router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.MAX_UPLOAD_BYTES, files: 1, fields: 10 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: Math.min(config.MAX_UPLOAD_BYTES, IMAGE_SOURCE_LIMIT_BYTES), files: 1, fields: 10 } });
+let uploadsInFlight = 0;
+const limitConcurrentUploads: RequestHandler = (_req, res, next) => {
+  if (uploadsInFlight >= 2) {
+    next(new ApiError(429, "uploads_busy", "Two uploads are already being processed. Please retry in a moment."));
+    return;
+  }
+  uploadsInFlight += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    uploadsInFlight = Math.max(0, uploadsInFlight - 1);
+  };
+  res.once("finish", release);
+  res.once("close", release);
+  next();
+};
 
-storageRouter.post("/upload", requireAuth, upload.single("file"), asyncHandler(async (req, res) => {
+storageRouter.post("/upload", requireAuth, limitConcurrentUploads, upload.single("file"), asyncHandler(async (req, res) => {
   if (!req.file) throw new ApiError(400, "file_required", "Upload file is required");
   const body = z.object({ bucket: z.string(), path: z.string(), options: z.string().optional() }).parse(req.body);
   let options: unknown = {};

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { COMMUNITY_IMAGE_TARGET_BYTES, nextCommunityImageCompression } from "@/lib/imageUtils";
 
 describe("community image compression budget", () => {
-  it("targets an 800 KiB maximum for ordinary community images", () => {
-    expect(COMMUNITY_IMAGE_TARGET_BYTES).toBe(800 * 1024);
+  it("targets a 0.5 MiB maximum for ordinary community images", () => {
+    expect(COMMUNITY_IMAGE_TARGET_BYTES).toBe(512 * 1024);
   });
 
   it("reduces encoder quality before reducing image dimensions", () => {

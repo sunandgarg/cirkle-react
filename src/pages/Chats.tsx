@@ -13,7 +13,7 @@ import { formatDistanceToNow, format, isToday, isYesterday } from "date-fns";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { cacheMessages, flushChatCache, getCachedMessages, scheduleChatCache } from "@/lib/chatCache";
-import { convertToWebP } from "@/lib/imageUtils";
+import { convertToWebP, IMAGE_SOURCE_LIMIT_BYTES } from "@/lib/imageUtils";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   deleteChatOutboxItem, listChatOutboxItems, markChatOutboxFailed,
@@ -701,7 +701,7 @@ const Chats = () => {
 
   const sendImage = async (file: File) => {
     if (!user || !activeRoom) return;
-    if (file.size > 20 * 1024 * 1024) { toast.error("Please choose an image under 20 MB"); return; }
+    if (file.size > IMAGE_SOURCE_LIMIT_BYTES) { toast.error("Please choose an image under 10 MB"); return; }
     setSendingImage(true);
     try {
       const optimized = await convertToWebP(file, 0.76, 1600);

@@ -12,6 +12,7 @@ import { contentTombstone } from "../security/tombstone.js";
 import { normalizeHttpUrl, normalizeSocialLinks, serializeProfile } from "./profile.js";
 import { instituteDomains } from "./iitDomains.js";
 import { assertOwnedReadyObject } from "./storage.js";
+import { STORED_UPLOAD_LIMIT_BYTES } from "./uploadTransform.js";
 import { applyProfileEntryModeration, moderationReferenceDefinitions, type CatalogOption, type ModeratedProfileTable } from "./moderation.js";
 import { forumAppSyncChannels, isCanonicalRealtimeRecordId } from "../realtime/appsyncChannels.js";
 import { createForumPostsWithSlowMode } from "./forumSlowMode.js";
@@ -525,7 +526,7 @@ async function createForumPost(args: Args, ctx: RequestContext) {
     media_path: mediaPath, media_metadata: (args.p_media_metadata ?? undefined) as Prisma.InputJsonValue | undefined,
     image_path: imagePath,
     file_url: fileUrl, file_path: filePath, file_name: text(args, "p_file_name", { max: 255 }) || null,
-    file_size: args.p_file_size == null ? null : BigInt(integer(args, "p_file_size", 0, 20 * 1024 * 1024)),
+    file_size: args.p_file_size == null ? null : BigInt(integer(args, "p_file_size", 0, STORED_UPLOAD_LIMIT_BYTES)),
     file_type: text(args, "p_file_type", { max: 160 }) || null, voice_url: voiceUrl,
     voice_path: voicePath, voice_duration: args.p_voice_duration == null ? null : integer(args, "p_voice_duration", 0, 60 * 60),
   };

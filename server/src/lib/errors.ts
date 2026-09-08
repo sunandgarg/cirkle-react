@@ -18,7 +18,9 @@ export const notFound: RequestHandler = (req, _res, next) => {
 };
 
 export const errorHandler: ErrorRequestHandler = (error: unknown, req, res, _next) => {
-  const normalized = error instanceof ZodError
+  const normalized = (error as { code?: string })?.code === "LIMIT_FILE_SIZE"
+    ? new ApiError(413, "upload_source_too_large", "Upload source must be 10 MB or smaller")
+    : error instanceof ZodError
     ? new ApiError(400, "validation_error", "Request validation failed", error.flatten())
     : error instanceof ApiError
       ? error

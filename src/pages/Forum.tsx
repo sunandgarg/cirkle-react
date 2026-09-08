@@ -68,6 +68,7 @@ import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { shouldAnchorLatestDuringKeyboard, useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
 import { safeHttpUrl } from "@/lib/safeUrl";
 import { forumPostProfileSignature, resolveForumPostProfile } from "@/lib/forumProfiles";
+import { assertSmallFile, IMAGE_SOURCE_LIMIT_BYTES } from "@/lib/imageUtils";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
@@ -1728,7 +1729,7 @@ const Forum = () => {
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) { toast.error("Image must be under 5MB"); return; }
+    if (file.size > IMAGE_SOURCE_LIMIT_BYTES) { toast.error("Image must be under 10 MB before compression"); return; }
     setImageFile(file);
     setImagePreview(URL.createObjectURL(file));
     setShowAttachMenu(false);
@@ -1737,7 +1738,7 @@ const Forum = () => {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 20 * 1024 * 1024) { toast.error("File must be under 20MB"); return; }
+    try { assertSmallFile(file); } catch (error) { toast.error(error instanceof Error ? error.message : "File is too large"); return; }
     setAttachedFile(file);
     setShowAttachMenu(false);
   };

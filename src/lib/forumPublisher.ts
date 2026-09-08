@@ -3,6 +3,7 @@ import { createForumMediaSignedUrl } from "@/lib/forumMedia";
 import type { ForumOutboxItem } from "@/lib/forumOutbox";
 import { forumPostContent, normalizeForumPoll } from "@/lib/forumSend";
 import { requestRealtimeDispatch } from "@/lib/appsyncEvents";
+import { assertSmallFile, convertToWebP } from "@/lib/imageUtils";
 
 export const publishForumOutboxItem = async (item: ForumOutboxItem) => {
   const poll = normalizeForumPoll(item);
@@ -10,6 +11,7 @@ export const publishForumOutboxItem = async (item: ForumOutboxItem) => {
   let imageUrl = item.imageUrl || null;
   let filePath: string | null = null;
   let fileUrl: string | null = null;
+  let storedFile: File | null = null;
 
   if (item.image) {
     const { convertToWebP } = await import("@/lib/imageUtils");
@@ -25,10 +27,17 @@ export const publishForumOutboxItem = async (item: ForumOutboxItem) => {
     imageUrl = await createForumMediaSignedUrl("post-images", imagePath);
   }
   if (item.file) {
-    const safeName = item.file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const source = new File([item.file.blob], item.file.name, {
+      type: item.file.type, lastModified: item.file.lastModified || Date.now(),
+    });
+    assertSmallFile(source);
+    storedFile = source.type.startsWith("image/")
+      ? await convertToWebP(source, 0.75, 1600)
+      : source;
+    const safeName = storedFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     filePath = `${item.userId}/${item.id}-${safeName}`;
-    const { error } = await supabase.storage.from("forum-files").upload(filePath, item.file.blob, {
-      contentType: item.file.type || "application/octet-stream", cacheControl: "31536000", upsert: true,
+    const { error } = await supabase.storage.from("forum-files").upload(filePath, storedFile, {
+      contentType: storedFile.type || "application/octet-stream", cacheControl: "31536000", upsert: true,
     });
     if (error) throw error;
     fileUrl = await createForumMediaSignedUrl("forum-files", filePath);
@@ -43,9 +52,9 @@ export const publishForumOutboxItem = async (item: ForumOutboxItem) => {
     p_reply_to_id: item.replyToId,
     p_image_path: imagePath,
     p_file_path: filePath,
-    p_file_name: item.file?.name || null,
-    p_file_size: item.file?.blob.size || null,
-    p_file_type: item.file?.type || null,
+    p_file_name: storedFile?.name || null,
+    p_file_size: storedFile?.size || null,
+    p_file_type: storedFile?.type || null,
     p_voice_path: item.voicePath || null,
     p_voice_duration: item.voiceDuration || null,
   });
