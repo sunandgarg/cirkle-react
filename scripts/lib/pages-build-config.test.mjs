@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import { validatePagesBuildEnvironment } from "./pages-build-config.mjs";
+
+const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 const base = {
   VITE_API_URL: "https://api-react.cirkle.world",
@@ -38,5 +43,21 @@ describe("Cloudflare Pages build configuration", () => {
 
   it("rejects unreviewed browser-visible variables", () => {
     assert.throws(() => validatePagesBuildEnvironment({ ...base, VITE_SECRET: "must-not-ship" }), /VITE_SECRET/);
+  });
+
+  it("allows every inline index script through the Pages CSP", async () => {
+    const [html, headers] = await Promise.all([
+      readFile(`${projectRoot}/index.html`, "utf8"),
+      readFile(`${projectRoot}/public/_headers`, "utf8"),
+    ]);
+    const scriptSource = headers.match(/script-src\s+([^;]+)/)?.[1] ?? "";
+    const inlineScripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)]
+      .filter(([, attributes]) => !/\bsrc\s*=/.test(attributes));
+
+    assert.ok(inlineScripts.length > 0, "index.html should contain the expected JSON-LD script");
+    for (const [, , body] of inlineScripts) {
+      const hash = createHash("sha256").update(body).digest("base64");
+      assert.ok(scriptSource.split(/\s+/).includes(`'sha256-${hash}'`), `Pages CSP is missing sha256-${hash}`);
+    }
   });
 });
