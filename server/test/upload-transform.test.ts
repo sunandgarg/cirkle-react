@@ -34,6 +34,12 @@ describe("upload normalization", () => {
     await expect(normalizeUpload(file)).rejects.toMatchObject({ status: 413, code: "file_too_large" });
   });
 
+  it("measures actual bytes when multipart size metadata is under-reported", async () => {
+    const file = upload(Buffer.alloc(STORED_UPLOAD_LIMIT_BYTES + 1), "application/pdf", "proof.pdf");
+    file.size = 1;
+    await expect(normalizeUpload(file)).rejects.toMatchObject({ status: 413, code: "file_too_large" });
+  });
+
   it("rejects bytes that merely claim to be an image", async () => {
     await expect(normalizeUpload(upload(Buffer.from("not an image"), "image/png", "fake.png")))
       .rejects.toMatchObject({ status: 415, code: "invalid_image" });

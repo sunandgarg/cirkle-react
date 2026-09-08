@@ -46,17 +46,21 @@ async function imageToWebp(buffer: Buffer): Promise<Buffer> {
 }
 
 export async function normalizeUpload(file: Express.Multer.File): Promise<Express.Multer.File> {
-  assertUncompressedUploadAllowed(file);
-  if (!file.mimetype.startsWith("image/")) return file;
+  // Measure the received bytes rather than trusting multipart metadata. Multer
+  // reports this correctly today, but every caller should still fail closed if
+  // size is missing or under-reported.
+  const measuredFile = { ...file, size: file.buffer.length };
+  assertUncompressedUploadAllowed(measuredFile);
+  if (!measuredFile.mimetype.startsWith("image/")) return measuredFile;
   let buffer: Buffer;
   try {
-    buffer = await imageToWebp(file.buffer);
+    buffer = await imageToWebp(measuredFile.buffer);
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(415, "invalid_image", "This image could not be opened safely");
   }
   return {
-    ...file,
+    ...measuredFile,
     buffer,
     size: buffer.length,
     mimetype: "image/webp",
