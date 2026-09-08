@@ -535,8 +535,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
               onKeyDown={handleKeyDown}
               placeholder="Reply in thread..."
               rows={1}
-              className="flex-1 min-h-[36px] max-h-20 bg-secondary border-border rounded-2xl text-xs resize-none"
-              autoFocus
+              className="min-h-[40px] max-h-20 min-w-0 flex-1 resize-none rounded-2xl border-border bg-secondary text-[16px] sm:text-sm"
             />
             <button type="button" onClick={() => setIsAnonymous((value) => !value)}
               className={`w-8 h-8 rounded-full flex items-center justify-center ${isAnonymous ? "bg-primary/10 text-primary" : "text-muted-foreground"}`}

@@ -61,7 +61,7 @@ const Consult = () => {
   const [activeTab, setActiveTab] = useState<"mentors" | "bookings">(() => location.pathname.endsWith("/bookings") ? "bookings" : "mentors");
   const bookingCloseRef = useRef<HTMLButtonElement>(null);
 
-  const isVerified = !!user && !!profile?.is_verified && !!profile?.onboarding_completed;
+  const isVerified = !!user && !!profile?.is_verified;
 
   useEffect(() => {
     if (location.pathname.endsWith("/bookings")) setActiveTab("bookings");

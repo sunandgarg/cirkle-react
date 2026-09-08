@@ -20,12 +20,12 @@ const OtpVerification = () => {
   const phone = (location.state as any)?.phone || "";
   const countryCode = (location.state as any)?.countryCode || "+91";
 
-  // Once auth state propagates, route based on verification/onboarding status
+  // Once auth state propagates, IIT verification is the only blocking gate.
   useEffect(() => {
     if (!authComplete || !user) return;
     // If profile not loaded yet, wait for it
     if (profile === undefined) return;
-    if (!profile?.is_verified || !profile?.onboarding_completed) {
+    if (!profile?.is_verified) {
       navigate("/iit-verify", { replace: true });
     } else {
       navigate(readResumeRoute(user.id), { replace: true });

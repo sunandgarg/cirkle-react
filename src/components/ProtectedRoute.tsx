@@ -48,9 +48,9 @@ const ProtectedRoute = ({ children, requireAdmin = false }: { children: React.Re
     );
   }
 
-  // Verification and onboarding are durable server-side states. No protected
-  // route can bypass them, so a returning member always resumes the exact gate.
-  if (accessState === "verification" || accessState === "onboarding") {
+  // Institute verification is the sole blocking membership gate. Missing
+  // profile details are prompted inside the app and never replay onboarding.
+  if (accessState === "verification") {
     return <Navigate to="/iit-verify" replace state={{ returnTo }} />;
   }
 

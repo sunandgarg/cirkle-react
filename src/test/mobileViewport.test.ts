@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isEditableElementActive, useScrollBehavior } from "@/hooks/useScrollBehavior";
-import { resolveVisualViewportHeight, shouldAnchorLatestDuringKeyboard } from "@/hooks/useVisualViewportHeight";
+import { resolveVisualViewportFrame, resolveVisualViewportHeight, shouldAnchorLatestDuringKeyboard } from "@/hooks/useVisualViewportHeight";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -9,6 +9,11 @@ describe("mobile forum viewport", () => {
   it("uses the visible viewport while the software keyboard is open", () => {
     expect(resolveVisualViewportHeight(412.4, 844)).toBe(412);
     expect(resolveVisualViewportHeight(undefined, 844)).toBe(844);
+  });
+
+  it("anchors a full-screen chat to the panned visual viewport", () => {
+    expect(resolveVisualViewportFrame(412.4, 844, 27.6)).toEqual({ height: 412, offsetTop: 28 });
+    expect(resolveVisualViewportFrame(undefined, 844, -5)).toEqual({ height: 844, offsetTop: 0 });
   });
 
   it("anchors the latest message without pulling members out of older history", () => {

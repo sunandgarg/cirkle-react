@@ -5,6 +5,17 @@ export const resolveVisualViewportHeight = (
   windowInnerHeight?: number,
 ) => Math.max(1, Math.round(visualViewportHeight || windowInnerHeight || 1));
 
+export type VisualViewportFrame = { height: number; offsetTop: number };
+
+export const resolveVisualViewportFrame = (
+  visualViewportHeight?: number,
+  windowInnerHeight?: number,
+  visualViewportOffsetTop?: number,
+): VisualViewportFrame => ({
+  height: resolveVisualViewportHeight(visualViewportHeight, windowInnerHeight),
+  offsetTop: Math.max(0, Math.round(visualViewportOffsetTop || 0)),
+});
+
 export const shouldAnchorLatestDuringKeyboard = (
   scrollHeight: number,
   scrollTop: number,
@@ -18,13 +29,14 @@ export const shouldAnchorLatestDuringKeyboard = (
  * tracks the part of the page the member can actually see, so chat controls can
  * remain immediately above the keyboard instead of underneath it.
  */
-export const useVisualViewportHeight = () => {
-  const readHeight = () => resolveVisualViewportHeight(
+export const useVisualViewportFrame = () => {
+  const readFrame = () => resolveVisualViewportFrame(
     typeof window !== "undefined" ? window.visualViewport?.height : undefined,
     typeof window !== "undefined" ? window.innerHeight : undefined,
+    typeof window !== "undefined" ? window.visualViewport?.offsetTop : undefined,
   );
 
-  const [height, setHeight] = useState(readHeight);
+  const [frame, setFrame] = useState(readFrame);
 
   useEffect(() => {
     const viewport = window.visualViewport;
@@ -32,7 +44,10 @@ export const useVisualViewportHeight = () => {
 
     const update = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => setHeight(readHeight()));
+      frame = requestAnimationFrame(() => setFrame((current) => {
+        const next = readFrame();
+        return current.height === next.height && current.offsetTop === next.offsetTop ? current : next;
+      }));
     };
 
     update();
@@ -48,5 +63,7 @@ export const useVisualViewportHeight = () => {
     };
   }, []);
 
-  return height;
+  return frame;
 };
+
+export const useVisualViewportHeight = () => useVisualViewportFrame().height;

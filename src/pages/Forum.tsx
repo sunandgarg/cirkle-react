@@ -29,7 +29,6 @@ import FileAttachment from "@/components/forum/FileAttachment";
 import ThreadPanel from "@/components/forum/ThreadPanel";
 import ScopeNavigationItem from "@/components/forum/ScopeNavigationItem";
 import DirectMessageSidebar from "@/components/forum/DirectMessageSidebar";
-import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import {
   getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead,
   getForumDraft, setForumDraft, getForumScroll, setForumScroll,
@@ -66,7 +65,7 @@ import {
   appSyncRealtimeEnabled, getForumAppSyncChannels, subscribeAppSync,
 } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
-import { shouldAnchorLatestDuringKeyboard, useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
+import { shouldAnchorLatestDuringKeyboard, useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
 import { safeHttpUrl } from "@/lib/safeUrl";
 import { forumPostProfileSignature, resolveForumPostProfile } from "@/lib/forumProfiles";
 
@@ -498,7 +497,7 @@ const Forum = () => {
   const isVerified = profile?.is_verified;
 
   /* ─── Education data ─── */
-  const { data: primaryEducation, isSuccess: educationLoaded } = useQuery({
+  const { data: primaryEducation } = useQuery({
     queryKey: ["primary-education", user?.id],
     queryFn: async () => {
       if (!user?.id) return null;
@@ -526,7 +525,7 @@ const Forum = () => {
     refetchOnReconnect: true,
   });
 
-  const { data: canonicalIdentity, isSuccess: identityLoaded } = useQuery({
+  const { data: canonicalIdentity } = useQuery({
     queryKey: ["canonical-academic-identity", user?.id],
     queryFn: async () => {
       if (!user?.id || readMobileTestSession()) return null;
@@ -639,7 +638,7 @@ const Forum = () => {
 
   // Smart scroll hide/show
   const { showInput, showNavBar, showHeader, restoreAll } = useScrollBehavior(scrollContainerRef);
-  const visualViewportHeight = useVisualViewportHeight();
+  const visualViewport = useVisualViewportFrame();
 
   // Keep the latest message anchored only when the member was already near
   // the end of the conversation. Opening the keyboard while reading history
@@ -651,7 +650,7 @@ const Forum = () => {
       if (scroller) scroller.scrollTop = scroller.scrollHeight;
     });
     return () => cancelAnimationFrame(frame);
-  }, [visualViewportHeight]);
+  }, [visualViewport.height, visualViewport.offsetTop]);
 
   useEffect(() => {
     const scrollContainer = scrollContainerRef.current;
@@ -2001,24 +2000,11 @@ const Forum = () => {
   const hasContent = content.trim() || imageFile || attachedFile || showPollCreator;
 
   /* ════════════════════ RENDER ════════════════════ */
-  if (isVerified && educationLoaded && identityLoaded && !canonicalIdentity && !hasCompleteForumEducation(primaryEducation)) {
-    return (
-      <PostVerifyOnboarding
-        derivedIit={profile?.iit_name || undefined}
-        academicRecovery
-        onComplete={async () => {
-          await queryClient.invalidateQueries({ queryKey: ["primary-education", user?.id] });
-          await queryClient.invalidateQueries({ queryKey: ["canonical-academic-identity", user?.id] });
-        }}
-      />
-    );
-  }
-
   return (
     <div
       className="flex flex-col bg-background overflow-hidden w-full"
       data-testid="forum-shell"
-      style={{ height: `${visualViewportHeight}px`, maxHeight: "100dvh" }}
+      style={{ height: `${visualViewport.height}px`, maxHeight: "100dvh" }}
     >
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
@@ -2589,7 +2575,11 @@ const Forum = () => {
       {/* Mobile thread sheet */}
       {threadPost && (
         <Sheet open={!!threadPost} onOpenChange={(open) => { if (!open) setThreadPost(null); }}>
-          <SheetContent side="right" className="w-full sm:w-96 p-0">
+          <SheetContent
+            side="right"
+            className="w-full p-0 sm:w-96"
+            style={{ top: `${visualViewport.offsetTop}px`, height: `${visualViewport.height}px` }}
+          >
             <SheetTitle className="sr-only">Thread</SheetTitle>
             <ThreadPanel parentPost={threadPost} onClose={() => setThreadPost(null)} onJumpToParent={() => { const id = threadPost.id; setThreadPost(null); requestAnimationFrame(() => scrollToMessage(id)); }} activeScope={activeScope} profileMap={profileMap} navigate={navigate} />
           </SheetContent>

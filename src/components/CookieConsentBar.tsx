@@ -5,7 +5,7 @@ import { acceptCookieConsent, hasCookieConsent } from "@/lib/cookieConsent";
 
 const CookieConsentBar = () => {
   const { user, profile, profileResolved } = useAuth();
-  const eligible = !!user && profileResolved && !!profile?.is_verified && !!profile?.onboarding_completed;
+  const eligible = !!user && profileResolved && !!profile?.is_verified;
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {

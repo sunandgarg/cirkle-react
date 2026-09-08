@@ -14,7 +14,7 @@ describe("cross-device member access", () => {
     expect(resolveMemberAccessState({ is_verified: true, onboarding_completed: true }, true)).toBe("ready");
   });
 
-  it("resumes onboarding without repeating IIT verification", () => {
-    expect(resolveMemberAccessState({ is_verified: true, onboarding_completed: false }, true)).toBe("onboarding");
+  it("never blocks a verified member behind profile onboarding", () => {
+    expect(resolveMemberAccessState({ is_verified: true, onboarding_completed: false }, true)).toBe("ready");
   });
 });

@@ -41,6 +41,7 @@ import {
 import { isDirectCallRoom, parseCallInviteQuery } from "@/lib/callInvites";
 import NotificationBell from "@/components/NotificationBell";
 import { useDailyCallAvailability } from "@/hooks/useRuntimeFeatures";
+import { shouldAnchorLatestDuringKeyboard, useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
 
 const PAGE_SIZE = 50;
 const inboxCacheKey = (userId: string) => `cirkle:chat-inbox:${userId}`;
@@ -176,6 +177,7 @@ const Chats = () => {
   const queryClient = useQueryClient();
   const { enabled: callsEnabled, resolved: callsResolved } = useDailyCallAvailability();
   const realtimeActive = useRealtimeActivity();
+  const visualViewport = useVisualViewportFrame();
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
   const [newMessage, setNewMessage] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -193,6 +195,8 @@ const Chats = () => {
   const [showConversationInfo, setShowConversationInfo] = useState(false);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const anchorLatestDuringKeyboardRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const roomChannelRef = useRef<{
     send: (message: {
@@ -824,6 +828,14 @@ const Chats = () => {
     useAnimationFrameWithResizeObserver: true,
     isScrollingResetDelay: 140,
   });
+
+  useEffect(() => {
+    if (!anchorLatestDuringKeyboardRef.current || document.activeElement !== inputRef.current || !timelineRows.length) return;
+    const frame = requestAnimationFrame(() => {
+      messageVirtualizer.scrollToIndex(timelineRows.length - 1, { align: "end" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [messageVirtualizer, timelineRows.length, visualViewport.height, visualViewport.offsetTop]);
   const scrollToLatest = useCallback(() => {
     if (!timelineRows.length) return;
     followLiveRef.current = true;
@@ -857,7 +869,11 @@ const Chats = () => {
       setActiveRoom(null);
     };
     return (
-      <div className="bg-background h-[100dvh] flex flex-col">
+      <div
+        className="fixed inset-x-0 flex flex-col overflow-hidden bg-background"
+        data-testid="direct-chat-shell"
+        style={{ top: `${visualViewport.offsetTop}px`, height: `${visualViewport.height}px` }}
+      >
         <header className="flex-shrink-0 z-40 px-3 py-2.5 flex items-center gap-3 border-b border-border bg-card shadow-sm">
           <button onClick={leaveConversation} className="rounded-xl p-2 text-foreground hover:bg-accent" aria-label="Open Forum channels"><ArrowLeft className="w-5 h-5" /></button>
           <button onClick={openMemberProfile} disabled={activeRoom.is_group || !activeRoom.peerId} className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center overflow-hidden disabled:cursor-default" aria-label={activeRoom.is_group ? undefined : `Open ${activeRoom.displayName}'s profile`}>
@@ -913,7 +929,20 @@ const Chats = () => {
           <button onClick={() => { setShowEmojiPicker((value) => !value); setShowVoiceRecorder(false); }} className="p-2 text-muted-foreground" aria-label="Emoji"><Smile className="w-5 h-5" /></button>
           <button onClick={() => fileInputRef.current?.click()} disabled={sendingImage} className="p-2 text-muted-foreground" aria-label="Attach image">{sendingImage ? <Loader2 className="w-5 h-5 animate-spin" /> : <Paperclip className="w-5 h-5" />}</button>
           <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void sendImage(file); event.target.value = ""; }} />
-          <Input placeholder="Type a message" value={newMessage} onChange={(event) => { setNewMessage(event.target.value); handleTyping(); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} className="flex-1 h-10 rounded-full bg-secondary border-0" />
+          <Input
+            ref={inputRef}
+            placeholder="Type a message"
+            value={newMessage}
+            onChange={(event) => { setNewMessage(event.target.value); handleTyping(); }}
+            onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }}
+            onFocus={() => {
+              const scroller = scrollRef.current;
+              anchorLatestDuringKeyboardRef.current = Boolean(scroller)
+                && shouldAnchorLatestDuringKeyboard(scroller.scrollHeight, scroller.scrollTop, scroller.clientHeight);
+            }}
+            onBlur={() => { anchorLatestDuringKeyboardRef.current = false; }}
+            className="h-10 min-w-0 flex-1 rounded-full border-0 bg-secondary text-[16px]"
+          />
           {newMessage.trim() ? <button onClick={() => void sendMessage()} className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground" aria-label="Send"><Send className="w-4 h-4" /></button> : <button onClick={() => { setShowVoiceRecorder((value) => !value); setShowEmojiPicker(false); }} className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground" aria-label="Voice message"><Mic className="w-4 h-4" /></button>}
         </div>
         {directCallsAvailable && incomingCallInvite?.roomId === activeRoom.id && (

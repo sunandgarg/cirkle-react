@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { ChevronDown, Check, Search } from "lucide-react";
@@ -13,15 +13,47 @@ interface SearchableSelectProps {
   className?: string;
 }
 
+export const SEARCHABLE_SELECT_RESULT_LIMIT = 80;
+
+export const rankSearchableOptions = (
+  options: string[],
+  query: string,
+  limit = SEARCHABLE_SELECT_RESULT_LIMIT,
+) => {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) {
+    return {
+      options: options.slice(0, Math.max(1, limit)),
+      totalMatches: options.length,
+    };
+  }
+  const prefixes: string[] = [];
+  const contains: string[] = [];
+
+  for (const option of options) {
+    const normalized = option.toLocaleLowerCase();
+    if (normalized.startsWith(needle)) prefixes.push(option);
+    else if (normalized.includes(needle)) contains.push(option);
+  }
+
+  const totalMatches = prefixes.length + contains.length;
+  return {
+    options: [...prefixes, ...contains].slice(0, Math.max(1, limit)),
+    totalMatches,
+  };
+};
+
 const SearchableSelect = ({ options, value, onChange, placeholder = "Select...", allowOther = true, className }: SearchableSelectProps) => {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [isOther, setIsOther] = useState(false);
   const [otherValue, setOtherValue] = useState("");
-
-  const filtered = search
-    ? options.filter(o => o.toLowerCase().includes(search.toLowerCase()))
-    : options;
+  const deferredSearch = useDeferredValue(search);
+  const ranked = useMemo(
+    () => rankSearchableOptions(options, deferredSearch),
+    [deferredSearch, options],
+  );
+  const hiddenResultCount = Math.max(0, ranked.totalMatches - ranked.options.length);
 
   useEffect(() => { if (open) setSearch(""); }, [open]);
 
@@ -40,7 +72,10 @@ const SearchableSelect = ({ options, value, onChange, placeholder = "Select...",
   };
 
   const handleOther = () => {
+    const customValue = search.trim();
     setIsOther(true);
+    setOtherValue(customValue);
+    if (customValue) onChange(customValue);
     setOpen(false);
   };
 
@@ -91,15 +126,17 @@ const SearchableSelect = ({ options, value, onChange, placeholder = "Select...",
             />
           </div>
         </div>
-        <div className="max-h-[200px] overflow-y-auto p-1">
-          {filtered.length === 0 && (
+        <div className="max-h-[min(42vh,320px)] overflow-y-auto overscroll-contain p-1" role="listbox">
+          {ranked.totalMatches === 0 && (
             <p className="text-xs text-muted-foreground text-center py-3">No results</p>
           )}
-          {filtered.map(opt => (
+          {ranked.options.map(opt => (
             <button
               key={opt}
               type="button"
               onClick={() => handleSelect(opt)}
+              role="option"
+              aria-selected={value === opt}
               className={cn(
                 "flex min-h-11 w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors hover:bg-accent",
                 value === opt && "bg-accent font-medium"
@@ -109,13 +146,18 @@ const SearchableSelect = ({ options, value, onChange, placeholder = "Select...",
               <span className={value === opt ? "" : "pl-5"}>{opt}</span>
             </button>
           ))}
+          {hiddenResultCount > 0 && (
+            <p className="px-3 py-2 text-center text-[11px] text-muted-foreground" aria-live="polite">
+              {hiddenResultCount.toLocaleString()} more matches — type to narrow the list
+            </p>
+          )}
           {allowOther && (
             <button
               type="button"
               onClick={handleOther}
               className="mt-1 flex min-h-11 w-full items-center gap-2 border-t border-border px-3 py-2 pt-2 text-left text-sm font-medium text-primary transition-colors hover:bg-accent"
             >
-              <span className="pl-5">+ Other (custom)</span>
+              <span className="min-w-0 truncate pl-5">{search.trim() ? `Use “${search.trim()}”` : "+ Other (custom)"}</span>
             </button>
           )}
         </div>

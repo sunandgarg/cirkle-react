@@ -8,7 +8,6 @@ import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { ArrowLeft, GraduationCap, CheckCircle2, Mail, ShieldCheck, AlertCircle, Search, FileUp, Clock3, LockKeyhole, RefreshCw, User, LogOut, Pencil } from "lucide-react";
-import PostVerifyOnboarding from "@/components/PostVerifyOnboarding";
 import { useQuery } from "@tanstack/react-query";
 import { defaultIitLogo, expectedIitEmailDomain, IIT_LIST, iitLogoSettingKey, isMatchingIitEmail, type IitInstitute, type IitMemberStatus } from "@/data/iitInstitutes";
 import { readSafeReturnRoute, resolvePostAuthRoute } from "@/lib/sessionResume";
@@ -61,15 +60,7 @@ const IitLogo = ({ iit, customUrl }: { iit: IitInstitute; customUrl?: string }) 
   );
 };
 
-/** Derive IIT name from email domain */
-function deriveIitFromEmail(email: string): string | undefined {
-  const domain = email.split("@")[1]?.toLowerCase();
-  if (!domain) return undefined;
-  const match = IIT_LIST.find(iit => domain === iit.studentDomain || domain === iit.alumniDomain || domain.endsWith(iit.studentDomain));
-  return match?.name;
-}
-
-type Step = "account_details" | "select_iit" | "select_status" | "verify_email" | "verify_otp" | "upload_documents" | "documents_pending" | "onboarding";
+type Step = "account_details" | "select_iit" | "select_status" | "verify_email" | "verify_otp" | "upload_documents" | "documents_pending";
 
 const IitVerification = () => {
   const navigate = useNavigate();
@@ -91,6 +82,17 @@ const IitVerification = () => {
   const [existingRecordMessage, setExistingRecordMessage] = useState("");
   const [documentType, setDocumentType] = useState("student_id");
   const [documentFile, setDocumentFile] = useState<File | null>(null);
+
+  const enterVerifiedApp = async (message?: string) => {
+    // Verification is already committed by the server before this runs. A
+    // transient refresh failure must not strand a verified member in the
+    // verification wizard; the destination can retry the profile query.
+    await refetchProfile().catch((error) => {
+      reportError(error, { flow: "iit_verification", action: "refresh_verified_profile", severity: "warning" });
+    });
+    if (message) toast.success(message);
+    if (user?.id) navigate(resolvePostAuthRoute(user.id, isAdmin, requestedRoute), { replace: true });
+  };
 
   const { data: iitLogos = {} } = useQuery({
     queryKey: ["iit-logos"],
@@ -139,6 +141,13 @@ const IitVerification = () => {
     refetchOnWindowFocus: true,
   });
 
+  // An authoritative verified profile must leave this route immediately.
+  // Do not wait for optional progress/catalog requests and never flash a form.
+  useEffect(() => {
+    if (authLoading || !profileResolved || !user?.id || !profile?.is_verified) return;
+    navigate(resolvePostAuthRoute(user.id, isAdmin, requestedRoute), { replace: true });
+  }, [authLoading, isAdmin, navigate, profile?.is_verified, profileResolved, requestedRoute, user?.id]);
+
   useEffect(() => {
     if (authLoading || !profileResolved || !user || !progressFetched || !documentStatusFetched || !documentSettingFetched || restoredProgressRef.current) return;
     restoredProgressRef.current = true;
@@ -157,7 +166,7 @@ const IitVerification = () => {
       if (savedCountry) setCountry(savedCountry);
     }
 
-    if (profile?.is_verified && profile?.onboarding_completed && user?.id) {
+    if (profile?.is_verified && user?.id) {
       navigate(resolvePostAuthRoute(user.id, isAdmin, requestedRoute), { replace: true });
       return;
     }
@@ -179,11 +188,6 @@ const IitVerification = () => {
       setStep("account_details");
       return;
     }
-    if (profile?.is_verified && !profile.onboarding_completed) {
-      setStep("onboarding");
-      return;
-    }
-
     const savedStep = savedProgress?.flow_step?.replace(/^verification:/, "") as Step | undefined;
     const validSteps: Step[] = ["select_iit", "select_status", "verify_email", "verify_otp", "upload_documents", "documents_pending"];
     const restoredIitName = saved?.selectedIit || latestDocumentSubmission?.iit_name;
@@ -208,7 +212,7 @@ const IitVerification = () => {
   }, [authLoading, documentSettingFetched, documentStatusFetched, documentVerificationEnabled, isAdmin, latestDocumentSubmission, navigate, profile, profileResolved, progressFetched, requestedRoute, savedProgress, user]);
 
   useEffect(() => {
-    if (!user || !restoredProgressRef.current || step === "onboarding" || profile?.onboarding_completed) return;
+    if (!user || !restoredProgressRef.current || profile?.is_verified) return;
     const timeout = window.setTimeout(() => {
       void saveOnboardingProgress(user.id, `verification:${step}`, {
         selectedIit: selectedIit?.name,
@@ -220,7 +224,7 @@ const IitVerification = () => {
       }).catch((error) => console.warn("Could not save onboarding checkpoint", error));
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [accountName, country.code, email, phone, profile?.onboarding_completed, selectedIit?.name, step, studentStatus, user]);
+  }, [accountName, country.code, email, phone, profile?.is_verified, selectedIit?.name, step, studentStatus, user]);
 
   useEffect(() => {
     if (profile?.name) {
@@ -270,7 +274,8 @@ const IitVerification = () => {
       });
       if (error) throw error;
       await refetchProfile();
-      setStep(profile?.is_verified ? "onboarding" : "select_iit");
+      if (profile?.is_verified) await enterVerifiedApp();
+      else setStep("select_iit");
     } catch (error: any) {
       reportError(error, { flow: "member_onboarding", action: "save_account_details", metadata: { step } });
       if (isMissingAuthIdentityError(error)) {
@@ -292,9 +297,7 @@ const IitVerification = () => {
   };
 
   const completeEmailVerification = async () => {
-    await refetchProfile();
-    toast.success("Email verified. Let’s complete your profile 🎉");
-    setStep("onboarding");
+    await enterVerifiedApp("Email verified. Welcome to Cirkle 🎉");
   };
 
   const handleSendCode = async () => {
@@ -322,11 +325,9 @@ const IitVerification = () => {
       if (res.error) {
         const parsed = await readEdgeFunctionError(res.error, data, "Could not send the verification code. Please try again.");
         const errMsg = parsed.message;
-        // If user already verified with same email, just go to onboarding
+        // A verified institute identity is the only blocking membership gate.
         if (data?.already_verified) {
-          await refetchProfile();
-          toast.success("Already verified! Let's complete your profile.");
-          setStep("onboarding");
+          await enterVerifiedApp("Already verified. Welcome back!");
           setLoading(false);
           return;
         }
@@ -349,11 +350,9 @@ const IitVerification = () => {
         setLoading(false);
         return;
       }
-      // If already verified with same email, skip to onboarding
+      // Never replay profile onboarding for an already verified member.
       if (data?.already_verified) {
-        await refetchProfile();
-        toast.success("Already verified! Let's complete your profile.");
-        setStep("onboarding");
+        await enterVerifiedApp("Already verified. Welcome back!");
         setLoading(false);
         return;
       }
@@ -464,9 +463,7 @@ const IitVerification = () => {
       const result = await refetchDocumentSubmission();
       const submission = result.data;
       if (submission?.status === "approved") {
-        await refetchProfile();
-        toast.success("Your document has been approved");
-        setStep("onboarding");
+        await enterVerifiedApp("Your document has been approved");
       } else if (submission?.status === "rejected") {
         setDocumentFile(null);
         setStep("upload_documents");
@@ -546,18 +543,11 @@ const IitVerification = () => {
     );
   }
 
-  // Show onboarding wizard after verification
-  if (step === "onboarding") {
+  if (user && profileResolved && profile?.is_verified) {
     return (
-      <PostVerifyOnboarding
-        derivedIit={selectedIit?.name || profile?.iit_name || latestDocumentSubmission?.iit_name || deriveIitFromEmail(email)}
-        onBack={() => setStep("verify_email")}
-        onComplete={async () => {
-          // Ensure profile is fresh before navigating
-          await refetchProfile();
-          navigate(resolvePostAuthRoute(user?.id, isAdmin, requestedRoute), { replace: true });
-        }}
-      />
+      <div className="fixed inset-0 flex items-center justify-center bg-background" aria-label="Opening Cirkle">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      </div>
     );
   }
 

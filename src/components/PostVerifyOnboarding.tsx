@@ -96,6 +96,8 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
   const { data: builtInCompanies = companies } = useQuery({
     queryKey: ["company-catalog"],
     queryFn: loadCompanies,
+    enabled: step === "optional",
+    placeholderData: companies,
     staleTime: Infinity,
     gcTime: Infinity,
   });
@@ -372,10 +374,11 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
       });
       if (onboardingError) throw onboardingError;
 
+      const followUps: Promise<unknown>[] = [clearOnboardingProgress(user.id)];
       if (company.trim() && companyOption) {
         const optionId = companyOption.option_id || companyOption.id;
         const optionLogo = companyOption.option_logo_url || companyOption.logo_url || null;
-        const { error: experienceError } = await (supabase as any)
+        followUps.push((supabase as any)
           .from("professional_experience")
           .update({
             is_other_company: true,
@@ -384,12 +387,24 @@ const PostVerifyOnboarding = ({ derivedIit, onComplete, onBack, academicRecovery
           })
           .eq("user_id", user.id)
           .eq("is_current", true)
-          .ilike("company_name", company.trim());
-        if (experienceError) throw experienceError;
+          .ilike("company_name", company.trim())
+          .then(({ error }: { error?: unknown }) => {
+            if (error) throw error;
+          }));
       }
 
-      await clearOnboardingProgress(user.id);
-      await refetchProfile();
+      // The core RPC above is the atomic completion boundary. Optional company
+      // metadata and checkpoint cleanup must never strand the member on this
+      // screen after that transaction has already committed.
+      const results = await Promise.allSettled(followUps);
+      results.forEach((result) => {
+        if (result.status === "rejected") {
+          reportError(result.reason, { flow: "member_onboarding", action: "post_completion_cleanup", severity: "warning" });
+        }
+      });
+      await refetchProfile().catch((error) => {
+        reportError(error, { flow: "member_onboarding", action: "refresh_completed_profile", severity: "warning" });
+      });
       toast.success("Profile complete! Welcome to Cirkle 🎉");
       onComplete();
     } catch (err: any) {

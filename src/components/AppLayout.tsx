@@ -6,18 +6,19 @@ import DesktopSidebar from "./DesktopSidebar";
 import { useAuth } from "@/hooks/useAuth";
 import { usePrefetch } from "@/hooks/usePrefetch";
 import LockedModeOverlay from "./LockedModeOverlay";
-import PostVerifyOnboarding from "./PostVerifyOnboarding";
 import { ErrorBoundary } from "./ErrorBoundary";
 import GlobalSearchOverlay from "./GlobalSearchOverlay";
 import { useEffect } from "react";
 import ProfileCompletionBanner from "./ProfileCompletionBanner";
 import { supabase } from "@/integrations/supabase/client";
 import { shouldShowProfileCompletion } from "@/lib/profileCompletion";
+import { useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
 
 const AppLayout = () => {
-  const { user, profile, isVerified, refetchProfile, profileResolved } = useAuth();
+  const { user, profile, isVerified, profileResolved } = useAuth();
   const location = useLocation();
   const [searchOpen, setSearchOpen] = useState(false);
+  const visualViewport = useVisualViewportFrame();
   const isForum = location.pathname.startsWith("/cirkle-forum");
   const showProfileCompletion = shouldShowProfileCompletion(location.pathname);
 
@@ -57,25 +58,10 @@ const AppLayout = () => {
     });
   }, [location.pathname, location.search, profileResolved, user?.id]);
 
-  // If verified but onboarding not completed, show onboarding wizard
-  const needsOnboarding = profileResolved && user && isVerified && profile && !profile.onboarding_completed;
-
   // Block unverified users on all pages except settings/profile/iit-verify
   const allowedUnverified = ["/settings", "/profile", "/iit-verify"];
   const isProtectedPage = !allowedUnverified.some(p => location.pathname.startsWith(p));
   const showLockedOverlay = profileResolved && user && !isVerified && isProtectedPage;
-
-  // Show onboarding wizard if verified but not onboarded
-  if (needsOnboarding) {
-    return (
-      <PostVerifyOnboarding
-        derivedIit={profile?.iit_name}
-        onComplete={async () => {
-          await refetchProfile();
-        }}
-      />
-    );
-  }
 
   // Show loading while profile is being fetched to prevent flash
   if (!profileResolved && user) {
@@ -87,11 +73,15 @@ const AppLayout = () => {
   }
 
   return (
-    <div className="fixed inset-0 bg-background flex w-full overflow-hidden">
+    <div
+      className="fixed inset-x-0 bg-background flex w-full overflow-hidden"
+      data-testid="app-viewport-shell"
+      style={{ top: `${visualViewport.offsetTop}px`, height: `${visualViewport.height}px` }}
+    >
       <DesktopSidebar />
       <div className="flex-1 flex flex-col min-w-0 max-w-full overflow-hidden">
         {!isForum && <AppHeader />}
-        {user && profile && isVerified && profile.onboarding_completed && showProfileCompletion && (
+        {user && profile && isVerified && showProfileCompletion && (
           <ProfileCompletionBanner userId={user.id} profile={profile as unknown as Record<string, unknown>} />
         )}
         <main
