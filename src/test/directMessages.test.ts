@@ -68,5 +68,9 @@ describe("direct message sidebar", () => {
       room_id: "room-1",
       last_message: { created_at: "2026-09-04T10:00:00.000Z", content: "Hello" },
     }))).toBe(true);
+    expect(hasStartedDirectMessageConversation(row({
+      room_id: "room-1",
+      last_message: { id: "message-1", content: "Legacy hello" },
+    }))).toBe(true);
   });
 });

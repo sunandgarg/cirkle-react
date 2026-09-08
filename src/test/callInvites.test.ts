@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getCallInvitePath, isDirectCallRoom, parseCallInviteNotification, parseCallInviteQuery } from "@/lib/callInvites";
+import { directCallPeerId, getCallInvitePath, isDirectCallRoom, parseCallInviteNotification, parseCallInviteQuery } from "@/lib/callInvites";
 
 const now = Date.parse("2026-09-04T10:00:00.000Z");
 const roomId = "11111111-1111-4111-8111-111111111111";
@@ -11,6 +11,16 @@ describe("call invitations", () => {
     expect(isDirectCallRoom({ id: roomId, is_group: true, peerId: sessionId })).toBe(false);
     expect(isDirectCallRoom({ id: roomId, is_group: false, peerId: null })).toBe(false);
     expect(isDirectCallRoom({ id: roomId, is_group: false, peerId: "../member" })).toBe(false);
+  });
+
+  it("recovers a direct peer from the canonical room key when enrichment is delayed", () => {
+    const viewerId = "33333333-3333-4333-8333-333333333333";
+    const peerId = "44444444-4444-4444-8444-444444444444";
+    const room = { id: roomId, is_group: false, direct_key: `${viewerId}:${peerId}` };
+
+    expect(directCallPeerId(room, viewerId)).toBe(peerId);
+    expect(isDirectCallRoom(room, viewerId)).toBe(true);
+    expect(isDirectCallRoom(room, sessionId)).toBe(false);
   });
 
   it("builds a safe, expiring chat route from a structured notification", () => {

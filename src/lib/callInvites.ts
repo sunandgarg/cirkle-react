@@ -20,11 +20,21 @@ const parseExpiry = (value: unknown): number | null => {
 export const isCallId = (value: unknown): value is string =>
   typeof value === "string" && UUID_PATTERN.test(value);
 
-export const isDirectCallRoom = (room: unknown): boolean => {
+export const directCallPeerId = (room: unknown, viewerId?: unknown): string | null => {
+  if (!isRecord(room)) return null;
+  const explicitPeer = room.peerId ?? room.peer_id;
+  if (isCallId(explicitPeer)) return explicitPeer;
+  if (!isCallId(viewerId) || typeof room.direct_key !== "string") return null;
+  const members = room.direct_key.split(":");
+  if (members.length !== 2 || !members.every(isCallId) || !members.includes(viewerId)) return null;
+  return members[0] === viewerId ? members[1] : members[0];
+};
+
+export const isDirectCallRoom = (room: unknown, viewerId?: unknown): boolean => {
   if (!isRecord(room)) return false;
   return room.is_group === false
     && isCallId(room.id)
-    && isCallId(room.peerId);
+    && directCallPeerId(room, viewerId) !== null;
 };
 
 export const parseCallInviteNotification = (value: unknown, now = Date.now()): CallInvite | null => {

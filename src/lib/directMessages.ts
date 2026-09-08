@@ -32,7 +32,7 @@ export const normalizeDirectMessageSidebarRow = (row: DirectMessageSidebarRow): 
 });
 
 export const hasStartedDirectMessageConversation = (row: DirectMessageSidebarRow): boolean =>
-  Boolean(row.room_id && row.last_message?.created_at);
+  Boolean(row.room_id && row.last_message && (row.last_message.id || row.last_message.created_at));
 
 export const getDirectMessageNavigationTarget = (row: DirectMessageSidebarRow) =>
   row.room_id ? `/chats/${row.room_id}` : `/chats?peer=${encodeURIComponent(row.peer_id)}`;

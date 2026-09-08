@@ -38,7 +38,7 @@ import {
   getDirectChatProfileTarget,
   shouldShowConversationNotificationBell,
 } from "@/lib/directMessages";
-import { isDirectCallRoom, parseCallInviteQuery } from "@/lib/callInvites";
+import { directCallPeerId, isDirectCallRoom, parseCallInviteQuery } from "@/lib/callInvites";
 import NotificationBell from "@/components/NotificationBell";
 import { useDailyCallAvailability } from "@/hooks/useRuntimeFeatures";
 import { shouldAnchorLatestDuringKeyboard, useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
@@ -76,6 +76,7 @@ type ChatRoom = {
   lastMessage?: ChatMessage | null;
   unreadCount: number;
   peerId?: string | null;
+  direct_key?: string | null;
 };
 
 type RawRoom = Partial<ChatRoom> & Pick<ChatRoom, "id" | "is_group" | "created_at"> & {
@@ -99,18 +100,18 @@ const formatMessageDate = (date: string) => {
   return format(value, "dd/MM/yyyy");
 };
 
-const normalizeRoom = (room: RawRoom): ChatRoom => ({
+const normalizeRoom = (room: RawRoom, viewerId?: string): ChatRoom => ({
   ...room,
   displayName: room.display_name || room.displayName || room.name || (room.is_group ? "Group" : "User"),
   displayAvatar: room.display_avatar || room.displayAvatar || room.avatar_url,
   lastMessage: (room.last_message && typeof room.last_message === "object" ? room.last_message as ChatMessage : null) || room.lastMessage || null,
   unreadCount: Number(room.unread_count ?? room.unreadCount ?? 0),
-  peerId: room.peer_id || room.peerId || null,
+  peerId: directCallPeerId(room, viewerId),
 });
 
 const readInboxCache = (userId?: string): ChatRoom[] => {
   if (!userId) return [];
-  try { return (JSON.parse(localStorage.getItem(inboxCacheKey(userId)) || "[]") as RawRoom[]).map(normalizeRoom); }
+  try { return (JSON.parse(localStorage.getItem(inboxCacheKey(userId)) || "[]") as RawRoom[]).map((room) => normalizeRoom(room, userId)); }
   catch { return []; }
 };
 
@@ -252,7 +253,7 @@ const Chats = () => {
       const directByRoom = new Map<string, Record<string, unknown>>((directRows || [])
         .filter((row: { room_id?: string | null }) => !!row.room_id)
         .map((row: { room_id: string } & Record<string, unknown>) => [row.room_id, row]));
-      const inbox = (data || []).map((room) => normalizeRoom({ ...room, ...(directByRoom.get(room.id) || {}) }));
+      const inbox = (data || []).map((room) => normalizeRoom({ ...room, ...(directByRoom.get(room.id) || {}) }, user.id));
       localStorage.setItem(inboxCacheKey(user.id), JSON.stringify(inbox));
       return inbox as ChatRoom[];
     },
@@ -280,12 +281,12 @@ const Chats = () => {
     const inviteRoom = incomingCallInvite
       ? rooms.find((room) => room.id === incomingCallInvite.roomId)
       : undefined;
-    if (callsEnabled && incomingCallInvite && isDirectCallRoom(inviteRoom)) return;
+    if (callsEnabled && incomingCallInvite && isDirectCallRoom(inviteRoom, user?.id)) return;
     clearCallInviteParams();
     toast.error(callsEnabled
       ? "This one-to-one call invitation is invalid or has expired"
       : "Audio and video calls are not available");
-  }, [callsEnabled, callsResolved, clearCallInviteParams, hasCallInviteParams, incomingCallInvite, rooms, roomsLoading]);
+  }, [callsEnabled, callsResolved, clearCallInviteParams, hasCallInviteParams, incomingCallInvite, rooms, roomsLoading, user?.id]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -660,6 +661,7 @@ const Chats = () => {
       if (preview) { URL.revokeObjectURL(preview); outboxPreviewUrlsRef.current.delete(item.id); }
       setMessages((current) => uniqueMessages(current.map((message) => message.client_id === item.id ? delivered : message)));
       void queryClient.invalidateQueries({ queryKey: ["chat-rooms", user?.id] });
+      void queryClient.invalidateQueries({ queryKey: ["direct-message-sidebar", user?.id] });
       return delivered;
     } catch (error) {
       await markChatOutboxFailed(item, error);
@@ -854,7 +856,7 @@ const Chats = () => {
   }, [activeRoom, messageVirtualizer, timelineRows.length]);
 
   if (activeRoom) {
-    const directCallsAvailable = callsEnabled && isDirectCallRoom(activeRoom);
+    const directCallsAvailable = callsEnabled && isDirectCallRoom(activeRoom, user?.id);
     const openMemberProfile = () => {
       if (!activeRoom.is_group && activeRoom.peerId) navigate(getDirectChatProfileTarget(activeRoom.peerId));
     };

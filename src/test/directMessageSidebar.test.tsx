@@ -101,6 +101,37 @@ describe("forum direct-message sidebar", () => {
     expect(screen.getByRole("textbox", { name: /search your connections/i })).toBeEnabled();
   });
 
+  it("reconciles an empty cached sidebar after the first message was sent off-screen", async () => {
+    mocks.rpc.mockResolvedValueOnce({ data: [], error: null });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnMount: false } } });
+    const first = render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter><DirectMessageSidebar /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("No private chats yet")).toBeInTheDocument();
+    first.unmount();
+
+    mocks.rpc.mockResolvedValueOnce({
+      data: [{
+        connection_id: "connection-1", peer_id: "peer-1", room_id: "room-1",
+        display_name: "Rahul", display_avatar: null,
+        last_message: { id: "message-1", content: "First message", created_at: "2026-09-08T10:00:00.000Z" },
+        unread_count: 0,
+      }],
+      error: null,
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter><DirectMessageSidebar /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Rahul")).toBeInTheDocument();
+    expect(screen.getByText("First message")).toBeInTheDocument();
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+  });
+
   it("retires both Socket.IO sidebar fallbacks when AppSync recovers", async () => {
     mocks.realtimeActive = true;
     mocks.appSyncEnabled = true;

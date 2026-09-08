@@ -52,6 +52,10 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
     },
     enabled: Boolean(user?.id),
     staleTime: 15_000,
+    // This component is absent while a direct chat is open, so it may miss the
+    // first-message event. Reconcile on every Forum-sidebar mount instead of
+    // trusting a previously cached empty result.
+    refetchOnMount: "always",
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
