@@ -13,7 +13,10 @@ import {
   getDirectMessageNavigationTarget,
   getDirectMessagePreview,
   hasStartedDirectMessageConversation,
+  normalizeDirectMessageConnectionResult,
   normalizeDirectMessageSidebarRow,
+  readDirectMessageSidebarCache,
+  writeDirectMessageSidebarCache,
   type DirectMessageSidebarRow,
   type DirectMessageConnectionResult,
 } from "@/lib/directMessages";
@@ -38,19 +41,22 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
   const [openingPeerId, setOpeningPeerId] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(connectionSearch.trim());
 
-  const { data: conversations = [], isLoading } = useQuery({
+  const { data: conversations = [], isLoading, isError: conversationsError, refetch: refetchConversations } = useQuery({
     queryKey: ["direct-message-sidebar", user?.id],
     queryFn: async () => {
       const { data, error } = await (supabase as any).rpc("get_direct_message_sidebar");
       if (error) {
         reportError(error, { flow: "forum_navigation", action: "load_direct_message_sidebar", severity: "warning" });
-        return [];
+        throw error;
       }
-      return ((data || []) as DirectMessageSidebarRow[])
+      const rows = ((data || []) as DirectMessageSidebarRow[])
         .map(normalizeDirectMessageSidebarRow)
         .filter(hasStartedDirectMessageConversation);
+      if (user?.id) writeDirectMessageSidebarCache(user.id, rows);
+      return rows;
     },
     enabled: Boolean(user?.id),
+    placeholderData: () => readDirectMessageSidebarCache(user?.id),
     staleTime: 15_000,
     // This component is absent while a direct chat is open, so it may miss the
     // first-message event. Reconcile on every Forum-sidebar mount instead of
@@ -60,7 +66,7 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
     refetchOnReconnect: true,
   });
 
-  const { data: connectionResults = [], isFetching: connectionsLoading } = useQuery({
+  const { data: connectionResults = [], isFetching: connectionsLoading, isError: connectionsError } = useQuery({
     queryKey: ["direct-message-connection-search", user?.id, deferredSearch],
     queryFn: async () => {
       const { data, error } = await (supabase as any).rpc("search_my_connections", {
@@ -69,9 +75,13 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
       });
       if (error) {
         reportError(error, { flow: "forum_navigation", action: "search_direct_message_connections", severity: "warning" });
-        return [];
+        throw error;
       }
-      return (data || []) as DirectMessageConnectionResult[];
+      return (data || []).flatMap((row: unknown) => {
+        if (!row || typeof row !== "object" || Array.isArray(row)) return [];
+        const normalized = normalizeDirectMessageConnectionResult(row);
+        return normalized ? [normalized] : [];
+      });
     },
     enabled: Boolean(user?.id && searchFocused),
     staleTime: 30_000,
@@ -216,7 +226,7 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
               </button>
             )) : (
               <p className="px-3 py-4 text-center text-[11px] text-muted-foreground">
-                {connectionsLoading ? "Finding connections…" : deferredSearch ? "No matching connections" : "No connections yet"}
+                {connectionsLoading ? "Finding connections…" : connectionsError ? "Connections are temporarily unavailable" : deferredSearch ? "No matching connections" : "No connections yet"}
               </p>
             )}
           </div>
@@ -248,6 +258,14 @@ const DirectMessageSidebar = ({ onNavigate }: Props) => {
               </button>
             );
           })}
+        </div>
+      ) : conversationsError ? (
+        <div className="mx-3 rounded-xl border border-dashed border-border px-3 py-4 text-center">
+          <MessageCircle className="mx-auto h-4 w-4 text-muted-foreground" />
+          <p className="mt-1.5 text-[11px] font-medium text-foreground">Chats are temporarily unavailable</p>
+          <button type="button" onClick={() => void refetchConversations()} className="mt-1 text-[10px] font-semibold text-primary hover:underline">
+            Try again
+          </button>
         </div>
       ) : (
         <div className="mx-3 rounded-xl border border-dashed border-border px-3 py-4 text-center">

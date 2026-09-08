@@ -379,6 +379,81 @@ describe("direct chat and inbox membership policy", () => {
     ]);
   });
 
+  it("returns the canonical connection-search contract with an existing room id", async () => {
+    const roomRecord = {
+      id: "room-record", data: { id: "room-one", is_group: false, direct_key: "member:peer" },
+    };
+    vi.spyOn(prisma.legacyRecord, "findMany").mockImplementation(async ({ where }: any) => {
+      if (where.table_name === "chat_members" && where.record_id) return [];
+      if (where.table_name === "chat_members") return [membership()] as any;
+      if (where.table_name === "chat_rooms") return [roomRecord] as any;
+      return [];
+    });
+    vi.spyOn(prisma.connection, "findMany").mockResolvedValue([{
+      id: "connection-one", requester_id: "member", receiver_id: "peer",
+      pair_key: "member:peer", status: "accepted", note: null,
+      created_at: new Date(), responded_at: new Date(),
+    }] as any);
+    vi.spyOn(prisma.profile, "findMany").mockResolvedValue([{
+      user_id: "peer", name: "QA Recipient", slug: "qa-recipient",
+      avatar_url: "/qa.webp", headline: "Product", location: null, iit_name: "IIT Delhi",
+    }] as any);
+
+    await expect(callRpc("search_my_connections", { p_query: "QA", p_limit: 8 }, ctx)).resolves.toEqual([
+      expect.objectContaining({
+        peer_id: "peer", room_id: "room-one", display_name: "QA Recipient",
+        display_avatar: "/qa.webp", name: "QA Recipient", avatar_url: "/qa.webp",
+      }),
+    ]);
+  });
+
+  it("discovers a started direct conversation created before direct_key existed", async () => {
+    const roomRecord = {
+      id: "room-record", data: {
+        id: "room-one", is_group: false, created_at: "2026-08-01T00:00:00.000Z",
+      },
+    };
+    const messageRecord = {
+      id: "message-record", data: {
+        id: "message-one", room_id: "room-one", sender_id: "peer", content: "Legacy hello",
+        created_at: "2026-08-02T00:00:00.000Z",
+      },
+    };
+    const findMany = vi.fn()
+      .mockResolvedValueOnce([membership()])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([roomRecord])
+      .mockResolvedValueOnce([messageRecord]);
+    const queryRaw = vi.fn()
+      .mockResolvedValueOnce([membership()])
+      .mockResolvedValueOnce([{ id: "message-record", room_id: "room-one" }])
+      .mockResolvedValueOnce([]);
+    vi.spyOn(prisma, "$transaction").mockImplementation(async (callback: any) => callback({
+      $queryRaw: queryRaw,
+      legacyRecord: { findMany },
+    }));
+    const peerMembership = membership({
+      id: "membership-peer", record_id: "source-membership-peer", owner_id: "peer",
+      data: { id: "membership-public-peer", user_id: "peer", room_id: "room-one" },
+    });
+    vi.spyOn(prisma.legacyRecord, "findMany").mockResolvedValue([membership(), peerMembership] as any);
+    vi.spyOn(prisma.connection, "findMany").mockResolvedValue([{
+      id: "connection-one", requester_id: "member", receiver_id: "peer",
+      pair_key: "member:peer", status: "accepted", note: null,
+      created_at: new Date(), responded_at: new Date(),
+    }] as any);
+    vi.spyOn(prisma.profile, "findMany").mockResolvedValue([{
+      user_id: "peer", name: "Legacy Peer", avatar_url: null,
+    }] as any);
+
+    await expect(callRpc("get_direct_message_sidebar", {}, ctx)).resolves.toEqual([
+      expect.objectContaining({
+        connection_id: "connection-one", peer_id: "peer", room_id: "room-one",
+        display_name: "Legacy Peer", last_message: expect.objectContaining({ content: "Legacy hello" }),
+      }),
+    ]);
+  });
+
   it("reactivates only the confirmed consultation participants and clears their removal markers", async () => {
     const memberMembership = membership({ data: { status: "removed", removed_at: "2026-09-04T00:00:00.000Z" } });
     const peerMembership = membership({

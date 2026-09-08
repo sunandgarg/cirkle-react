@@ -188,7 +188,8 @@ export const clearChatCache = async (): Promise<void> => {
   try {
     for (let index = localStorage.length - 1; index >= 0; index -= 1) {
       const key = localStorage.key(index);
-      if (key === "cirkle:chat-inbox" || key?.startsWith("cirkle:chat-inbox:")) localStorage.removeItem(key);
+      if (key === "cirkle:chat-inbox" || key?.startsWith("cirkle:chat-inbox:")
+        || key?.startsWith("cirkle:direct-message-sidebar:")) localStorage.removeItem(key);
     }
   } catch { /* Storage can be unavailable in private browsing. */ }
   if (typeof indexedDB === "undefined") return;

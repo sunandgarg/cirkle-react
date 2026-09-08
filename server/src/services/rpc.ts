@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type Connection } from "@prisma/client";
 import { config } from "../config.js";
 import { prisma } from "../lib/prisma.js";
 import { ApiError } from "../lib/errors.js";
@@ -18,6 +18,7 @@ import { forumAppSyncChannels, isCanonicalRealtimeRecordId } from "../realtime/a
 import { createForumPostsWithSlowMode } from "./forumSlowMode.js";
 import { activeDailyRoomNamesForUser, closeDailySessionsForRooms, revokeDailyUserRooms, type ClosedDailySessions } from "./daily.js";
 import {
+  activeChatAudienceUserIds,
   activeChatMembershipRecordsForUser,
   lockedActiveChatMembership,
   lockedActiveChatMembershipForUpdate,
@@ -457,18 +458,25 @@ async function searchConnections(args: Args, ctx: RequestContext): Promise<Row[]
   const profiles = await prisma.profile.findMany({
     where: { user_id: { in: peerIds }, ...(query ? { OR: [{ name: { contains: query } }, { headline: { contains: query } }] } : {}) },
     select: { user_id: true, name: true, slug: true, avatar_url: true, headline: true, location: true, iit_name: true },
+    orderBy: [{ name: "asc" }, { user_id: "asc" }],
     take: limit,
   });
+  const visiblePeerIds = new Set(profiles.map((profile) => profile.user_id));
+  const roomsByPeer = await directRoomAddressesForConnections(ctx, connections.filter((connection) =>
+    visiblePeerIds.has(connection.requester_id === ctx.auth.id ? connection.receiver_id : connection.requester_id)));
   return profiles.map((profile) => ({
     user_id: profile.user_id,
     peer_id: profile.user_id,
     name: profile.name,
+    display_name: profile.name?.trim() || "Cirkle member",
     slug: profile.slug,
     avatar_url: profile.avatar_url,
+    display_avatar: profile.avatar_url,
     headline: profile.headline,
     location: profile.location,
     iit_name: profile.iit_name,
     connection_id: connections.find((row) => row.requester_id === profile.user_id || row.receiver_id === profile.user_id)?.id,
+    room_id: roomsByPeer.get(profile.user_id)?.room_id ?? null,
   }));
 }
 
@@ -850,23 +858,135 @@ async function chatInbox(ctx: RequestContext): Promise<Row[]> {
   }, { timeout: 15_000 });
 }
 
+async function activeMembershipsForRooms(roomIds: string[]): Promise<ChatMembershipRecord[]> {
+  const unique = [...new Set(roomIds.filter(Boolean))];
+  const output: ChatMembershipRecord[] = [];
+  for (let offset = 0; offset < unique.length; offset += 100) {
+    const chunk = unique.slice(offset, offset + 100);
+    const records = await prisma.legacyRecord.findMany({
+      where: {
+        table_name: "chat_members",
+        OR: chunk.map((roomId) => ({ data: { path: "$.room_id", equals: roomId } })),
+      },
+      select: { id: true, record_id: true, owner_id: true, community_id: true, data: true },
+      orderBy: { id: "asc" },
+    });
+    output.push(...records as ChatMembershipRecord[]);
+  }
+  return output;
+}
+
+function directRoomActivity(room: Row): number {
+  const lastMessage = room.last_message && typeof room.last_message === "object" && !Array.isArray(room.last_message)
+    ? room.last_message as Row : null;
+  for (const value of [lastMessage?.created_at, room.updated_at, room.created_at]) {
+    if (typeof value !== "string") continue;
+    const timestamp = new Date(value).getTime();
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return 0;
+}
+
+function roomHasMessage(room: Row): boolean {
+  return Boolean(room.last_message && typeof room.last_message === "object" && !Array.isArray(room.last_message));
+}
+
+function resolveDirectRoomsForConnections(
+  ctx: RequestContext,
+  connections: Connection[],
+  directRooms: Row[],
+  legacyMemberships: ChatMembershipRecord[],
+): Map<string, Row> {
+  const legacyRooms = directRooms.filter((room) => !room.direct_key && !room.consultation_id);
+  const legacyAudience = new Map(legacyRooms.map((room) => {
+    const roomId = String(room.room_id ?? room.id ?? "");
+    return [roomId, activeChatAudienceUserIds(legacyMemberships, roomId).sort()] as const;
+  }));
+  const exactByKey = new Map<string, Row[]>();
+  const legacyByKey = new Map<string, Row[]>();
+  for (const room of directRooms) {
+    if (typeof room.direct_key !== "string" || !room.direct_key) continue;
+    const matches = exactByKey.get(room.direct_key) ?? [];
+    matches.push(room);
+    exactByKey.set(room.direct_key, matches);
+  }
+  for (const room of legacyRooms) {
+    const roomId = String(room.room_id ?? room.id ?? "");
+    const audience = legacyAudience.get(roomId) ?? [];
+    if (audience.length !== 2 || !audience.includes(ctx.auth.id)) continue;
+    const key = pairKey(audience[0]!, audience[1]!);
+    const matches = legacyByKey.get(key) ?? [];
+    matches.push(room);
+    legacyByKey.set(key, matches);
+  }
+  const result = new Map<string, Row>();
+
+  for (const connection of connections) {
+    const peerId = connection.requester_id === ctx.auth.id ? connection.receiver_id : connection.requester_id;
+    const directKey = pairKey(ctx.auth.id, peerId);
+    const exact = exactByKey.get(directKey) ?? [];
+    const legacy = legacyByKey.get(directKey) ?? [];
+    const started = [...exact, ...legacy].filter(roomHasMessage).sort((a, b) => directRoomActivity(b) - directRoomActivity(a));
+    const available = [...exact, ...legacy].sort((a, b) => directRoomActivity(b) - directRoomActivity(a));
+    const room = started[0] ?? available[0];
+    if (room) result.set(peerId, room);
+  }
+  return result;
+}
+
+/**
+ * Resolves accepted peers to rooms the viewer can currently access. Canonical
+ * `direct_key` rooms remain authoritative, while the membership fallback keeps
+ * conversations created before that column existed discoverable. The fallback
+ * is fail-closed: it accepts only an unlabelled, non-consultation room with
+ * exactly the viewer and that accepted peer as active members.
+ */
+async function directRoomsForConnections(ctx: RequestContext, connections: Connection[]): Promise<Map<string, Row>> {
+  const inbox = await chatInbox(ctx);
+  const directRooms = inbox.filter((room) => room.is_group === false);
+  const legacyRooms = directRooms.filter((room) => !room.direct_key && !room.consultation_id);
+  const legacyMemberships = legacyRooms.length
+    ? await activeMembershipsForRooms(legacyRooms.map((room) => String(room.room_id ?? room.id ?? "")))
+    : [];
+  return resolveDirectRoomsForConnections(ctx, connections, directRooms, legacyMemberships);
+}
+
+/** Search needs only a room address, not message/unread aggregation. */
+async function directRoomAddressesForConnections(ctx: RequestContext, connections: Connection[]): Promise<Map<string, Row>> {
+  if (!connections.length) return new Map();
+  const memberships = await chatMembership(prisma, ctx.auth.id);
+  const roomIds = memberships.flatMap((membership) =>
+    typeof membership.room_id === "string" && membership.room_id ? [membership.room_id] : []);
+  const rooms: Row[] = (await legacyRowsByJsonValues(prisma, "chat_rooms", "id", roomIds))
+    .map((room): Row => ({ ...room, room_id: room.room_id ?? room.id }));
+  const directRooms = rooms.filter((room) => room.is_group === false);
+  const legacyRooms = directRooms.filter((room) => !room.direct_key && !room.consultation_id);
+  const legacyMemberships = legacyRooms.length
+    ? await activeMembershipsForRooms(legacyRooms.map((room) => String(room.id ?? "")))
+    : [];
+  return resolveDirectRoomsForConnections(ctx, connections, directRooms, legacyMemberships);
+}
+
 async function directSidebar(ctx: RequestContext): Promise<Row[]> {
   // The sidebar is a passive view: a soft-removed/ambiguous membership is
   // omitted and is never reopened merely because the connection remains active.
-  const inbox = await chatInbox(ctx);
+  await requireVerified(ctx);
   const connections = await prisma.connection.findMany({ where: { status: "accepted", OR: [{ requester_id: ctx.auth.id }, { receiver_id: ctx.auth.id }] } });
-  const profiles = await prisma.profile.findMany({ where: { user_id: { in: connections.map((row) => row.requester_id === ctx.auth.id ? row.receiver_id : row.requester_id) } } });
+  const peerIds = connections.map((row) => row.requester_id === ctx.auth.id ? row.receiver_id : row.requester_id);
+  const [profiles, roomsByPeer] = await Promise.all([
+    prisma.profile.findMany({ where: { user_id: { in: peerIds } } }),
+    directRoomsForConnections(ctx, connections),
+  ]);
   return connections.flatMap((connection) => {
     const peerId = connection.requester_id === ctx.auth.id ? connection.receiver_id : connection.requester_id;
     const profile = profiles.find((row) => row.user_id === peerId);
-    const key = pairKey(ctx.auth.id, peerId);
-    const room = inbox.find((row) => row.direct_key === key);
+    const room = roomsByPeer.get(peerId);
     // Keep an accepted direct room addressable before its first message. The
     // Chats page needs the peer identity immediately so profile, audio-call,
     // and video-call controls do not depend on sending a placeholder message.
     if (!room?.room_id) return [];
     return [{ connection_id: connection.id, peer_id: peerId, room_id: room.room_id, display_name: profile?.name ?? "Member", display_avatar: profile?.avatar_url ?? null, last_message: room.last_message, unread_count: room.unread_count ?? 0 }];
-  });
+  }).sort((left, right) => directRoomActivity(right) - directRoomActivity(left));
 }
 
 async function markChatRead(args: Args, ctx: RequestContext): Promise<null> {

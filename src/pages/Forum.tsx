@@ -35,7 +35,6 @@ import {
   getForumTestPosts, appendForumTestPost, getLastForumRoom, setLastForumRoom,
   purgeLegacyForumLocalState,
 } from "@/hooks/useForumCache";
-import { useScrollBehavior } from "@/hooks/useScrollBehavior";
 import {
   buildForumScopes, hasCompleteForumEducation,
   type CanonicalAcademicIdentity, type ForumScope as ScopeDef,
@@ -69,6 +68,7 @@ import { shouldAnchorLatestDuringKeyboard, useVisualViewportFrame } from "@/hook
 import { safeHttpUrl } from "@/lib/safeUrl";
 import { forumPostProfileSignature, resolveForumPostProfile } from "@/lib/forumProfiles";
 import { assertSmallFile, IMAGE_SOURCE_LIMIT_BYTES } from "@/lib/imageUtils";
+import { estimateForumPostRowHeight, TIMELINE_VIRTUALIZER_OPTIONS } from "@/lib/timelineLayout";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
@@ -637,8 +637,6 @@ const Forum = () => {
     return () => { cancelled = true; };
   }, [scopes, user?.id]);
 
-  // Smart scroll hide/show
-  const { showInput, showNavBar, showHeader, restoreAll } = useScrollBehavior(scrollContainerRef);
   const visualViewport = useVisualViewportFrame();
 
   // Keep the latest message anchored only when the member was already near
@@ -1579,7 +1577,6 @@ const Forum = () => {
         return;
       }
       setLoadingOlder(true);
-      const prevHeight = el.scrollHeight;
       try {
         let olderArr: any[];
         let serverEnriched = true;
@@ -1602,11 +1599,9 @@ const Forum = () => {
           setOlderPages(prev => mergeForumHistoryPosts(enriched, prev));
           if (user?.id) void persistForumHistory(user.id, activeScope.type, activeScope.key, enriched);
           if (olderArr.length < PAGE_SIZE) setHasMoreOlder(false);
-          // Preserve scroll position
-          requestAnimationFrame(() => {
-            const newHeight = el.scrollHeight;
-            el.scrollTop = newHeight - prevHeight + el.scrollTop;
-          });
+          // The end-anchored virtualizer preserves the first visible message
+          // while this page is prepended. Avoid a second scrollTop write here:
+          // it fights browser momentum and can double-apply the correction.
         }
       } catch {
         setHasMoreOlder(false);
@@ -2058,7 +2053,7 @@ const Forum = () => {
       {/* ═══ MAIN CHAT AREA ═══ */}
       <div className="flex-1 flex flex-col min-w-0 relative overflow-x-hidden">
         {/* ── Compact, touch-safe group header ── */}
-        <div className={`h-16 flex items-center gap-2.5 px-2.5 sm:px-3 border-b border-border/55 bg-card/[0.88] backdrop-blur-2xl flex-shrink-0 z-10 shadow-[0_8px_28px_-22px_hsl(var(--foreground)/0.55)] transition-transform duration-200 ease-in-out ${showHeader ? 'translate-y-0' : '-translate-y-full'}`}>
+        <div className="h-16 flex items-center gap-2.5 px-2.5 sm:px-3 border-b border-border/55 bg-card/[0.88] backdrop-blur-2xl flex-shrink-0 z-10 shadow-[0_8px_28px_-22px_hsl(var(--foreground)/0.55)]">
           <button onClick={() => setSidebarOpen(true)} className="lg:hidden w-11 h-11 flex items-center justify-center rounded-2xl hover:bg-accent active:scale-95 transition-all" aria-label="Open channels">
             <ArrowLeft className="w-5 h-5" />
           </button>
@@ -2265,9 +2260,10 @@ const Forum = () => {
           </div>
         )}
 
-        {/* ── Ultra-smooth Composer (FIX 2) ── */}
+        {/* Keep the composer in normal flow so a scroll gesture never changes
+            the timeline viewport height underneath the member's finger. */}
         {canPost && !editingPost && (
-          <div className={`z-20 backdrop-blur-2xl bg-card/[0.9] border-t border-border/55 px-2 sm:px-3 py-2 flex-shrink-0 safe-bottom shadow-[0_-12px_40px_-32px_hsl(var(--foreground)/0.6)] transition-[transform,opacity] duration-200 ease-out ${showInput ? 'relative translate-y-0 opacity-100' : 'absolute translate-y-full opacity-0 bottom-0 left-0 right-0 pointer-events-none'}`}>
+          <div className="relative z-20 flex-shrink-0 border-t border-border/55 bg-card/[0.94] px-2 py-2 shadow-[0_-12px_40px_-32px_hsl(var(--foreground)/0.6)] backdrop-blur-xl safe-bottom sm:px-3">
             {/* Reply preview */}
             {replyTo && (
               <div className="flex items-center bg-accent/80 rounded-t-lg mb-1 overflow-hidden animate-fade-in">
@@ -2405,7 +2401,6 @@ const Forum = () => {
                       const scroller = scrollContainerRef.current;
                       anchorLatestDuringKeyboardRef.current = Boolean(scroller)
                         && shouldAnchorLatestDuringKeyboard(scroller.scrollHeight, scroller.scrollTop, scroller.clientHeight);
-                      restoreAll();
                     }}
                     onBlur={() => { anchorLatestDuringKeyboardRef.current = false; }}
                     placeholder={(activeScopeDef as any)?.label || "Forum"}
@@ -2590,8 +2585,9 @@ const Forum = () => {
       {/* Dismiss attach menu backdrop */}
       {showAttachMenu && <div className="fixed inset-0 z-10" onClick={() => setShowAttachMenu(false)} />}
       </div>
-      {/* Forum's own bottom nav with scroll hide */}
-      <div className={`lg:hidden flex-shrink-0 overflow-hidden transition-[max-height,opacity] duration-200 ease-out ${showNavBar ? 'max-h-20 opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
+      {/* Stable navigation prevents a direction-reversing layout shift during
+          touch/trackpad momentum and keeps a predictable navigation landmark. */}
+      <div className="flex-shrink-0 lg:hidden">
         <BottomNav />
       </div>
     </div>
@@ -2652,18 +2648,31 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContaine
     { type: "date" as const, key: `date-${date}`, date },
     ...datePosts.map((post: any) => ({ type: "post" as const, key: post.id, post })),
   ]), [groupedByDate]);
+  const getTimelineItemKey = useCallback(
+    (index: number) => timelineItems[index]?.key || index,
+    [timelineItems],
+  );
+  const estimateTimelineItemSize = useCallback((index: number) => {
+    const item = timelineItems[index];
+    if (!item || item.type === "date") return 48;
+    return estimateForumPostRowHeight(item.post);
+  }, [timelineItems]);
   const virtualizer = useVirtualizer({
     count: timelineItems.length,
     getScrollElement: () => scrollContainerRef.current,
-    estimateSize: (index) => timelineItems[index]?.type === "date" ? 48 : 82,
-    // Six rows keeps fast flick scrolling visually complete without mounting
-    // dozens of media/reaction-heavy message cards outside the viewport.
-    overscan: 6,
-    getItemKey: (index) => timelineItems[index]?.key || index,
+    estimateSize: estimateTimelineItemSize,
+    // A modest buffer keeps fast flicks visually complete. Direct DOM updates
+    // move the mounted rows without routing every scroll pixel through React.
+    overscan: 8,
+    getItemKey: getTimelineItemKey,
     scrollMargin: listRef.current?.offsetTop || 0,
-    useAnimationFrameWithResizeObserver: true,
+    ...TIMELINE_VIRTUALIZER_OPTIONS,
     isScrollingResetDelay: 120,
   });
+  const setListElement = useCallback((node: HTMLDivElement | null) => {
+    listRef.current = node;
+    virtualizer.containerRef(node);
+  }, [virtualizer]);
   useEffect(() => {
     if (!highlightedPostId) return;
     const targetIndex = timelineItems.findIndex((item) => item.type === "post" && item.post.id === highlightedPostId);
@@ -2709,13 +2718,13 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContaine
             ))}
           </div>
         )}
-        <div ref={listRef} style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
+        <div ref={setListElement} style={{ position: "relative", width: "100%" }}>
           {virtualizer.getVirtualItems().map((virtualRow) => {
             const item = timelineItems[virtualRow.index];
             return (
               <div key={item.key} ref={virtualizer.measureElement} data-index={virtualRow.index}
                 className="timeline-virtual-row"
-                style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)` }}>
+                style={{ position: "absolute", top: 0, left: 0, width: "100%" }}>
                 {item.type === "date" ? (
                   <div className="my-3 flex justify-center px-4 pointer-events-none">
                     <span className="rounded-full border border-white/60 bg-card px-3 py-1 text-[11px] font-semibold text-muted-foreground shadow-sm dark:border-border/70">{item.date}</span>
@@ -2880,8 +2889,8 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
   return (
     <div
       ref={(el) => { messageRefs.current[post.id] = el; messageRef.current = el; }}
-      className={`forum-message-row relative transition-colors duration-300 ${isHighlighted ? 'bg-primary/5' : ''} ${isMine && post.is_anonymous ? 'bg-primary/[0.035]' : ''} ${isGrouped ? '' : 'mt-[2px]'}`}
-      style={{ transform: `translateX(${swipeOffset}px)`, transition: swipeOffset === 0 ? 'transform 0.18s ease-out' : 'none', touchAction: 'pan-y pinch-zoom', WebkitTouchCallout: 'none', contentVisibility: 'auto', containIntrinsicSize: '0 76px' } as React.CSSProperties}
+      className={`relative transition-colors duration-300 ${isHighlighted ? 'bg-primary/5' : ''} ${isMine && post.is_anonymous ? 'bg-primary/[0.035]' : ''} ${isGrouped ? '' : 'mt-[2px]'}`}
+      style={{ transform: `translateX(${swipeOffset}px)`, transition: swipeOffset === 0 ? 'transform 0.18s ease-out' : 'none', touchAction: 'pan-y pinch-zoom', WebkitTouchCallout: 'none' } as React.CSSProperties}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={(e) => finishPointerGesture(e)}
@@ -2971,7 +2980,7 @@ const DiscordMessage = ({ post, onReply, onReact, userId, isAdmin, onAdminPin, o
           {/* Image */}
           {!isDeleted && imageUrl && (
             <img src={imageUrl} alt={post.content === "GIF" ? "Shared GIF" : "Shared image"} className="mt-1.5 block h-auto max-h-72 w-full max-w-[400px] rounded-lg object-contain cursor-pointer hover:opacity-90 transition-opacity"
-              loading="lazy" onClick={() => onImageClick(imageUrl)} />
+              loading="lazy" decoding="async" onClick={() => onImageClick(imageUrl)} />
           )}
 
           {/* File */}

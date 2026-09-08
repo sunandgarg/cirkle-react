@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import DirectMessageSidebar from "@/components/forum/DirectMessageSidebar";
+import { writeDirectMessageSidebarCache } from "@/lib/directMessages";
 
 const mocks = vi.hoisted(() => ({
   rpc: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 describe("forum direct-message sidebar", () => {
   beforeEach(() => {
+    localStorage.clear();
     mocks.rpc.mockReset();
     mocks.channel.mockReset();
     mocks.removeChannel.mockReset();
@@ -56,7 +58,7 @@ describe("forum direct-message sidebar", () => {
         error: null,
       };
       if (name === "search_my_connections") return {
-        data: [{ peer_id: "peer-2", room_id: null, display_name: "Priya", display_avatar: null, headline: "Product manager" }],
+        data: [{ user_id: "peer-2", room_id: null, name: "Priya", avatar_url: null, headline: "Product manager" }],
         error: null,
       };
       return { data: null, error: null };
@@ -97,8 +99,29 @@ describe("forum direct-message sidebar", () => {
         <MemoryRouter><DirectMessageSidebar /></MemoryRouter>
       </QueryClientProvider>,
     );
-    expect(await screen.findByText("No private chats yet")).toBeInTheDocument();
+    expect(await screen.findByText("Chats are temporarily unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
     expect(screen.getByRole("textbox", { name: /search your connections/i })).toBeEnabled();
+  });
+
+  it("renders the last cached started thread while an authoritative refresh is unavailable", async () => {
+    writeDirectMessageSidebarCache("viewer-1", [{
+      connection_id: "cached-connection", peer_id: "cached-peer", room_id: "cached-room",
+      display_name: "Cached Priya", display_avatar: null,
+      last_message: { id: "cached-message", content: "Cached hello", created_at: "2026-09-08T09:00:00.000Z" },
+      unread_count: 2,
+    }]);
+    mocks.rpc.mockResolvedValue({ data: null, error: new Error("Failed to fetch") });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter><DirectMessageSidebar /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Cached Priya")).toBeInTheDocument();
+    expect(screen.getByText("Cached hello")).toBeInTheDocument();
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith("get_direct_message_sidebar"));
   });
 
   it("reconciles an empty cached sidebar after the first message was sent off-screen", async () => {

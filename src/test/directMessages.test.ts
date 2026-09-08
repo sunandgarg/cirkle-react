@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   getConnectionMessageNavigationTarget,
   getDirectChatBackTarget,
@@ -6,8 +6,11 @@ import {
   getDirectMessageNavigationTarget,
   getDirectMessagePreview,
   hasStartedDirectMessageConversation,
+  normalizeDirectMessageConnectionResult,
   normalizeDirectMessageSidebarRow,
+  readDirectMessageSidebarCache,
   shouldShowConversationNotificationBell,
+  writeDirectMessageSidebarCache,
   type DirectMessageSidebarRow,
 } from "@/lib/directMessages";
 
@@ -23,6 +26,8 @@ const row = (overrides: Partial<DirectMessageSidebarRow> = {}): DirectMessageSid
 });
 
 describe("direct message sidebar", () => {
+  beforeEach(() => localStorage.clear());
+
   it("returns a private chat to the open Forum channel panel", () => {
     expect(getDirectChatBackTarget()).toBe("/cirkle-forum?channels=open");
     expect(getDirectChatProfileTarget("peer/with space")).toBe("/profile/peer%2Fwith%20space");
@@ -54,6 +59,29 @@ describe("direct message sidebar", () => {
 
   it("normalizes labels and unread counts", () => {
     expect(normalizeDirectMessageSidebarRow(row({ unread_count: -3 }))).toMatchObject({ display_name: "Rahul", unread_count: 0 });
+  });
+
+  it("normalizes the original MySQL connection-search field aliases", () => {
+    expect(normalizeDirectMessageConnectionResult({
+      user_id: "peer-legacy", name: "  Priya  ", avatar_url: "/priya.webp", headline: " Product ",
+    })).toEqual({
+      peer_id: "peer-legacy", room_id: null, display_name: "Priya",
+      display_avatar: "/priya.webp", headline: "Product",
+    });
+    expect(normalizeDirectMessageConnectionResult({ name: "Missing identity" })).toBeNull();
+  });
+
+  it("hydrates only started conversations from the viewer-scoped cache", () => {
+    const started = row({
+      room_id: "room-1",
+      last_message: { id: "message-1", content: "Hello", created_at: "2026-09-08T10:00:00.000Z" },
+    });
+    writeDirectMessageSidebarCache("viewer-1", [started, row({ connection_id: "unstarted" })]);
+
+    expect(readDirectMessageSidebarCache("viewer-1")).toEqual([
+      expect.objectContaining({ connection_id: "connection-1", room_id: "room-1" }),
+    ]);
+    expect(readDirectMessageSidebarCache("viewer-2")).toEqual([]);
   });
 
   it("uses concise previews for media", () => {

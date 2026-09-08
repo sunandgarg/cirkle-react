@@ -210,15 +210,10 @@
       radial-gradient(circle at 7px 31px, hsl(210 18% 80% / 0.035) 1px, transparent 1.2px);
   }
 
-  /* Skip layout/paint work for messages well outside the viewport. The
-     intrinsic fallback prevents scroll jumps while long channels hydrate. */
-  .forum-message-row {
-    content-visibility: auto;
-    contain-intrinsic-size: auto 76px;
-  }
-
   /* Isolate virtual-row layout without paint containment, which would clip
-     reply affordances and shadows that intentionally extend past a row. */
+     reply affordances and shadows that intentionally extend past a row. The
+     virtualizer already unmounts distant messages, so content-visibility's
+     synthetic row height would only introduce measurement corrections. */
   .timeline-virtual-row {
     contain: layout style;
   }
@@ -365,6 +360,19 @@
     overscroll-behavior-y: contain;
     -webkit-overflow-scrolling: touch;
     touch-action: pan-y pinch-zoom;
+    overflow-anchor: none;
+    scroll-behavior: auto;
+  }
+
+  .chat-timeline-scroll-region {
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y pinch-zoom;
+    overflow-anchor: none;
+    scroll-behavior: auto;
   }
 
   /* One resilient mobile shell for login, verification and onboarding. It

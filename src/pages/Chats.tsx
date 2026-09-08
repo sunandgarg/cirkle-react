@@ -42,6 +42,7 @@ import { directCallPeerId, isDirectCallRoom, parseCallInviteQuery } from "@/lib/
 import NotificationBell from "@/components/NotificationBell";
 import { useDailyCallAvailability } from "@/hooks/useRuntimeFeatures";
 import { shouldAnchorLatestDuringKeyboard, useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
+import { estimateDirectMessageRowHeight, TIMELINE_VIRTUALIZER_OPTIONS } from "@/lib/timelineLayout";
 
 const PAGE_SIZE = 50;
 const inboxCacheKey = (userId: string) => `cirkle:chat-inbox:${userId}`;
@@ -559,8 +560,6 @@ const Chats = () => {
   const loadOlder = async () => {
     if (!activeRoom || !messages.length || loadingOlder) return;
     setLoadingOlder(true);
-    const container = scrollRef.current;
-    const oldHeight = container?.scrollHeight || 0;
     const oldest = messages[0];
     const { data, error } = await supabase.from("messages").select("*")
       .eq("room_id", activeRoom.id)
@@ -573,9 +572,6 @@ const Chats = () => {
       prependRef.current = true;
       setMessages((current) => uniqueMessages([...page, ...current]));
       setHasOlder(page.length === PAGE_SIZE);
-      requestAnimationFrame(() => {
-        if (container) container.scrollTop = container.scrollHeight - oldHeight;
-      });
     }
     setLoadingOlder(false);
   };
@@ -815,19 +811,22 @@ const Chats = () => {
     return rows;
   }, [messages]);
   const messagesById = useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
+  const getTimelineRowKey = useCallback(
+    (index: number) => timelineRows[index]?.key || index,
+    [timelineRows],
+  );
+  const estimateTimelineRowSize = useCallback((index: number) => {
+    const row = timelineRows[index];
+    if (!row || row.type === "date") return 44;
+    return estimateDirectMessageRowHeight(row.message);
+  }, [timelineRows]);
   const messageVirtualizer = useVirtualizer({
     count: timelineRows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (index) => {
-      const row = timelineRows[index];
-      if (row?.type === "date") return 44;
-      if (row?.message.message_type === "image") return 260;
-      if (row?.message.message_type === "voice") return 84;
-      return 66;
-    },
-    getItemKey: (index) => timelineRows[index]?.key || index,
-    overscan: 6,
-    useAnimationFrameWithResizeObserver: true,
+    estimateSize: estimateTimelineRowSize,
+    getItemKey: getTimelineRowKey,
+    overscan: 8,
+    ...TIMELINE_VIRTUALIZER_OPTIONS,
     isScrollingResetDelay: 140,
   });
 
@@ -896,16 +895,16 @@ const Chats = () => {
           const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 140;
           followLiveRef.current = nearBottom;
           if (nearBottom) setNewMessageCount(0);
-        }} className="native-scroll-region relative flex-1 px-3 py-4 chat-wallpaper">
+        }} className="chat-timeline-scroll-region relative flex-1 px-3 py-4 chat-wallpaper">
           {hasOlder && <div className="flex justify-center mb-3"><Button size="sm" variant="secondary" disabled={loadingOlder} onClick={loadOlder}>{loadingOlder && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}Load earlier messages</Button></div>}
-          <div style={{ height: `${messageVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+          <div ref={messageVirtualizer.containerRef} style={{ position: "relative", width: "100%" }}>
             {messageVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = timelineRows[virtualRow.index];
               if (!row) return null;
               return (
                 <div key={row.key} data-index={virtualRow.index} ref={messageVirtualizer.measureElement}
                   className="timeline-virtual-row"
-                  style={{ position: "absolute", left: 0, top: 0, width: "100%", transform: `translateY(${virtualRow.start}px)` }}>
+                  style={{ position: "absolute", left: 0, top: 0, width: "100%" }}>
                   {row.type === "date" ? (
                     <div className="flex items-center justify-center py-3"><span className="text-[11px] bg-card/90 text-muted-foreground px-3 py-1 rounded-lg shadow-sm font-medium">{row.label}</span></div>
                   ) : (() => {
