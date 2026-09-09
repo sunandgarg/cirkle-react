@@ -368,11 +368,21 @@
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
-    overscroll-behavior-y: contain;
+    overscroll-behavior-y: none;
     -webkit-overflow-scrolling: touch;
     touch-action: pan-y pinch-zoom;
     overflow-anchor: none;
     scroll-behavior: auto;
+  }
+
+  /* With no messages there is no meaningful scroll axis. Disable one-finger
+     panning so an empty iOS/Android chat cannot rubber-band both gestures at
+     the same coincident boundary; keep pinch zoom available for accessibility. */
+  .chat-timeline-scroll-region[data-scroll-state="empty"] {
+    overflow-y: hidden;
+    overscroll-behavior-y: none;
+    -webkit-overflow-scrolling: auto;
+    touch-action: pinch-zoom;
   }
 
   /* One resilient mobile shell for login, verification and onboarding. It

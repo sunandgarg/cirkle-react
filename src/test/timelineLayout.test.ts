@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   estimateDirectMessageRowHeight,
   estimateForumPostRowHeight,
+  getTimelineScrollState,
+  normalizeTimelineScrollOffset,
   TIMELINE_VIRTUALIZER_OPTIONS,
 } from "@/lib/timelineLayout";
 
@@ -37,5 +39,15 @@ describe("timeline layout", () => {
     expect(estimateDirectMessageRowHeight({ content: "Short" })).toBe(66);
     expect(estimateDirectMessageRowHeight({ content: "x".repeat(200), reply_to_message_id: "parent" }))
       .toBeGreaterThan(150);
+  });
+
+  it("locks only empty timelines at their sole valid scroll offset", () => {
+    expect(getTimelineScrollState(0)).toBe("empty");
+    expect(normalizeTimelineScrollOffset(0, 42)).toBe(0);
+    expect(normalizeTimelineScrollOffset(0, -18)).toBe(0);
+
+    expect(getTimelineScrollState(1)).toBe("scrollable");
+    expect(normalizeTimelineScrollOffset(1, 42)).toBe(42);
+    expect(normalizeTimelineScrollOffset(200, 1_250)).toBe(1_250);
   });
 });

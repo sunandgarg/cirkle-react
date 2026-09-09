@@ -42,7 +42,12 @@ import { directCallPeerId, isDirectCallRoom, parseCallInviteQuery } from "@/lib/
 import NotificationBell from "@/components/NotificationBell";
 import { useDailyCallAvailability } from "@/hooks/useRuntimeFeatures";
 import { shouldAnchorLatestDuringKeyboard, useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
-import { estimateDirectMessageRowHeight, TIMELINE_VIRTUALIZER_OPTIONS } from "@/lib/timelineLayout";
+import {
+  estimateDirectMessageRowHeight,
+  getTimelineScrollState,
+  normalizeTimelineScrollOffset,
+  TIMELINE_VIRTUALIZER_OPTIONS,
+} from "@/lib/timelineLayout";
 
 const PAGE_SIZE = 50;
 const inboxCacheKey = (userId: string) => `cirkle:chat-inbox:${userId}`;
@@ -820,6 +825,7 @@ const Chats = () => {
     if (!row || row.type === "date") return 44;
     return estimateDirectMessageRowHeight(row.message);
   }, [timelineRows]);
+  const timelineScrollState = getTimelineScrollState(timelineRows.length);
   const messageVirtualizer = useVirtualizer({
     count: timelineRows.length,
     getScrollElement: () => scrollRef.current,
@@ -853,6 +859,14 @@ const Chats = () => {
     if (!followLiveRef.current) return;
     requestAnimationFrame(() => messageVirtualizer.scrollToIndex(timelineRows.length - 1, { align: "end" }));
   }, [activeRoom, messageVirtualizer, timelineRows.length]);
+
+  useEffect(() => {
+    if (timelineScrollState !== "empty") return;
+    const element = scrollRef.current;
+    if (element) element.scrollTop = 0;
+    followLiveRef.current = true;
+    setNewMessageCount(0);
+  }, [activeRoom?.id, timelineScrollState]);
 
   if (activeRoom) {
     const directCallsAvailable = callsEnabled && isDirectCallRoom(activeRoom, user?.id);
@@ -890,8 +904,15 @@ const Chats = () => {
           <button onClick={() => setShowConversationInfo(true)} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Conversation options"><MoreVertical className="w-5 h-5" /></button>
         </header>
 
-        <div ref={scrollRef} onScroll={(event) => {
+        <div ref={scrollRef} data-scroll-state={timelineScrollState} onScroll={(event) => {
           const element = event.currentTarget;
+          const normalizedOffset = normalizeTimelineScrollOffset(timelineRows.length, element.scrollTop);
+          if (normalizedOffset !== element.scrollTop) element.scrollTop = normalizedOffset;
+          if (timelineScrollState === "empty") {
+            followLiveRef.current = true;
+            setNewMessageCount(0);
+            return;
+          }
           const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 140;
           followLiveRef.current = nearBottom;
           if (nearBottom) setNewMessageCount(0);

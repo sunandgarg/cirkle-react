@@ -13,6 +13,20 @@ export const TIMELINE_VIRTUALIZER_OPTIONS = {
   useAnimationFrameWithResizeObserver: true,
 } as const;
 
+export type TimelineScrollState = "empty" | "scrollable";
+
+/**
+ * An empty message viewport has no valid vertical offset. Treating it as a
+ * regular pan surface lets mobile browsers rubber-band the coincident top and
+ * bottom edges, which can make opposite swipes appear to move the same way.
+ */
+export const getTimelineScrollState = (rowCount: number): TimelineScrollState =>
+  rowCount > 0 ? "scrollable" : "empty";
+
+/** Keep an empty virtualizer from retaining a transient Safari rubber-band offset. */
+export const normalizeTimelineScrollOffset = (rowCount: number, scrollTop: number): number =>
+  rowCount > 0 ? scrollTop : 0;
+
 const estimatedTextLines = (content: unknown, charactersPerLine: number, maximum: number) => {
   const text = String(content || "");
   return Math.min(
