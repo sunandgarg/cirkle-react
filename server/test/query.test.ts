@@ -21,6 +21,18 @@ describe("Supabase-shaped query compatibility", () => {
     expect(matchesFilter({ id: "first" }, filter)).toBe(false);
   });
 
+  it("rejects null, structured, and oversized IN values before Prisma", () => {
+    expect(() => parseInValue([null, "profile-id"])).toThrowError(/non-null/);
+    expect(() => parseInValue([{ id: "profile-id" }])).toThrowError(/strings, numbers, or booleans/);
+    expect(() => parseInValue(Array.from({ length: 501 }, (_, index) => `profile-${index}`))).toThrowError(/too many/);
+  });
+
+  it("rejects a null profile ID while building a typed Prisma filter", () => {
+    expect(() => buildFilter([
+      { column: "user_id", operator: "in", value: [null, "profile-id"] },
+    ], ["user_id"])).toThrowError(/non-null/);
+  });
+
   it("supports null-or-future expressions used by jobs", () => {
     const nodes = parseOrExpression("expires_at.is.null,expires_at.gt.2026-09-04T12:00:00.000Z");
     expect(nodes.some((node) => matchesLogicNode({ expires_at: null }, node))).toBe(true);

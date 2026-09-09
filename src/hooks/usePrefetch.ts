@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { uniqueIdentifiers } from "@/lib/identifiers";
 
 /**
  * Prefetches critical data on login so all tabs load instantly from cache.
@@ -27,8 +28,10 @@ export const usePrefetch = (userId: string | undefined, profile: any) => {
         queryFn: async () => {
           const { data } = await supabase.from("posts").select("*").eq("channel", "global").order("created_at", { ascending: true }).limit(50);
           if (!data?.length) return [];
-          const ids = [...new Set(data.map((p) => p.author_id))];
-          const { data: profiles } = await supabase.from("profiles").select("user_id, name, avatar_url, iit_name, student_status").in("user_id", ids);
+          const ids = uniqueIdentifiers(data.map((p) => p.author_id));
+          const { data: profiles } = ids.length
+            ? await supabase.from("profiles").select("user_id, name, avatar_url, iit_name, student_status").in("user_id", ids)
+            : { data: [] };
           const map = new Map(profiles?.map((p) => [p.user_id, p]) ?? []);
           return data.map((post) => ({ ...post, profile: map.get(post.author_id) ?? null }));
         },
@@ -41,8 +44,10 @@ export const usePrefetch = (userId: string | undefined, profile: any) => {
           queryFn: async () => {
             const { data } = await supabase.from("posts").select("*").eq("channel", "campus").eq("campus_filter", userIit).order("created_at", { ascending: true }).limit(50);
             if (!data?.length) return [];
-            const ids = [...new Set(data.map((p) => p.author_id))];
-            const { data: profiles } = await supabase.from("profiles").select("user_id, name, avatar_url, iit_name, student_status").in("user_id", ids);
+            const ids = uniqueIdentifiers(data.map((p) => p.author_id));
+            const { data: profiles } = ids.length
+              ? await supabase.from("profiles").select("user_id, name, avatar_url, iit_name, student_status").in("user_id", ids)
+              : { data: [] };
             const map = new Map(profiles?.map((p) => [p.user_id, p]) ?? []);
             return data.map((post) => ({ ...post, profile: map.get(post.author_id) ?? null }));
           },
@@ -56,8 +61,10 @@ export const usePrefetch = (userId: string | undefined, profile: any) => {
           queryFn: async () => {
             const { data } = await supabase.from("posts").select("*").eq("channel", "cohort").eq("cohort_filter", cohortKey).order("created_at", { ascending: true }).limit(50);
             if (!data?.length) return [];
-            const ids = [...new Set(data.map((p) => p.author_id))];
-            const { data: profiles } = await supabase.from("profiles").select("user_id, name, avatar_url, iit_name, student_status").in("user_id", ids);
+            const ids = uniqueIdentifiers(data.map((p) => p.author_id));
+            const { data: profiles } = ids.length
+              ? await supabase.from("profiles").select("user_id, name, avatar_url, iit_name, student_status").in("user_id", ids)
+              : { data: [] };
             const map = new Map(profiles?.map((p) => [p.user_id, p]) ?? []);
             return data.map((post) => ({ ...post, profile: map.get(post.author_id) ?? null }));
           },
@@ -78,8 +85,10 @@ export const usePrefetch = (userId: string | undefined, profile: any) => {
           const { data } = await supabase.from("posts").select("*").in("author_id", allowedIds).eq("is_anonymous", false)
             .order("created_at", { ascending: false }).limit(25);
           if (!data?.length) return [];
-          const authorIds = [...new Set(data.map((p) => p.author_id))];
-          const { data: profiles } = await supabase.from("profiles").select("user_id, name, headline, avatar_url, is_verified").in("user_id", authorIds);
+          const authorIds = uniqueIdentifiers(data.map((p) => p.author_id));
+          const { data: profiles } = authorIds.length
+            ? await supabase.from("profiles").select("user_id, name, headline, avatar_url, is_verified").in("user_id", authorIds)
+            : { data: [] };
           const map = new Map(profiles?.map((p) => [p.user_id, p]) ?? []);
           return data.map((post) => ({ ...post, profile: map.get(post.author_id) }));
         },

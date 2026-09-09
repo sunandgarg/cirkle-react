@@ -62,11 +62,19 @@ export function matchesFilter(row: Record<string, unknown>, filter: SerializedFi
 }
 
 export function parseInValue(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
+  const validate = (items: unknown[]): unknown[] => {
+    if (items.length > 500) throw new ApiError(400, "invalid_in_filter", "IN filter contains too many values");
+    if (items.some((item) => item === null || item === undefined
+      || (typeof item !== "string" && typeof item !== "number" && typeof item !== "boolean"))) {
+      throw new ApiError(400, "invalid_in_filter", "IN filter values must be non-null strings, numbers, or booleans");
+    }
+    return items;
+  };
+  if (Array.isArray(value)) return validate(value);
   if (typeof value !== "string") throw new ApiError(400, "invalid_in_filter", "IN filter requires an array or parenthesized list");
   const trimmed = value.trim();
   if (!trimmed.startsWith("(") || !trimmed.endsWith(")")) throw new ApiError(400, "invalid_in_filter", "IN filter list must be parenthesized");
-  return trimmed.slice(1, -1).split(",").map((item) => item.trim().replace(/^"|"$/g, "")).filter(Boolean);
+  return validate(trimmed.slice(1, -1).split(",").map((item) => item.trim().replace(/^"|"$/g, "")).filter(Boolean));
 }
 
 function like(actual: string, pattern: string, insensitive: boolean): boolean {

@@ -63,6 +63,21 @@ short-lived. OTPs, OAuth callback codes, password reset tokens, and refresh
 tokens are stored only as hashes. CORS uses an exact origin allowlist. Upload
 buckets constrain path ownership, MIME type, and size.
 
+Member data writes are bounded independently of the global HTTP body limit.
+Core and compatibility mutations accept at most 25 rows per request. Direct
+compatibility-table writes use strict per-table schemas, a 32 KiB stored-row
+ceiling, per-table row ceilings, and a 32 MiB per-member aggregate ceiling for
+non-chat application data. Messages retain their dedicated 10 KiB content
+limit and high row ceiling, but avoid an owner-wide byte scan on the
+latency-sensitive send path. Production applies per-member/table mutation
+limits (120 writes per table per 15 minutes, or 300 messages, within a 400-write
+overall member ceiling); exceeding size or quota
+returns 413 and exceeding row/rate quota returns 429 before a write. Telemetry
+is tighter: client errors are limited to 20 per 15 minutes within a 200-event
+overall telemetry ceiling, metadata is capped
+at 4 KiB, only 200 recent errors are retained per member, and expired activity
+and job-engagement records are pruned on write.
+
 Password-reset links are never exchanged for a login session on page load. The frontend holds the one-time token only long enough to submit `{ token, password }` to `POST /api/auth/password-reset/complete`; the API atomically claims the token, updates the password, and revokes existing refresh sessions.
 
 Email, institute-email, and local development phone codes reserve each attempt with a conditional database update. The verified action atomically claims the still-unused code before changing identity or creating a session, so concurrent verification requests cannot reuse one challenge.

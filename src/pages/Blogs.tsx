@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { format, formatDistanceToNow, isAfter, isBefore, parseISO } from "date-fns";
 import BlogComments from "@/components/blog/BlogComments";
 import { isBlogLive } from "@/lib/blogVisibility";
+import { uniqueIdentifiers } from "@/lib/identifiers";
 
 const db = supabase as any;
 
@@ -75,7 +76,7 @@ const Blogs = () => {
     queryKey: ["blog-authors", visibleBlogs.length],
     queryFn: async () => {
       if (!visibleBlogs.length) return {} as Record<string, any>;
-      const ids = [...new Set(visibleBlogs.map((b: any) => b.author_id))];
+      const ids = uniqueIdentifiers(visibleBlogs.map((b: any) => b.author_id));
       const { data } = await supabase.from("profiles").select("user_id, name, avatar_url").in("user_id", ids);
       const map: Record<string, any> = {};
       data?.forEach((p) => { map[p.user_id] = p; });

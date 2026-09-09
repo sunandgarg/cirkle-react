@@ -28,6 +28,7 @@ import { safeHttpUrl } from "@/lib/safeUrl";
 import { reconcileThreadSnapshot, resolveThreadAppSyncInvalidation } from "@/lib/threadRealtime";
 import { createRealtimeFallbackSlot } from "@/lib/realtimeFallback";
 import { resolveForumPostProfile } from "@/lib/forumProfiles";
+import { uniqueIdentifiers } from "@/lib/identifiers";
 
 const THREAD_PAGE_SIZE = 50;
 const MAX_THREAD_RECOVERY = 1_200;
@@ -108,7 +109,7 @@ const ThreadPanel = ({ parentPost, onClose, onJumpToParent, activeScope, profile
         if (pageParam) query = query.or(`created_at.lt.${pageParam.createdAt},and(created_at.eq.${pageParam.createdAt},id.lt.${pageParam.id})`);
         const { data: fallbackReplies, error: fallbackError } = await query;
         if (fallbackError) throw fallbackError;
-        const authors = [...new Set((fallbackReplies || []).map((reply: any) => reply.author_id))] as string[];
+        const authors = uniqueIdentifiers((fallbackReplies || []).map((reply: any) => reply.author_id));
         const { data: fallbackProfiles } = authors.length ? await supabase.from("profiles")
           .select("user_id,name,avatar_url,slug").in("user_id", authors) : { data: [] as any[] };
         const fallbackProfilesById = new Map((fallbackProfiles || []).map((entry: any) => [entry.user_id, entry]));

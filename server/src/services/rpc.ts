@@ -25,6 +25,8 @@ import {
   normalizeActiveChatMembership,
   type ChatMembershipRecord,
 } from "../realtime/chatMembership.js";
+import { assertBoundedJson } from "../security/legacyWriteGuard.js";
+import { logger } from "../lib/logger.js";
 
 type Args = Record<string, unknown>;
 type Row = Record<string, unknown>;
@@ -1125,14 +1127,34 @@ async function adminAnalytics(args: Args, ctx: RequestContext): Promise<Row> {
 }
 
 async function logClientError(args: Args, ctx: RequestContext): Promise<string> {
-  const id = text(args, "p_event_id") || newId();
+  const id = text(args, "p_event_id", { max: 100 }) || newId();
   const redact = (value: string): string => value.replace(/Bearer\s+[\w.-]+/gi, "Bearer [REDACTED]").replace(/(token|password|secret)=\S+/gi, "$1=[REDACTED]");
-  await createLegacy("client_error_logs", {
+  const row = {
     id, user_id: ctx.auth.id, flow: text(args, "p_flow", { max: 80 }), action: text(args, "p_action", { max: 120 }),
     severity: text(args, "p_severity", { max: 20 }) || "error", message: redact(text(args, "p_message", { max: 2000 })),
     error_code: text(args, "p_error_code", { max: 120 }) || null, stack: redact(text(args, "p_stack", { max: 8000 })),
-    route: text(args, "p_route", { max: 500 }) || null, metadata: args.p_metadata ?? {}, client_timestamp: args.p_client_timestamp ?? null,
-  }, ctx.auth.id, ctx.auth.community_id);
+    route: text(args, "p_route", { max: 500 }) || null,
+    metadata: assertBoundedJson(args.p_metadata ?? {}, 4 * 1024, "Error metadata"),
+    client_timestamp: text(args, "p_client_timestamp", { max: 64 }) || null,
+    created_at: nowIso(), updated_at: nowIso(),
+  };
+  await prisma.$transaction(async (tx) => {
+    const expired = await tx.legacyRecord.deleteMany({ where: {
+      table_name: "client_error_logs", owner_id: ctx.auth.id,
+      created_at: { lt: new Date(Date.now() - 30 * 86_400_000) },
+    } });
+    const overflow = await tx.legacyRecord.findMany({
+      where: { table_name: "client_error_logs", owner_id: ctx.auth.id },
+      orderBy: { created_at: "desc" }, skip: 199, select: { id: true },
+    });
+    if (overflow.length) await tx.legacyRecord.deleteMany({ where: { id: { in: overflow.map((entry) => entry.id) } } });
+    await tx.legacyRecord.create({ data: {
+      table_name: "client_error_logs", record_id: id, owner_id: ctx.auth.id,
+      community_id: ctx.auth.community_id, data: row as Prisma.InputJsonValue,
+    } });
+    const pruned = expired.count + overflow.length;
+    if (pruned) logger.info({ maintenance: "telemetry_retention", table: "client_error_logs", pruned }, "expired telemetry removed");
+  });
   return id;
 }
 
@@ -1145,6 +1167,20 @@ async function recordActivity(args: Args, ctx: RequestContext): Promise<null> {
   const sessionKey = `${ctx.auth.id}:${sessionId}`;
   const dailyKey = `${ctx.auth.id}:${day}`;
   await prisma.$transaction(async (tx) => {
+    const expired = await tx.legacyRecord.deleteMany({ where: {
+      owner_id: ctx.auth.id,
+      OR: [
+        { table_name: "user_activity_sessions", created_at: { lt: new Date(Date.now() - 90 * 86_400_000) } },
+        { table_name: "user_activity_daily", created_at: { lt: new Date(Date.now() - 400 * 86_400_000) } },
+      ],
+    } });
+    const overflow = await tx.legacyRecord.findMany({
+      where: { table_name: "user_activity_sessions", owner_id: ctx.auth.id },
+      orderBy: { updated_at: "desc" }, skip: 499, select: { id: true },
+    });
+    if (overflow.length) await tx.legacyRecord.deleteMany({ where: { id: { in: overflow.map((entry) => entry.id) } } });
+    const pruned = expired.count + overflow.length;
+    if (pruned) logger.info({ maintenance: "telemetry_retention", table: "user_activity", pruned }, "expired telemetry removed");
     const session = await tx.legacyRecord.findUnique({ where: { table_name_record_id: { table_name: "user_activity_sessions", record_id: sessionKey } } });
     const isNew = !session;
     if (session) {
@@ -1173,7 +1209,25 @@ async function recordJobEngagement(args: Args, ctx: RequestContext): Promise<nul
   if (sessionId.length < 8) throw new ApiError(400, "invalid_analytics_session", "Job analytics session must contain at least 8 characters");
   const jobId = text(args, "p_job_id") || null;
   if (jobId && !(await prisma.job.findUnique({ where: { id: jobId }, select: { id: true } }))) throw new ApiError(400, "unknown_job", "Unknown job");
-  await createLegacy("job_engagement_events", { user_id: ctx.auth.id, job_id: jobId, event_name: eventName, session_id: sessionId, metadata: args.p_metadata ?? {} }, ctx.auth.id, ctx.auth.community_id);
+  const metadata = assertBoundedJson(args.p_metadata ?? {}, 2 * 1024, "Job analytics metadata");
+  const eventId = newId();
+  await prisma.$transaction(async (tx) => {
+    const expired = await tx.legacyRecord.deleteMany({ where: {
+      table_name: "job_engagement_events", owner_id: ctx.auth.id,
+      created_at: { lt: new Date(Date.now() - 180 * 86_400_000) },
+    } });
+    const overflow = await tx.legacyRecord.findMany({
+      where: { table_name: "job_engagement_events", owner_id: ctx.auth.id },
+      orderBy: { created_at: "desc" }, skip: 9_999, select: { id: true },
+    });
+    if (overflow.length) await tx.legacyRecord.deleteMany({ where: { id: { in: overflow.map((entry) => entry.id) } } });
+    await tx.legacyRecord.create({ data: {
+      table_name: "job_engagement_events", record_id: eventId, owner_id: ctx.auth.id, community_id: ctx.auth.community_id,
+      data: { id: eventId, user_id: ctx.auth.id, job_id: jobId, event_name: eventName, session_id: sessionId, metadata, created_at: nowIso(), updated_at: nowIso() } as Prisma.InputJsonValue,
+    } });
+    const pruned = expired.count + overflow.length;
+    if (pruned) logger.info({ maintenance: "telemetry_retention", table: "job_engagement_events", pruned }, "expired telemetry removed");
+  });
   return null;
 }
 

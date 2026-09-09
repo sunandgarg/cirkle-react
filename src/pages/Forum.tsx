@@ -67,6 +67,7 @@ import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
 import { shouldAnchorLatestDuringKeyboard, useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
 import { safeHttpUrl } from "@/lib/safeUrl";
 import { forumPostProfileSignature, resolveForumPostProfile } from "@/lib/forumProfiles";
+import { uniqueIdentifiers } from "@/lib/identifiers";
 import { assertSmallFile, IMAGE_SOURCE_LIMIT_BYTES } from "@/lib/imageUtils";
 import { estimateForumPostRowHeight, TIMELINE_VIRTUALIZER_OPTIONS } from "@/lib/timelineLayout";
 
@@ -583,7 +584,7 @@ const Forum = () => {
       const q = buildScopeQuery(activeScope.type, activeScope.key);
       const { data: posts } = await q;
       if (!posts?.length) return [];
-      const authorIds = [...new Set((posts as any[]).map((p: any) => p.author_id).filter(Boolean))] as string[];
+      const authorIds = uniqueIdentifiers((posts as any[]).map((p: any) => p.author_id));
       if (!authorIds.length) return [];
       const { data: profiles } = await supabase.from("profiles").select("user_id, name, avatar_url, headline, iit_name, is_verified, slug").in("user_id", authorIds);
       return profiles || [];
@@ -728,10 +729,12 @@ const Forum = () => {
   const enrichPosts = useCallback(async (postsData: any[]) => {
     if (!postsData?.length) return [];
     const postIds = postsData.map((p: any) => p.id);
-    const authorIds = [...new Set(postsData.map((p: any) => p.author_id))] as string[];
+    const authorIds = uniqueIdentifiers(postsData.map((p: any) => p.author_id));
 
     const [{ data: profiles }, { data: polls }, { data: replies }, { data: reactions }] = await Promise.all([
-      supabase.from("profiles").select("user_id, name, avatar_url, iit_name, student_status, slug").in("user_id", authorIds),
+      authorIds.length
+        ? supabase.from("profiles").select("user_id, name, avatar_url, iit_name, student_status, slug").in("user_id", authorIds)
+        : Promise.resolve({ data: [] }),
       supabase.from("polls").select("*").in("post_id", postIds),
       supabase.from("posts").select("id, reply_to_id").in("reply_to_id", postIds).is("deleted_at", null),
       supabase.from("reactions").select("*").in("entity_id", postIds).eq("entity_type", "forum_msg"),

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Express } from "express";
+import sharp from "sharp";
 import { assertUncompressedUploadAllowed, normalizeUpload, STORED_UPLOAD_LIMIT_BYTES } from "../src/services/uploadTransform.js";
 
 const upload = (buffer: Buffer, mimetype: string, originalname: string): Express.Multer.File => ({
@@ -16,6 +17,13 @@ const upload = (buffer: Buffer, mimetype: string, originalname: string): Express
 });
 
 describe("upload normalization", () => {
+  it("runs the patched sharp release", () => {
+    const version = String(sharp.versions.sharp).split(".").map(Number);
+    expect(version[0]).toBe(0);
+    expect(version[1]).toBe(35);
+    expect(version[2]).toBeGreaterThanOrEqual(4);
+  });
+
   it("allows a 1 MiB source image so it can be compressed", () => {
     expect(() => assertUncompressedUploadAllowed({ mimetype: "image/jpeg", size: 1024 * 1024 })).not.toThrow();
   });
@@ -42,6 +50,12 @@ describe("upload normalization", () => {
 
   it("rejects bytes that merely claim to be an image", async () => {
     await expect(normalizeUpload(upload(Buffer.from("not an image"), "image/png", "fake.png")))
+      .rejects.toMatchObject({ status: 415, code: "invalid_image" });
+  });
+
+  it("rejects a truncated image header without crashing the process", async () => {
+    const truncatedPng = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+    await expect(normalizeUpload(upload(truncatedPng, "image/png", "truncated.png")))
       .rejects.toMatchObject({ status: 415, code: "invalid_image" });
   });
 });

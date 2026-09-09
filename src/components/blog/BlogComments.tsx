@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { MessageSquare, EyeOff, Eye, Trash2, CornerDownRight, AlertCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { uniqueIdentifiers } from "@/lib/identifiers";
 
 const db = supabase as any;
 
@@ -42,7 +43,7 @@ const BlogComments = ({ blogId, isAdmin }: { blogId: string; isAdmin?: boolean }
     },
   });
 
-  const authorIds = useMemo(() => [...new Set((comments ?? []).map((c) => c.author_id))], [comments]);
+  const authorIds = useMemo(() => uniqueIdentifiers((comments ?? []).map((c) => c.author_id)), [comments]);
 
   const { data: authors } = useQuery({
     queryKey: ["blog-comment-authors", authorIds],

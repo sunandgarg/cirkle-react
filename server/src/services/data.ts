@@ -20,6 +20,13 @@ import {
   lockedActiveChatMembership,
   type ChatMembershipRecord,
 } from "../realtime/chatMembership.js";
+import {
+  assertLegacyMutationInput,
+  assertLegacyOwnerQuota,
+  assertLegacyStoredPayload,
+  assertBoundedJson,
+  jsonBytes,
+} from "../security/legacyWriteGuard.js";
 
 type Row = Record<string, unknown>;
 
@@ -291,6 +298,7 @@ async function baseWhere(table: string, ctx: RequestContext): Promise<Row> {
 function cleanWrite(policy: TablePolicy, values: unknown, ctx: RequestContext, table: string, operation: "insert" | "update" | "upsert"): Row[] {
   const list = Array.isArray(values) ? values : [values];
   if (!list.length || list.some((item) => !item || typeof item !== "object" || Array.isArray(item))) throw new ApiError(400, "invalid_values", "Values must be an object or object array");
+  if (list.length > 25) throw new ApiError(413, "mutation_batch_too_large", "A mutation may contain at most 25 rows");
   return list.map((item) => {
     const source = item as Row;
     const accepted = new Set([
@@ -303,6 +311,11 @@ function cleanWrite(policy: TablePolicy, values: unknown, ctx: RequestContext, t
     for (const key of policy.write) if (key in source) result[key] = source[key];
     if (table === "profiles" && Object.prototype.hasOwnProperty.call(source, "date_of_birth")) result.date_of_birth = normalizeDateOfBirth(source.date_of_birth);
     if (table === "profiles" && Object.prototype.hasOwnProperty.call(source, "social_links")) result.social_links = normalizeSocialLinks(source.social_links);
+    if (table === "profiles") {
+      for (const field of ["expertise", "skills", "experience"] as const) {
+        if (Object.prototype.hasOwnProperty.call(source, field)) result[field] = assertBoundedJson(source[field], 8 * 1024, `Profile ${field}`);
+      }
+    }
     const externalFields = table === "jobs"
       ? ["company_logo_url", "application_url", "apply_url", "source_url"]
       : table === "events" ? ["image_url", "registration_url", "source_url"]
@@ -1269,6 +1282,7 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
     throw new ApiError(403, "verification_required", "Verified membership is required for chats, consultations, and calls");
   }
   if (legacyAdminOnly.has(query.table) && !isAdmin(ctx)) throw new ApiError(403, "admin_required", "Administrator access is required");
+  assertLegacyMutationInput(query.table, query.operation, query.values, isAdmin(ctx));
   if (query.table === "poll_votes" && query.operation === "select") {
     const privateFilter = query.filters.find((filter) => filter.column === "id"
       || (filter.column === "user_id" && (filter.operator !== "eq" || filter.value !== ctx.auth.id)));
@@ -1423,6 +1437,10 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
           throw new ApiError(409, "poll_content_immutable", "Published poll questions and options cannot be changed");
         }
         const next = { ...(existing.data as Row), ...row, id: (existing.data as Row).id, updated_at: new Date().toISOString() };
+        const nextBytes = assertLegacyStoredPayload(query.table, next, isAdmin(ctx));
+        if (!isAdmin(ctx) && existing.owner_id) {
+          await assertLegacyOwnerQuota(prisma, query.table, existing.owner_id, nextBytes - jsonBytes(existing.data), 0);
+        }
         const saved = await prisma.legacyRecord.update({ where: { id: existing.id }, data: { data: next as Prisma.InputJsonValue } });
         upserted.push(saved.data as Row);
         emitDbChange({ table: query.table, event: "UPDATE", row: saved.data as Row, actor_id: ctx.auth.id });
@@ -1435,6 +1453,8 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
             ? `poll:${sha256(String(row.post_id)).slice(0, 64)}`
           : typeof row.id === "string" ? row.id : sha256(keys.map((key) => String(row[key])).join("\n")).slice(0, 64);
         row.id = typeof row.id === "string" ? row.id : newId();
+        const rowBytes = assertLegacyStoredPayload(query.table, row, isAdmin(ctx));
+        if (!isAdmin(ctx) && owner_id) await assertLegacyOwnerQuota(prisma, query.table, owner_id, rowBytes, 1);
         const saved = await prisma.legacyRecord.create({ data: { table_name: query.table, record_id, owner_id, community_id: typeof row.community_id === "string" ? row.community_id : ctx.auth.community_id, data: row as Prisma.InputJsonValue } });
         upserted.push(saved.data as Row);
         emitDbChange({ table: query.table, event: "INSERT", row: saved.data as Row, actor_id: ctx.auth.id });
@@ -1523,6 +1543,8 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
           const recordId = `call-participant:${sha256(`${sessionId}\n${ctx.auth.id}`).slice(0, 64)}`;
           const existing = await tx.legacyRecord.findUnique({ where: { table_name_record_id: { table_name: "call_participants", record_id: recordId } } });
           const row = existing ? { ...(existing.data as Row), ...normalized, id: (existing.data as Row).id } : normalized;
+          const rowBytes = assertLegacyStoredPayload(query.table, row, isAdmin(ctx));
+          await assertLegacyOwnerQuota(tx, query.table, ctx.auth.id, existing ? rowBytes - jsonBytes(existing.data) : rowBytes, existing ? 0 : 1);
           const saved = await tx.legacyRecord.upsert({
             where: { table_name_record_id: { table_name: "call_participants", record_id: recordId } },
             create: { table_name: "call_participants", record_id: recordId, owner_id: ctx.auth.id, community_id: ctx.auth.community_id, data: row as Prisma.InputJsonValue },
@@ -1589,12 +1611,14 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
         ? `message:${sha256(`${ctx.auth.id}\n${String(data.room_id)}\n${data.client_id}`).slice(0, 64)}`
         : typeof data.id === "string" ? data.id : newId();
       data.id = typeof data.id === "string" ? data.id : newId();
+      const dataBytes = assertLegacyStoredPayload(query.table, data, isAdmin(ctx));
       try {
         const record = query.table === "messages" ? await prisma.$transaction(async (tx) => {
           const roomId = String(data.room_id);
           if (!(await lockedActiveChatMembership(tx, ctx.auth.id, roomId))) {
             throw new ApiError(403, "chat_membership_required", "Chat membership is required");
           }
+          await assertLegacyOwnerQuota(tx, query.table, ctx.auth.id, dataBytes, 1);
           if (data.reply_to_message_id) {
             const reply = await tx.legacyRecord.findFirst({ where: {
               table_name: "messages",
@@ -1614,7 +1638,10 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
             community_id: typeof data.community_id === "string" ? data.community_id : ctx.auth.community_id,
             data: data as Prisma.InputJsonValue,
           } });
-        }) : await prisma.legacyRecord.create({ data: { table_name: query.table, record_id, owner_id, community_id: typeof data.community_id === "string" ? data.community_id : ctx.auth.community_id, data: data as Prisma.InputJsonValue } });
+        }) : await prisma.$transaction(async (tx) => {
+          if (!isAdmin(ctx) && owner_id) await assertLegacyOwnerQuota(tx, query.table, owner_id, dataBytes, 1);
+          return tx.legacyRecord.create({ data: { table_name: query.table, record_id, owner_id, community_id: typeof data.community_id === "string" ? data.community_id : ctx.auth.community_id, data: data as Prisma.InputJsonValue } });
+        });
         created.push(publicLegacyRow(query.table, record.data as Row, ctx.auth.id));
         inserted.push(publicLegacyRow(query.table, record.data as Row, ctx.auth.id));
       } catch (error) {
@@ -1831,6 +1858,10 @@ async function executeLegacy(query: SerializedQuery, ctx: RequestContext): Promi
         next.option_index = validatePollOption(poll, next.option_index);
       }
       if (query.table === "polls") validatePollPayload(next);
+      const nextBytes = assertLegacyStoredPayload(query.table, next, isAdmin(ctx));
+      if (!isAdmin(ctx) && freshRecord.owner_id && query.table === "messages") {
+        await assertLegacyOwnerQuota(tx, query.table, freshRecord.owner_id, nextBytes - jsonBytes(current), 0);
+      }
       const stored = await tx.legacyRecord.update({ where: { id: freshRecord.id }, data: { data: next as Prisma.InputJsonValue } });
       if (query.table === "messages" && isDeletedForEveryone(next) || query.table === "stories" && next.deleted_at != null) {
         await revokePrivateMedia([current], query.table === "stories" ? "story" : "message", tx);

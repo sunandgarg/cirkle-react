@@ -26,6 +26,7 @@ import StoryCreator from "@/components/StoryCreator";
 import PostComposer from "@/components/PostComposer";
 import { toast } from "sonner";
 import { hydrateForumMediaUrls } from "@/lib/forumMedia";
+import { uniqueIdentifiers } from "@/lib/identifiers";
 
 const getInitials = (name?: string | null): string => {
   if (!name) return "U";
@@ -230,7 +231,7 @@ const HomePage = () => {
         .gt("expires_at", new Date().toISOString())
         .order("created_at", { ascending: false });
       if (!storiesData?.length) return [];
-      const userIds = [...new Set(storiesData.map((s) => s.user_id))];
+      const userIds = uniqueIdentifiers(storiesData.map((s) => s.user_id));
       const { data: profiles } = await supabase
         .from("profiles")
         .select("user_id, name, avatar_url")
@@ -315,11 +316,13 @@ const HomePage = () => {
       if (combinedPosts.length < PAGE_SIZE) setHasMorePosts(false);
       if (!combinedPosts.length) return [];
       
-      const authorIds = [...new Set(combinedPosts.map((p) => p.author_id))];
-      const { data: profiles } = await supabase
-        .from("profiles")
-        .select("user_id, name, headline, avatar_url, is_verified, slug")
-        .in("user_id", authorIds);
+      const authorIds = uniqueIdentifiers(combinedPosts.map((p) => p.author_id));
+      const { data: profiles } = authorIds.length
+        ? await supabase
+          .from("profiles")
+          .select("user_id, name, headline, avatar_url, is_verified, slug")
+          .in("user_id", authorIds)
+        : { data: [] };
       const profileMap = new Map(profiles?.map((p) => [p.user_id, p]) ?? []);
       const enriched = combinedPosts.map((post) => ({ 
         ...post, 
@@ -405,7 +408,7 @@ const HomePage = () => {
         .eq("post_id", expandedComments)
         .order("created_at", { ascending: true });
       if (!data?.length) return [];
-      const authorIds = [...new Set(data.flatMap((c) => typeof c.author_id === "string" ? [c.author_id] : []))];
+      const authorIds = uniqueIdentifiers(data.map((c) => c.author_id));
       const { data: profiles } = await supabase
         .from("profiles")
         .select("user_id, name, avatar_url, slug")

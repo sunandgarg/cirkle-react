@@ -21,6 +21,39 @@ const ownerContext: RequestContext = {
   auth: { id: "owner", email: "owner@example.com", role: "owner", community_id: "iit-community", is_verified: true },
 };
 
+describe("typed query validation", () => {
+  it("rejects anonymous null author IDs before Prisma can produce a 500", async () => {
+    const findMany = vi.spyOn(prisma.profile, "findMany");
+    await expect(executeDataQuery({
+      table: "profiles", operation: "select", filters: [
+        { column: "user_id", operator: "in", value: [null, "profile-id"] },
+      ], order: [], cardinality: "many",
+    }, memberContext)).rejects.toMatchObject({ status: 400, code: "invalid_in_filter" });
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized core mutation batches before Prisma", async () => {
+    const createMany = vi.spyOn(prisma.profile, "createMany");
+    await expect(executeDataQuery({
+      table: "profiles", operation: "insert",
+      values: Array.from({ length: 26 }, () => ({ name: "Member" })),
+      filters: [], order: [], cardinality: "many",
+    }, memberContext)).rejects.toMatchObject({ status: 413, code: "mutation_batch_too_large" });
+    expect(createMany).not.toHaveBeenCalled();
+  });
+
+  it("bounds JSON profile fields before Prisma", async () => {
+    const create = vi.spyOn(prisma.profile, "create");
+    await expect(executeDataQuery({
+      table: "profiles", operation: "insert",
+      values: { experience: Object.fromEntries(Array.from({ length: 5 }, (_, index) => [`entry_${index}`, "x".repeat(1_800)])) },
+      filters: [],
+      order: [], cardinality: "many",
+    }, memberContext)).rejects.toMatchObject({ status: 413, code: "metadata_too_large" });
+    expect(create).not.toHaveBeenCalled();
+  });
+});
+
 describe("Daily entitlement revocation", () => {
   it("ends and deletes active provider rooms when an unverified admin is demoted", async () => {
     const roomName = "cirkle-11111111111141118111111111111111";
