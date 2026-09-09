@@ -60,4 +60,19 @@ describe("Cloudflare Pages build configuration", () => {
       assert.ok(scriptSource.split(/\s+/).includes(`'sha256-${hash}'`), `Pages CSP is missing sha256-${hash}`);
     }
   });
+
+  it("allows automatic Web Analytics without enabling a duplicate manual beacon", async () => {
+    const [html, headers] = await Promise.all([
+      readFile(`${projectRoot}/index.html`, "utf8"),
+      readFile(`${projectRoot}/public/_headers`, "utf8"),
+    ]);
+    const scriptSource = headers.match(/script-src\s+([^;]+)/)?.[1]?.split(/\s+/) ?? [];
+    const connectSource = headers.match(/connect-src\s+([^;]+)/)?.[1]?.split(/\s+/) ?? [];
+
+    assert.ok(scriptSource.includes("https://static.cloudflareinsights.com/beacon.min.js"));
+    assert.ok(connectSource.includes("'self'"), "automatic injection reports to same-origin /cdn-cgi/rum");
+    assert.ok(!scriptSource.includes("https://static.cloudflareinsights.com"), "keep script access scoped to beacon.min.js");
+    assert.ok(!connectSource.some((source) => source.includes("cloudflareinsights.com")), "automatic injection does not need an external report origin");
+    assert.ok(!html.includes("data-cf-beacon"), "the dashboard owns automatic injection; source must not add a duplicate beacon");
+  });
 });

@@ -1,6 +1,7 @@
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { ZodError } from "zod";
 import { logger } from "./logger.js";
+import { setPrivateNoStore } from "../security/cachePolicy.js";
 
 export class ApiError extends Error {
   constructor(
@@ -27,6 +28,9 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, req, res, _nex
       : new ApiError(500, "internal_error", "An unexpected server error occurred");
 
   if (normalized.status >= 500) logger.error({ err: error, request_id: req.requestId }, "request failed");
+  // An endpoint that normally returns public data may still fail. Never let a
+  // previous public override make its error response cacheable.
+  setPrivateNoStore(res);
   res.status(normalized.status).json({
     error: {
       code: normalized.code,

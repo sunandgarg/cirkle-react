@@ -72,8 +72,10 @@ STORAGE_DRIVER=s3
 
 Leave `COOKIE_DOMAIN` unset so the refresh cookie remains host-only. Nginx is
 the one trusted proxy hop and must replace, not append to, untrusted inbound
-forwarded-address headers. `api-react.cirkle.world` remains DNS-only so Nginx
-terminates publicly trusted TLS directly.
+forwarded-address headers. Before `api-react.cirkle.world` is Cloudflare-
+proxied, Nginx must have the reviewed Cloudflare edge CIDRs and strict origin
+TLS must be active. The origin certificate remains publicly trusted so the DNS
+record can be rolled back to DNS-only after reopening the origin firewall.
 
 Provider credentials are optional only when the corresponding product feature
 fails closed. Pages must keep `VITE_DAILY_CALLS_ENABLED=false` until the API has
@@ -301,6 +303,25 @@ PNPM_VERSION=11.19.0
 The AppSync endpoint pair is public and pinned to the reviewed Event API. Vite
 embeds every `VITE_*` value in downloadable JavaScript, so publisher tokens,
 authorizer secrets, and every other secret must never use that prefix.
+
+Cloudflare Web Analytics is configured in the dashboard for `cirkle.world`
+using automatic injection with EU visitor collection excluded. Do not add a
+manual `data-cf-beacon` script or a browser build token: that would duplicate
+the dashboard-managed beacon. The Pages CSP permits only Cloudflare's exact
+`beacon.min.js` URL, while its same-origin `/cdn-cgi/rum` report is already
+covered by `connect-src 'self'`.
+
+The API hostname is Cloudflare-proxied only after the origin Nginx config has
+the reviewed Cloudflare IPv4/IPv6 trust list. Nginx accepts
+`CF-Connecting-IP` only from those networks and overwrites
+`X-Forwarded-For` with `$remote_addr`; Express therefore remains a one-hop
+proxy deployment (`TRUST_PROXY_HOPS=1`). Cloudflare Cache Rules bypass the
+entire API host by default. The sole later allowlist rule may cache a plain
+credential-free, query-free, non-range `GET` or `HEAD` under
+`/api/storage/public/`. Public-object caching is bounded to one hour because
+deletion does not yet trigger an edge purge.
+Auth, CORS variants, private/signed media, API errors, realtime traffic, and
+all other API responses remain `private, no-store` and bypass shared caches.
 
 `wrangler.jsonc`, `package.json`, and the Pages dashboard all use the same
 project name and `main` production branch. A direct upload from a clean,

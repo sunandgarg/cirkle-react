@@ -10,6 +10,7 @@ import { canUseForumScope } from "../security/forumScope.js";
 import { isCanonicalRealtimeRecordId } from "./appsyncChannels.js";
 import { materializeForumReactionChange } from "./forumReactions.js";
 import { hasActiveChatMembership, revokedChatMembership } from "./chatMembership.js";
+import { setPrivateNoStoreHeaders } from "../security/cachePolicy.js";
 
 export interface Binding { type?: string; filter?: Record<string, unknown> }
 export interface Subscription { channel: string; bindings: Binding[] }
@@ -268,6 +269,7 @@ export function revokeChatMembershipSubscriptions(
 
 export function attachSocketServer(server: HttpServer): Server {
   const io = new Server(server, { path: "/api/socket.io", cors: { origin: config.corsOrigins, credentials: true }, maxHttpBufferSize: 256_000 });
+  io.engine.on("headers", (headers) => setPrivateNoStoreHeaders(headers));
   io.use(async (rawSocket, next) => {
     try {
       const token = typeof rawSocket.handshake.auth.token === "string" ? rawSocket.handshake.auth.token : rawSocket.handshake.headers.authorization?.replace(/^Bearer\s+/i, "");

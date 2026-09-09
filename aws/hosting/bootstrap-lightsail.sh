@@ -48,6 +48,35 @@ map \$http_upgrade \$connection_upgrade {
   default upgrade;
   '' close;
 }
+
+# Trust Cloudflare's published edge networks for CF-Connecting-IP. Requests
+# that reach the origin directly keep their real socket address because an
+# untrusted peer cannot activate ngx_http_realip_module.
+set_real_ip_from 173.245.48.0/20;
+set_real_ip_from 103.21.244.0/22;
+set_real_ip_from 103.22.200.0/22;
+set_real_ip_from 103.31.4.0/22;
+set_real_ip_from 141.101.64.0/18;
+set_real_ip_from 108.162.192.0/18;
+set_real_ip_from 190.93.240.0/20;
+set_real_ip_from 188.114.96.0/20;
+set_real_ip_from 197.234.240.0/22;
+set_real_ip_from 198.41.128.0/17;
+set_real_ip_from 162.158.0.0/15;
+set_real_ip_from 104.16.0.0/13;
+set_real_ip_from 104.24.0.0/14;
+set_real_ip_from 172.64.0.0/13;
+set_real_ip_from 131.0.72.0/22;
+set_real_ip_from 2400:cb00::/32;
+set_real_ip_from 2606:4700::/32;
+set_real_ip_from 2803:f800::/32;
+set_real_ip_from 2405:b500::/32;
+set_real_ip_from 2405:8100::/32;
+set_real_ip_from 2a06:98c0::/29;
+set_real_ip_from 2c0f:f248::/32;
+real_ip_header CF-Connecting-IP;
+real_ip_recursive off;
+
 server {
   listen 80 default_server;
   listen [::]:80 default_server;
@@ -56,8 +85,9 @@ server {
 
   location = /healthz {
     proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For \$remote_addr;
     proxy_pass http://127.0.0.1:3001;
   }
   location = /readyz { deny all; }
@@ -68,8 +98,9 @@ server {
   location /api/socket.io/ {
     proxy_http_version 1.1;
     proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For \$remote_addr;
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection \$connection_upgrade;
     proxy_read_timeout 3600s;
@@ -78,8 +109,9 @@ server {
   location /socket.io/ {
     proxy_http_version 1.1;
     proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For \$remote_addr;
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection \$connection_upgrade;
     proxy_read_timeout 3600s;
@@ -88,8 +120,9 @@ server {
   location /api/ {
     proxy_http_version 1.1;
     proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For \$remote_addr;
     proxy_read_timeout 120s;
     proxy_pass http://127.0.0.1:3001;
   }

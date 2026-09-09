@@ -4,6 +4,12 @@ import { z } from "zod";
 import { config } from "../config.js";
 import { ApiError, asyncHandler } from "../lib/errors.js";
 import { requireAuth } from "../security/middleware.js";
+import {
+  isPublicCacheRequest,
+  PUBLIC_OBJECT_CACHE_CONTROL,
+  setPrivateNoStore,
+  setPublicCache,
+} from "../security/cachePolicy.js";
 import { createSignedUrl, loadObject, removeObjects, storeUpload, verifySignedUrl } from "../services/storage.js";
 import { IMAGE_SOURCE_LIMIT_BYTES } from "../services/uploadTransform.js";
 
@@ -59,7 +65,7 @@ storageRouter.get(/^\/public\/([^/]+)\/(.+)$/, asyncHandler(async (req, res) => 
   const objectPath = String(req.params[1]);
   const object = await loadObject(bucket, objectPath, true);
   res.setHeader("Content-Type", object.mime);
-  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  if (isPublicCacheRequest(req)) setPublicCache(res, PUBLIC_OBJECT_CACHE_CONTROL);
   if ("download" in req.query) res.setHeader("Content-Disposition", `attachment; filename="${object.name.replace(/["\r\n]/g, "_")}"`);
   res.send(object.bytes);
 }));
@@ -69,6 +75,6 @@ storageRouter.get(/^\/private\/([^/]+)\/(.+)$/, asyncHandler(async (req, res) =>
   const objectPath = await verifySignedUrl(bucket, String(req.params[1]), req.query.expires, req.query.sig);
   const object = await loadObject(bucket, objectPath, false);
   res.setHeader("Content-Type", object.mime);
-  res.setHeader("Cache-Control", "private, no-store");
+  setPrivateNoStore(res);
   res.send(object.bytes);
 }));

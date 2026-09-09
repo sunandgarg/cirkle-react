@@ -17,11 +17,13 @@ import { rpcRouter } from "./routes/rpc.js";
 import { realtimeRouter } from "./routes/realtime.js";
 import { storageRouter } from "./routes/storage.js";
 import { requestPathForLog, responseForLog } from "./security/logging.js";
+import { defaultPrivateCachePolicy } from "./security/cachePolicy.js";
 
 export function createApp(): Express {
   const app = express();
   app.disable("x-powered-by");
   if (config.NODE_ENV === "production") app.set("trust proxy", config.TRUST_PROXY_HOPS);
+  app.use(defaultPrivateCachePolicy);
   app.use((req, res, next) => { req.requestId = req.get("x-request-id")?.slice(0, 100) || randomUUID(); res.setHeader("x-request-id", req.requestId); next(); });
   app.use(pinoHttp({
     logger,

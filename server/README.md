@@ -17,7 +17,7 @@ Required: `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, and `STORAG
 
 Production settings: `NODE_ENV`, `HOST`, `PORT`, `TRUST_PROXY_HOPS`, `CORS_ORIGINS`, `APP_BASE_URL`, `FRONTEND_URL`, `DEFAULT_COMMUNITY_ID`, `COOKIE_SECURE`, `IP_HASH_SECRET`, `OTP_PEPPER`, `ACCESS_TOKEN_TTL_SECONDS`, `REFRESH_TOKEN_TTL_DAYS`, `STORAGE_ROOT`, `MAX_UPLOAD_BYTES`, and `LOG_LEVEL`. Keep `COOKIE_DOMAIN` unset so refresh cookies remain host-only.
 
-The API process must bind to loopback behind Nginx. Keep the `api-react.cirkle.world` DNS record in DNS-only mode (not Cloudflare-proxied), leave `TRUST_PROXY_HOPS=1`, and have Nginx overwrite `X-Forwarded-For` with `$remote_addr`. This keeps Express IP rate limits keyed to the actual client rather than a shared edge address. Request logs intentionally record only the URL pathname; OAuth codes, state values, storage signatures, and all other query parameters are excluded.
+The API process must bind to loopback behind Nginx. `api-react.cirkle.world` may be Cloudflare-proxied only when Nginx trusts `CF-Connecting-IP` exclusively from Cloudflare's published edge CIDRs and overwrites `X-Forwarded-For` with the resulting `$remote_addr`. Keep `TRUST_PROXY_HOPS=1`. Direct-origin requests retain their socket address, while proxied requests preserve the real visitor address, so Express rate limits cannot be collapsed onto an edge IP or selected by a forged forwarding header. Request logs intentionally record only the URL pathname; OAuth codes, state values, storage signatures, and all other query parameters are excluded.
 
 Provider integrations are optional in development and test. A production host
 with `REQUIRE_PROVIDER_CONFIG=true` fails fast when any listed provider is

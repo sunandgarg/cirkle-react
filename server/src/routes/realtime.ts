@@ -6,6 +6,7 @@ import { ApiError, asyncHandler } from "../lib/errors.js";
 import { canSubscribeAppSyncChannel } from "../realtime/appsyncAccess.js";
 import { AppSyncFixedWindowRateLimiter } from "../realtime/appsyncRateLimit.js";
 import { requireAuth } from "../security/middleware.js";
+import { setPrivateNoStore } from "../security/cachePolicy.js";
 
 export const realtimeRouter: Router = Router();
 
@@ -41,6 +42,6 @@ realtimeRouter.post("/appsync/authorize", requireAppSyncAuthorizer, requireAuth,
   const allowed = input.operation === "EVENT_CONNECT"
     ? true
     : Boolean(input.channel && await canSubscribeAppSyncChannel(req.auth!, input.channel));
-  res.setHeader("Cache-Control", "no-store");
+  setPrivateNoStore(res);
   res.status(allowed ? 200 : 403).json({ allowed, user_id: allowed ? req.auth!.id : undefined });
 }));
