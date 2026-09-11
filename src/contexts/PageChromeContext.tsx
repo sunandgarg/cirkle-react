@@ -7,6 +7,10 @@ const PageChromeRequestContext = createContext<PageChromeRequest>(() => undefine
 export const isCollapsiblePageChromeRoute = (pathname: string) =>
   /^\/(?:consult|jobs)(?:\/|$)/.test(pathname);
 
+// AppHeader's notification dialog is positioned inside the header. Keep that
+// header above the adjacent profile reminder while this wrapper is expanded.
+export const COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS = "[&>header]:z-50";
+
 /**
  * Shared-layout state is keyed by the exact route. A collapsed request from a
  * page can therefore never leak into another page during router reconciliation.

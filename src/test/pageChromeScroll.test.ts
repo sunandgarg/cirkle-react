@@ -6,6 +6,7 @@ import {
   shouldKeepPageChromeExpanded,
 } from "@/hooks/useCollapsiblePageChrome";
 import {
+  COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS,
   isCollapsiblePageChromeRoute,
   useRouteScopedPageChrome,
 } from "@/contexts/PageChromeContext";
@@ -73,6 +74,10 @@ describe("mobile page chrome scroll direction", () => {
     expect(isCollapsiblePageChromeRoute("/cirkle-forum")).toBe(false);
     expect(isCollapsiblePageChromeRoute("/chats/room-1")).toBe(false);
     expect(isCollapsiblePageChromeRoute("/jobs-board")).toBe(false);
+  });
+
+  it("keeps the expanded notification overlay above the profile reminder", () => {
+    expect(COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS).toBe("[&>header]:z-50");
   });
 
   it("resets shared chrome immediately when the route changes", () => {

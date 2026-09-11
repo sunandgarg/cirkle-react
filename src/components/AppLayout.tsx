@@ -12,7 +12,11 @@ import ProfileCompletionBanner from "./ProfileCompletionBanner";
 import { supabase } from "@/integrations/supabase/client";
 import { shouldShowProfileCompletion } from "@/lib/profileCompletion";
 import { useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
-import { PageChromeRequestProvider, useRouteScopedPageChrome } from "@/contexts/PageChromeContext";
+import {
+  COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS,
+  PageChromeRequestProvider,
+  useRouteScopedPageChrome,
+} from "@/contexts/PageChromeContext";
 
 const AppLayout = () => {
   const { user, profile, isVerified, profileResolved } = useAuth();
@@ -99,7 +103,7 @@ const AppLayout = () => {
             ref={sharedTopChromeRef}
             aria-hidden={routeChrome.collapsed || undefined}
             data-testid="shared-top-page-chrome"
-            className={`shrink-0 transition-[max-height,opacity,transform] duration-200 ease-out motion-reduce:transition-none lg:max-h-none lg:translate-y-0 lg:opacity-100 ${
+            className={`shrink-0 ${COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS} transition-[max-height,opacity,transform] duration-200 ease-out motion-reduce:transition-none lg:max-h-none lg:translate-y-0 lg:opacity-100 ${
               routeChrome.collapsed
                 ? "pointer-events-none max-h-0 -translate-y-2 overflow-hidden opacity-0"
                 : "max-h-56 translate-y-0 overflow-visible opacity-100"
