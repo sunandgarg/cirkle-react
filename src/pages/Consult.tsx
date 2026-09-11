@@ -8,15 +8,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import {
-  PAGE_CHROME_SCROLL_RUNWAY_CLASS,
-  useCollapsiblePageChrome,
-} from "@/hooks/useCollapsiblePageChrome";
-import {
-  SharedTopPageChrome,
-  useSharedPageChromeRequest,
-  useSharedTopPageChromeRef,
-} from "@/contexts/PageChromeContext";
+import { SharedTopPageChrome } from "@/contexts/PageChromeContext";
 import OwnedPageScrollRegion from "@/components/OwnedPageScrollRegion";
 import { toast } from "sonner";
 
@@ -70,16 +62,6 @@ const Consult = () => {
   const [bookingNotes, setBookingNotes] = useState("");
   const [activeTab, setActiveTab] = useState<"mentors" | "bookings">(() => location.pathname.endsWith("/bookings") ? "bookings" : "mentors");
   const bookingCloseRef = useRef<HTMLButtonElement>(null);
-  const pageScrollRef = useRef<HTMLDivElement>(null);
-  const pageChromeRef = useRef<HTMLDivElement>(null);
-  const requestSharedChrome = useSharedPageChromeRequest();
-  const sharedTopChromeRef = useSharedTopPageChromeRef();
-  const isPageChromeCollapsed = useCollapsiblePageChrome(pageScrollRef, {
-    additionalKeepExpandedWithinRef: sharedTopChromeRef,
-    keepExpandedWithinRef: pageChromeRef,
-    onCollapsedChange: requestSharedChrome,
-    resetKey: location.pathname,
-  });
 
   const isVerified = !!user && !!profile?.is_verified;
 
@@ -87,10 +69,6 @@ const Consult = () => {
     if (location.pathname.endsWith("/bookings")) setActiveTab("bookings");
     else if (location.pathname.endsWith("/mentors")) setActiveTab("mentors");
   }, [location.pathname]);
-
-  useEffect(() => {
-    if (pageChromeRef.current) pageChromeRef.current.inert = isPageChromeCollapsed;
-  }, [isPageChromeCollapsed]);
 
   useEffect(() => {
     if (!bookingExpert) return;
@@ -318,17 +296,14 @@ const Consult = () => {
         </div>
       )}
 
-      <OwnedPageScrollRegion ref={pageScrollRef} data-testid="consult-scroll-region" className="bg-background">
-      {/* Sticky header */}
+      <OwnedPageScrollRegion
+        data-testid="consult-scroll-region"
+        className="bg-background ![overflow-anchor:auto]"
+      >
+      {/* The complete page chrome scrolls in normal flow with the results. */}
       <div
-        ref={pageChromeRef}
-        aria-hidden={isPageChromeCollapsed || undefined}
         data-testid="consult-scroll-chrome"
-        className={`sticky top-0 z-10 flex-shrink-0 overflow-hidden bg-background/95 backdrop-blur-xl transition-[max-height,opacity,transform] duration-200 ease-out motion-reduce:transition-none lg:max-h-none lg:translate-y-0 lg:opacity-100 ${
-          isPageChromeCollapsed
-            ? "pointer-events-none max-h-0 -translate-y-2 opacity-0"
-            : "max-h-[32rem] translate-y-0 opacity-100"
-        }`}
+        className="shrink-0 border-b border-border/70 bg-background [&_[role=banner]]:static"
       >
         <SharedTopPageChrome />
         <div className="px-4 pt-4 pb-2">
@@ -382,8 +357,8 @@ const Consult = () => {
         )}
       </div>
 
-      {/* The header and results share one native scroll owner. */}
-      <div data-page-scroll-content="true" className={`${PAGE_CHROME_SCROLL_RUNWAY_CLASS} max-w-5xl mx-auto px-4 py-4 space-y-4 pb-4`}>
+      {/* No artificial runway: short pages remain still; long pages scroll natively. */}
+      <div data-page-scroll-content="true" className="mx-auto max-w-5xl space-y-4 px-4 py-4 pb-4">
           {activeTab === "bookings" && (
             <>
               {bookingsLoading ? (

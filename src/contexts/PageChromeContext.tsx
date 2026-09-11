@@ -13,8 +13,10 @@ const PageChromeRequestContext = createContext<PageChromeRequest>(() => undefine
 const SharedTopPageChromeContext = createContext<ReactNode>(null);
 const SharedTopPageChromeRefContext = createContext<RefObject<HTMLElement | null> | undefined>(undefined);
 
-export const isCollapsiblePageChromeRoute = (pathname: string) =>
-  /^\/(?:consult|jobs)(?:\/|$)/.test(pathname);
+// Jobs and Consult use normal document flow inside their route-owned scroller.
+// Keep the request API available for a future compact toolbar, but do not
+// register any current route for geometry-changing directional collapse.
+export const isCollapsiblePageChromeRoute = (_pathname: string) => false;
 
 // These routes deliberately own their only vertical scroll surface. AppLayout
 // must not add a second scroller around them or gestures can change owners at

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bookmark, BriefcaseBusiness, CheckCircle2, Clock3, ExternalLink,
@@ -11,15 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import {
-  PAGE_CHROME_SCROLL_RUNWAY_CLASS,
-  useCollapsiblePageChrome,
-} from "@/hooks/useCollapsiblePageChrome";
-import {
-  SharedTopPageChrome,
-  useSharedPageChromeRequest,
-  useSharedTopPageChromeRef,
-} from "@/contexts/PageChromeContext";
+import { SharedTopPageChrome } from "@/contexts/PageChromeContext";
 import OwnedPageScrollRegion from "@/components/OwnedPageScrollRegion";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -62,16 +54,6 @@ const Jobs = () => {
   const [search, setSearch] = useState("");
   const storageKey = `cirkle:saved-jobs:${user?.id || "guest"}`;
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
-  const pageScrollRef = useRef<HTMLDivElement>(null);
-  const pageChromeRef = useRef<HTMLDivElement>(null);
-  const requestSharedChrome = useSharedPageChromeRequest();
-  const sharedTopChromeRef = useSharedTopPageChromeRef();
-  const isPageChromeCollapsed = useCollapsiblePageChrome(pageScrollRef, {
-    additionalKeepExpandedWithinRef: sharedTopChromeRef,
-    keepExpandedWithinRef: pageChromeRef,
-    onCollapsedChange: requestSharedChrome,
-    resetKey: location.pathname,
-  });
   const isVerified = !!user && !!profile?.is_verified;
   const requestedJobId = searchParams.get("job") || "";
   const focusedJobId = /^[a-zA-Z0-9_-]{1,100}$/.test(requestedJobId) ? requestedJobId : "";
@@ -79,10 +61,6 @@ const Jobs = () => {
   useEffect(() => {
     setActiveFilter(jobFilterForPath(location.pathname));
   }, [location.pathname]);
-
-  useEffect(() => {
-    if (pageChromeRef.current) pageChromeRef.current.inert = isPageChromeCollapsed;
-  }, [isPageChromeCollapsed]);
 
   useEffect(() => {
     try {
@@ -208,16 +186,13 @@ const Jobs = () => {
   };
 
   return (
-    <OwnedPageScrollRegion ref={pageScrollRef} data-testid="jobs-scroll-region" className="bg-background">
+    <OwnedPageScrollRegion
+      data-testid="jobs-scroll-region"
+      className="bg-background ![overflow-anchor:auto]"
+    >
       <div
-        ref={pageChromeRef}
-        aria-hidden={isPageChromeCollapsed || undefined}
         data-testid="jobs-scroll-chrome"
-        className={`sticky top-0 z-20 shrink-0 overflow-hidden border-b bg-background/95 backdrop-blur-xl transition-[max-height,opacity,transform,border-color] duration-200 ease-out motion-reduce:transition-none lg:max-h-none lg:translate-y-0 lg:border-border/70 lg:opacity-100 ${
-          isPageChromeCollapsed
-            ? "pointer-events-none max-h-0 -translate-y-2 border-transparent opacity-0"
-            : "max-h-[28rem] translate-y-0 border-border/70 opacity-100"
-        }`}
+        className="shrink-0 border-b border-border/70 bg-background [&_[role=banner]]:static"
       >
         <SharedTopPageChrome />
         <header className="mx-auto max-w-3xl px-4 pb-3 pt-4 sm:px-6">
@@ -230,9 +205,9 @@ const Jobs = () => {
         </header>
       </div>
 
-      {/* The header and results share one native scroll owner. */}
+      {/* Normal flow keeps the header and results on one native scroll timeline. */}
       <div data-page-scroll-content="true">
-        <div className={`${PAGE_CHROME_SCROLL_RUNWAY_CLASS} mx-auto max-w-3xl pb-1 sm:px-6 sm:py-4`}>
+        <div className="mx-auto max-w-3xl pb-1 sm:px-6 sm:py-4">
           {focusedJobId && focusedJobFetched && !focusedJob && !error ? <div role="status" className="mb-3 rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground">That job is no longer available.</div> : null}
           {error ? <div className="rounded-2xl border border-destructive/25 bg-destructive/5 p-6 text-center"><BriefcaseBusiness className="mx-auto h-8 w-8 text-destructive" /><h2 className="mt-3 text-sm font-bold">Jobs could not be loaded</h2><p className="mt-1 text-xs text-muted-foreground">Check your connection and try again. If this continues, the jobs database migration may still need deployment.</p><Button variant="outline" className="mt-4 rounded-xl" onClick={() => refetch()}><RefreshCw className="h-4 w-4" /> Try again</Button></div>
             : isLoading ? <div className="divide-y divide-border border-y border-border bg-card sm:overflow-hidden sm:rounded-2xl sm:border">{[1, 2, 3, 4].map((item) => <div key={item} className="flex animate-pulse gap-3 px-4 py-5"><div className="h-12 w-12 rounded-lg bg-secondary" /><div className="flex-1"><div className="h-4 w-2/3 rounded bg-secondary" /><div className="mt-2 h-3 w-1/3 rounded bg-secondary" /><div className="mt-3 h-3 w-1/2 rounded bg-secondary" /></div></div>)}</div>

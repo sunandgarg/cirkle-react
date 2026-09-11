@@ -5,8 +5,6 @@ import {
   blurPointerFocusedChromeControl,
   createPageChromeScrollState,
   DEFAULT_PAGE_CHROME_SCROLL_OPTIONS,
-  PAGE_CHROME_SCROLL_RUNWAY_CLASS,
-  PAGE_CHROME_SCROLL_RUNWAY_PX,
   shouldKeepFocusedChromeExpanded,
   shouldKeepPageChromeExpanded,
   useCollapsiblePageChrome,
@@ -113,10 +111,10 @@ describe("mobile page chrome scroll direction", () => {
     }
   });
 
-  it("scopes shared chrome collapsing to Consult and Jobs only", () => {
-    expect(isCollapsiblePageChromeRoute("/consult")).toBe(true);
-    expect(isCollapsiblePageChromeRoute("/consult/bookings")).toBe(true);
-    expect(isCollapsiblePageChromeRoute("/jobs/remote")).toBe(true);
+  it("keeps full-height route chrome out of directional collapse", () => {
+    expect(isCollapsiblePageChromeRoute("/consult")).toBe(false);
+    expect(isCollapsiblePageChromeRoute("/consult/bookings")).toBe(false);
+    expect(isCollapsiblePageChromeRoute("/jobs/remote")).toBe(false);
     expect(isCollapsiblePageChromeRoute("/cirkle-forum")).toBe(false);
     expect(isCollapsiblePageChromeRoute("/chats/room-1")).toBe(false);
     expect(isCollapsiblePageChromeRoute("/jobs-board")).toBe(false);
@@ -338,31 +336,20 @@ describe("mobile page chrome scroll direction", () => {
     }
   });
 
-  it("keeps a mobile runway longer than both gesture thresholds", () => {
-    expect(PAGE_CHROME_SCROLL_RUNWAY_PX).toBeGreaterThanOrEqual(
-      Math.max(
-        DEFAULT_PAGE_CHROME_SCROLL_OPTIONS.collapseDistance,
-        DEFAULT_PAGE_CHROME_SCROLL_OPTIONS.revealDistance,
-      ),
-    );
-    expect(PAGE_CHROME_SCROLL_RUNWAY_CLASS).toContain("min-h-[calc(100%_+_4rem)]");
-    expect(PAGE_CHROME_SCROLL_RUNWAY_CLASS).toContain("lg:min-h-0");
-  });
-
-  it("resets shared chrome immediately when the route changes", () => {
+  it("ignores collapse requests while routes use native normal flow", () => {
     const { result, rerender } = renderHook(
       ({ pathname }) => useRouteScopedPageChrome(pathname),
       { initialProps: { pathname: "/consult" } },
     );
 
     act(() => result.current.requestCollapsed(true));
-    expect(result.current.collapsed).toBe(true);
+    expect(result.current.collapsed).toBe(false);
 
     rerender({ pathname: "/jobs" });
     expect(result.current.collapsed).toBe(false);
 
     act(() => result.current.requestCollapsed(true));
-    expect(result.current.collapsed).toBe(true);
+    expect(result.current.collapsed).toBe(false);
 
     rerender({ pathname: "/network" });
     expect(result.current.collapsed).toBe(false);

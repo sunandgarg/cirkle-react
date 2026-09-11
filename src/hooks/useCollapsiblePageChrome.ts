@@ -23,12 +23,6 @@ export const DEFAULT_PAGE_CHROME_SCROLL_OPTIONS: PageChromeScrollOptions = {
   revealAtTop: 2,
 };
 
-// Short/empty pages still need enough native travel for one collapse and one
-// reverse gesture. Because this minimum grows with the scroller, hiding the
-// surrounding chrome cannot clamp scrollTop back to zero.
-export const PAGE_CHROME_SCROLL_RUNWAY_PX = 64;
-export const PAGE_CHROME_SCROLL_RUNWAY_CLASS = "min-h-[calc(100%_+_4rem)] lg:min-h-0";
-
 const safeScrollTop = (value: number) => Number.isFinite(value) ? Math.max(0, value) : 0;
 
 export const shouldKeepPageChromeExpanded = (activeElement: Element | null) =>

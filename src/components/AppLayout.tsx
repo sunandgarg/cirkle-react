@@ -82,10 +82,10 @@ const AppLayout = () => {
       )}
     </>
   );
-  // Owned routes place this inside their one native scroller. Consult and Jobs
-  // include it in their combined sticky/reveal stack; Events places it directly
-  // before its sticky local title. On every breakpoint a gesture on the global
-  // header therefore moves the same surface as local controls and results.
+  // Owned routes place this inside their one native scroller. Jobs and Consult
+  // keep the complete stack in normal flow; Events places it directly before
+  // its sticky local title. A gesture on any visible header therefore moves the
+  // same surface as the route content without forwarding or nested scrolling.
   const sharedPageChrome = routeChrome.eligible ? (
     <div
       ref={sharedTopChromeRef}

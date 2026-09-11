@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
@@ -35,10 +35,10 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 const sharedTopChrome = <div data-testid="shared-top-page-chrome">Global navigation</div>;
 
-const renderPage = (path: string, page: ReactNode) => render(
+const renderPage = (path: string, page: ReactNode, requestCollapsed = vi.fn()) => render(
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <MemoryRouter initialEntries={[path]}>
-      <PageChromeRequestProvider requestCollapsed={vi.fn()} sharedTopChrome={sharedTopChrome}>
+      <PageChromeRequestProvider requestCollapsed={requestCollapsed} sharedTopChrome={sharedTopChrome}>
         {page}
       </PageChromeRequestProvider>
     </MemoryRouter>
@@ -80,25 +80,59 @@ describe("route-owned page scrolling", () => {
     expect(isOwnedPageScrollRoute("/chats/room-1")).toBe(false);
   });
 
-  it("keeps the Consult controls and results in its route-owned scroller", () => {
-    renderPage("/consult", <Consult />);
+  it("keeps Consult in normal flow without scroll-driven geometry changes", () => {
+    const requestCollapsed = vi.fn();
+    renderPage("/consult", <Consult />, requestCollapsed);
 
     const owner = screen.getByTestId("consult-scroll-region");
     const chrome = screen.getByTestId("consult-scroll-chrome");
     expect(screen.getByTestId("shared-top-page-chrome").closest("[data-testid=consult-scroll-chrome]")).toBe(chrome);
     expect(chrome.closest("[data-page-scroll-owner=true]")).toBe(owner);
-    expect(chrome).toHaveClass("sticky", "top-0");
-    expect(owner.querySelector(":scope > [data-page-scroll-content=true]")?.closest("[data-page-scroll-owner=true]")).toBe(owner);
+    expect(chrome).not.toHaveClass("sticky", "overflow-hidden", "transition-[max-height,opacity,transform]");
+    expect(chrome).toHaveClass("[&_[role=banner]]:static");
+    expect(chrome).not.toHaveAttribute("aria-hidden");
+    const content = owner.querySelector<HTMLElement>(":scope > [data-page-scroll-content=true]");
+    expect(content?.closest("[data-page-scroll-owner=true]")).toBe(owner);
+    expect(content).not.toHaveClass("min-h-[calc(100%_+_4rem)]");
+    expect(owner).toHaveClass("![overflow-anchor:auto]");
+
+    const search = screen.getByPlaceholderText("Search by name, skill, or topic...");
+    search.focus();
+    act(() => {
+      owner.scrollTop = 120;
+      owner.dispatchEvent(new Event("scroll"));
+    });
+    expect(requestCollapsed).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(search);
+    expect(chrome).not.toHaveAttribute("inert");
+    expect(screen.getByRole("heading", { name: "Consult" })).toBeInTheDocument();
   });
 
-  it("keeps the Jobs controls and results in its route-owned scroller", () => {
-    renderPage("/jobs", <Jobs />);
+  it("keeps Jobs in normal flow without scroll-driven geometry changes", () => {
+    const requestCollapsed = vi.fn();
+    renderPage("/jobs", <Jobs />, requestCollapsed);
 
     const owner = screen.getByTestId("jobs-scroll-region");
     const chrome = screen.getByTestId("jobs-scroll-chrome");
     expect(screen.getByTestId("shared-top-page-chrome").closest("[data-testid=jobs-scroll-chrome]")).toBe(chrome);
     expect(chrome.closest("[data-page-scroll-owner=true]")).toBe(owner);
-    expect(chrome).toHaveClass("sticky", "top-0");
-    expect(owner.querySelector(":scope > [data-page-scroll-content=true]")?.closest("[data-page-scroll-owner=true]")).toBe(owner);
+    expect(chrome).not.toHaveClass("sticky", "overflow-hidden", "transition-[max-height,opacity,transform,border-color]");
+    expect(chrome).toHaveClass("[&_[role=banner]]:static");
+    expect(chrome).not.toHaveAttribute("aria-hidden");
+    const content = owner.querySelector<HTMLElement>(":scope > [data-page-scroll-content=true] > div");
+    expect(content?.closest("[data-page-scroll-owner=true]")).toBe(owner);
+    expect(content).not.toHaveClass("min-h-[calc(100%_+_4rem)]");
+    expect(owner).toHaveClass("![overflow-anchor:auto]");
+
+    const search = screen.getByPlaceholderText("Search role, company, skill, or location");
+    search.focus();
+    act(() => {
+      owner.scrollTop = 120;
+      owner.dispatchEvent(new Event("scroll"));
+    });
+    expect(requestCollapsed).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(search);
+    expect(chrome).not.toHaveAttribute("inert");
+    expect(screen.getByRole("heading", { name: "Jobs" })).toBeInTheDocument();
   });
 });
