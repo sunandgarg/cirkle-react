@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bookmark, BriefcaseBusiness, CheckCircle2, Clock3, ExternalLink,
@@ -11,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useCollapsiblePageChrome } from "@/hooks/useCollapsiblePageChrome";
+import { useSharedPageChromeRequest } from "@/contexts/PageChromeContext";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { recordJobEngagement } from "@/lib/jobAnalytics";
@@ -52,6 +54,13 @@ const Jobs = () => {
   const [search, setSearch] = useState("");
   const storageKey = `cirkle:saved-jobs:${user?.id || "guest"}`;
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const pageScrollRef = useRef<HTMLElement>(null);
+  const pageChromeRef = useRef<HTMLElement>(null);
+  const requestSharedChrome = useSharedPageChromeRequest();
+  const isPageChromeCollapsed = useCollapsiblePageChrome(pageScrollRef, {
+    onCollapsedChange: requestSharedChrome,
+    resetKey: location.pathname,
+  });
   const isVerified = !!user && !!profile?.is_verified;
   const requestedJobId = searchParams.get("job") || "";
   const focusedJobId = /^[a-zA-Z0-9_-]{1,100}$/.test(requestedJobId) ? requestedJobId : "";
@@ -59,6 +68,10 @@ const Jobs = () => {
   useEffect(() => {
     setActiveFilter(jobFilterForPath(location.pathname));
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (pageChromeRef.current) pageChromeRef.current.inert = isPageChromeCollapsed;
+  }, [isPageChromeCollapsed]);
 
   useEffect(() => {
     try {
@@ -185,7 +198,16 @@ const Jobs = () => {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <header className="sticky top-0 z-20 shrink-0 border-b border-border/70 bg-background/95 backdrop-blur-xl">
+      <header
+        ref={pageChromeRef}
+        aria-hidden={isPageChromeCollapsed || undefined}
+        data-testid="jobs-scroll-chrome"
+        className={`sticky top-0 z-20 shrink-0 overflow-hidden border-b bg-background/95 backdrop-blur-xl transition-[max-height,opacity,transform,border-color] duration-200 ease-out motion-reduce:transition-none lg:max-h-none lg:translate-y-0 lg:border-border/70 lg:opacity-100 ${
+          isPageChromeCollapsed
+            ? "pointer-events-none max-h-0 -translate-y-2 border-transparent opacity-0"
+            : "max-h-72 translate-y-0 border-border/70 opacity-100"
+        }`}
+      >
         <div className="mx-auto max-w-3xl px-4 pb-3 pt-4 sm:px-6">
           <div className="flex items-start justify-between gap-3">
             <div><h1 className="text-xl font-bold tracking-tight text-foreground">Jobs</h1><p className="mt-0.5 text-xs text-muted-foreground">Verified opportunities for your community</p></div>
@@ -196,7 +218,11 @@ const Jobs = () => {
         </div>
       </header>
 
-      <main className="native-scroll-region flex-1">
+      <main
+        ref={pageScrollRef}
+        data-testid="jobs-scroll-region"
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain [-webkit-overflow-scrolling:touch] [touch-action:pan-y_pinch-zoom]"
+      >
         <div className="mx-auto max-w-3xl pb-1 sm:px-6 sm:py-4">
           {focusedJobId && focusedJobFetched && !focusedJob && !error ? <div role="status" className="mb-3 rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground">That job is no longer available.</div> : null}
           {error ? <div className="rounded-2xl border border-destructive/25 bg-destructive/5 p-6 text-center"><BriefcaseBusiness className="mx-auto h-8 w-8 text-destructive" /><h2 className="mt-3 text-sm font-bold">Jobs could not be loaded</h2><p className="mt-1 text-xs text-muted-foreground">Check your connection and try again. If this continues, the jobs database migration may still need deployment.</p><Button variant="outline" className="mt-4 rounded-xl" onClick={() => refetch()}><RefreshCw className="h-4 w-4" /> Try again</Button></div>

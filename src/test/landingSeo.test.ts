@@ -7,6 +7,11 @@ const projectFile = (relativePath: string) => readFileSync(resolve(process.cwd()
 describe("public market positioning", () => {
   it("positions Cirkle as an open, verified community network in static metadata", () => {
     const html = projectFile("index.html");
+    const landing = projectFile("src/pages/Landing.tsx");
+    expect(html).toContain("Cirkle - Shared context before the first hello");
+    expect(landing).toContain('title: "Cirkle - Shared context before the first hello"');
+    expect(html).toContain("Cirkle is a verified community networking platform for focused conversations, trusted connections, relevant opportunities, events and expert access.");
+    expect(landing).toContain('description: "Cirkle is a verified community networking platform for focused conversations, trusted connections, relevant opportunities, events and expert access."');
     expect(html).toContain("Where your community becomes your network");
     expect(html).toContain("verified community networking platform");
     expect(html.toLowerCase()).not.toContain("invite-only");
@@ -30,5 +35,18 @@ describe("public market positioning", () => {
     expect(`${landing}\n${auth}`.toLowerCase()).not.toContain("invite-only");
     expect(landing).toContain("Our journey");
     expect(landing).toContain("Voices shaping Cirkle");
+  });
+
+  it("keeps the public experience lightweight and respectful of motion preferences", () => {
+    const landing = projectFile("src/pages/Landing.tsx");
+    const styles = projectFile("src/pages/landing.css");
+    const packageJson = projectFile("package.json");
+
+    expect(landing).toContain('reducedMotion="user"');
+    expect(landing).toContain("useReducedMotion");
+    expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(styles).toContain("animation: none !important");
+    expect(packageJson).not.toContain('"three"');
+    expect(packageJson).not.toContain('"@react-three/fiber"');
   });
 });

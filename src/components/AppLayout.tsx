@@ -1,5 +1,5 @@
 import { Outlet, useLocation, Navigate } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import BottomNav from "./BottomNav";
 import AppHeader from "./AppHeader";
 import DesktopSidebar from "./DesktopSidebar";
@@ -8,11 +8,11 @@ import { usePrefetch } from "@/hooks/usePrefetch";
 import LockedModeOverlay from "./LockedModeOverlay";
 import { ErrorBoundary } from "./ErrorBoundary";
 import GlobalSearchOverlay from "./GlobalSearchOverlay";
-import { useEffect } from "react";
 import ProfileCompletionBanner from "./ProfileCompletionBanner";
 import { supabase } from "@/integrations/supabase/client";
 import { shouldShowProfileCompletion } from "@/lib/profileCompletion";
 import { useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
+import { PageChromeRequestProvider, useRouteScopedPageChrome } from "@/contexts/PageChromeContext";
 
 const AppLayout = () => {
   const { user, profile, isVerified, profileResolved } = useAuth();
@@ -20,7 +20,13 @@ const AppLayout = () => {
   const [searchOpen, setSearchOpen] = useState(false);
   const visualViewport = useVisualViewportFrame();
   const isForum = location.pathname.startsWith("/cirkle-forum");
+  const routeChrome = useRouteScopedPageChrome(location.pathname);
+  const sharedTopChromeRef = useRef<HTMLDivElement>(null);
   const showProfileCompletion = shouldShowProfileCompletion(location.pathname);
+
+  useEffect(() => {
+    if (sharedTopChromeRef.current) sharedTopChromeRef.current.inert = routeChrome.collapsed;
+  }, [routeChrome.collapsed]);
 
   // Prefetch all critical data on login
   usePrefetch(user?.id, profile);
@@ -62,6 +68,14 @@ const AppLayout = () => {
   const allowedUnverified = ["/settings", "/profile", "/iit-verify"];
   const isProtectedPage = !allowedUnverified.some(p => location.pathname.startsWith(p));
   const showLockedOverlay = profileResolved && user && !isVerified && isProtectedPage;
+  const sharedTopContent = (
+    <>
+      <AppHeader />
+      {user && profile && isVerified && showProfileCompletion && (
+        <ProfileCompletionBanner userId={user.id} profile={profile as unknown as Record<string, unknown>} />
+      )}
+    </>
+  );
 
   // Show loading while profile is being fetched to prevent flash
   if (!profileResolved && user) {
@@ -80,19 +94,31 @@ const AppLayout = () => {
     >
       <DesktopSidebar />
       <div className="flex-1 flex flex-col min-w-0 max-w-full overflow-hidden">
-        {!isForum && <AppHeader />}
-        {user && profile && isVerified && showProfileCompletion && (
-          <ProfileCompletionBanner userId={user.id} profile={profile as unknown as Record<string, unknown>} />
-        )}
+        {!isForum && (routeChrome.eligible ? (
+          <div
+            ref={sharedTopChromeRef}
+            aria-hidden={routeChrome.collapsed || undefined}
+            data-testid="shared-top-page-chrome"
+            className={`shrink-0 transition-[max-height,opacity,transform] duration-200 ease-out motion-reduce:transition-none lg:max-h-none lg:translate-y-0 lg:opacity-100 ${
+              routeChrome.collapsed
+                ? "pointer-events-none max-h-0 -translate-y-2 overflow-hidden opacity-0"
+                : "max-h-56 translate-y-0 overflow-visible opacity-100"
+            }`}
+          >
+            {sharedTopContent}
+          </div>
+        ) : sharedTopContent)}
         <main
           id="main-content"
-          className={`flex-1 min-h-0 ${isForum ? "overflow-hidden" : "app-scroll-region"}`}
+          className={`flex-1 min-h-0 ${isForum || routeChrome.eligible ? "overflow-hidden" : "app-scroll-region"}`}
         >
-          <ErrorBoundary>
-            <Outlet />
-          </ErrorBoundary>
+          <PageChromeRequestProvider requestCollapsed={routeChrome.requestCollapsed}>
+            <ErrorBoundary>
+              <Outlet />
+            </ErrorBoundary>
+          </PageChromeRequestProvider>
         </main>
-        {!isForum && <BottomNav />}
+        {!isForum && <BottomNav collapsed={routeChrome.collapsed} collapseWithPage={routeChrome.eligible} />}
         {showLockedOverlay && <LockedModeOverlay />}
       </div>
       <GlobalSearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} />

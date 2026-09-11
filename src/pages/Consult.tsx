@@ -8,6 +8,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import { useCollapsiblePageChrome } from "@/hooks/useCollapsiblePageChrome";
+import { useSharedPageChromeRequest } from "@/contexts/PageChromeContext";
 import { toast } from "sonner";
 
 const CATEGORIES = ["All", "Tech", "Finance", "Career", "Startups", "Research", "Design", "Legal"];
@@ -60,6 +62,13 @@ const Consult = () => {
   const [bookingNotes, setBookingNotes] = useState("");
   const [activeTab, setActiveTab] = useState<"mentors" | "bookings">(() => location.pathname.endsWith("/bookings") ? "bookings" : "mentors");
   const bookingCloseRef = useRef<HTMLButtonElement>(null);
+  const pageScrollRef = useRef<HTMLDivElement>(null);
+  const pageChromeRef = useRef<HTMLDivElement>(null);
+  const requestSharedChrome = useSharedPageChromeRequest();
+  const isPageChromeCollapsed = useCollapsiblePageChrome(pageScrollRef, {
+    onCollapsedChange: requestSharedChrome,
+    resetKey: location.pathname,
+  });
 
   const isVerified = !!user && !!profile?.is_verified;
 
@@ -67,6 +76,10 @@ const Consult = () => {
     if (location.pathname.endsWith("/bookings")) setActiveTab("bookings");
     else if (location.pathname.endsWith("/mentors")) setActiveTab("mentors");
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (pageChromeRef.current) pageChromeRef.current.inert = isPageChromeCollapsed;
+  }, [isPageChromeCollapsed]);
 
   useEffect(() => {
     if (!bookingExpert) return;
@@ -295,7 +308,16 @@ const Consult = () => {
       )}
 
       {/* Sticky header */}
-      <div className="flex-shrink-0 bg-background sticky top-0 z-10">
+      <div
+        ref={pageChromeRef}
+        aria-hidden={isPageChromeCollapsed || undefined}
+        data-testid="consult-scroll-chrome"
+        className={`sticky top-0 z-10 flex-shrink-0 overflow-hidden bg-background/95 backdrop-blur-xl transition-[max-height,opacity,transform] duration-200 ease-out motion-reduce:transition-none lg:max-h-none lg:translate-y-0 lg:opacity-100 ${
+          isPageChromeCollapsed
+            ? "pointer-events-none max-h-0 -translate-y-2 opacity-0"
+            : "max-h-[22rem] translate-y-0 opacity-100"
+        }`}
+      >
         <div className="px-4 pt-4 pb-2">
           <div className="max-w-5xl mx-auto flex items-center justify-between">
             <div>
@@ -348,7 +370,11 @@ const Consult = () => {
       </div>
 
       {/* Scrollable content */}
-      <div className="native-scroll-region flex-1">
+      <div
+        ref={pageScrollRef}
+        data-testid="consult-scroll-region"
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain [-webkit-overflow-scrolling:touch] [touch-action:pan-y_pinch-zoom]"
+      >
         <main className="max-w-5xl mx-auto px-4 py-4 space-y-4 pb-4">
           {activeTab === "bookings" && (
             <>

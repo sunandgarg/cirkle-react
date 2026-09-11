@@ -70,8 +70,9 @@ describe("Cloudflare Pages build configuration", () => {
     const connectSource = headers.match(/connect-src\s+([^;]+)/)?.[1]?.split(/\s+/) ?? [];
 
     assert.ok(scriptSource.includes("https://static.cloudflareinsights.com/beacon.min.js"));
+    assert.ok(scriptSource.includes("https://static.cloudflareinsights.com/beacon.min.js/"), "versioned automatic beacon URLs must pass CSP");
     assert.ok(connectSource.includes("'self'"), "automatic injection reports to same-origin /cdn-cgi/rum");
-    assert.ok(!scriptSource.includes("https://static.cloudflareinsights.com"), "keep script access scoped to beacon.min.js");
+    assert.ok(!scriptSource.includes("https://static.cloudflareinsights.com"), "keep script access scoped to the beacon entry point and its versioned path");
     assert.ok(!connectSource.some((source) => source.includes("cloudflareinsights.com")), "automatic injection does not need an external report origin");
     assert.ok(!html.includes("data-cf-beacon"), "the dashboard owns automatic injection; source must not add a duplicate beacon");
   });

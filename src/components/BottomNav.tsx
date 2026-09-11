@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Users, Waypoints, Briefcase, Calendar } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -21,10 +21,17 @@ const ALL_TABS = [
   { path: "/calendar", key: "calendar", fallbackLabel: "Events", isLogo: false },
 ];
 
-const BottomNav = () => {
+const BottomNav = ({
+  collapsed = false,
+  collapseWithPage = false,
+}: {
+  collapsed?: boolean;
+  collapseWithPage?: boolean;
+}) => {
   const location = useLocation();
   const navigate = useNavigate();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const navRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const viewport = window.visualViewport;
@@ -68,12 +75,20 @@ const BottomNav = () => {
     staleTime: Infinity,
   });
 
+  const hidden = keyboardOpen || collapsed;
+
+  useEffect(() => {
+    if (navRef.current) navRef.current.inert = collapsed;
+  }, [collapsed]);
+
   return (
     <nav
-      className={`z-50 safe-bottom lg:hidden overflow-hidden transition-[max-height,opacity,transform] duration-150 ${keyboardOpen ? "max-h-0 translate-y-2 opacity-0 pointer-events-none" : "max-h-20 translate-y-0 opacity-100"}`}
+      ref={navRef}
+      className={`z-50 ${collapsed ? "" : "safe-bottom"} lg:hidden overflow-hidden transition-[max-height,opacity,transform] duration-150 ${collapseWithPage ? "motion-reduce:transition-none" : ""} ${hidden ? "max-h-0 translate-y-2 opacity-0 pointer-events-none" : "max-h-20 translate-y-0 opacity-100"}`}
       role="navigation"
       aria-label="Main navigation"
-      aria-hidden={keyboardOpen}
+      aria-hidden={hidden}
+      data-page-chrome-collapsed={collapsed || undefined}
     >
       <div className="relative max-w-lg mx-auto">
         <div className="bg-card border-t border-border">

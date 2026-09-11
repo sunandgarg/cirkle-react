@@ -307,9 +307,10 @@ authorizer secrets, and every other secret must never use that prefix.
 Cloudflare Web Analytics is configured in the dashboard for `cirkle.world`
 using automatic injection with EU visitor collection excluded. Do not add a
 manual `data-cf-beacon` script or a browser build token: that would duplicate
-the dashboard-managed beacon. The Pages CSP permits only Cloudflare's exact
-`beacon.min.js` URL, while its same-origin `/cdn-cgi/rum` report is already
-covered by `connect-src 'self'`.
+the dashboard-managed beacon. The Pages CSP permits Cloudflare's exact
+`beacon.min.js` entry point and its versioned subpaths (for example,
+`beacon.min.js/v31...`) without granting the whole analytics origin. Its
+same-origin `/cdn-cgi/rum` report is already covered by `connect-src 'self'`.
 
 The API hostname is Cloudflare-proxied only after the origin Nginx config has
 the reviewed Cloudflare IPv4/IPv6 trust list. Nginx accepts
