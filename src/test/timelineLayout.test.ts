@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   estimateDirectMessageRowHeight,
   estimateForumPostRowHeight,
+  getForumTimelineScrollState,
   getTimelineScrollState,
+  normalizeForumTimelineScrollOffset,
   normalizeTimelineScrollOffset,
   TIMELINE_VIRTUALIZER_OPTIONS,
 } from "@/lib/timelineLayout";
@@ -49,5 +51,16 @@ describe("timeline layout", () => {
     expect(getTimelineScrollState(1)).toBe("scrollable");
     expect(normalizeTimelineScrollOffset(1, 42)).toBe(42);
     expect(normalizeTimelineScrollOffset(200, 1_250)).toBe(1_250);
+  });
+
+  it("locks Forum rooms by measured overflow, including short non-empty rooms", () => {
+    expect(getForumTimelineScrollState(0, 640)).toBe("static");
+    expect(getForumTimelineScrollState(640, 640)).toBe("static");
+    expect(getForumTimelineScrollState(640.8, 640)).toBe("static");
+    expect(getForumTimelineScrollState(642, 640)).toBe("scrollable");
+
+    expect(normalizeForumTimelineScrollOffset("static", -18)).toBe(0);
+    expect(normalizeForumTimelineScrollOffset("static", 24)).toBe(0);
+    expect(normalizeForumTimelineScrollOffset("scrollable", 24)).toBe(24);
   });
 });

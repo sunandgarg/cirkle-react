@@ -364,6 +364,16 @@
     scroll-behavior: auto;
   }
 
+  /* Empty and short Forum rooms have no valid vertical journey. Locking the
+     coincident top/bottom boundary prevents mobile rubber-band and browser
+     pull-to-refresh from making opposite finger gestures look identical. */
+  .forum-scroll-region[data-scroll-state="static"] {
+    overflow-y: hidden;
+    overscroll-behavior-y: none;
+    -webkit-overflow-scrolling: auto;
+    touch-action: pinch-zoom;
+  }
+
   .chat-timeline-scroll-region {
     min-height: 0;
     overflow-y: auto;

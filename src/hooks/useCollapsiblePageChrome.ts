@@ -39,6 +39,30 @@ export const shouldKeepPageChromeExpanded = (activeElement: Element | null) =>
     || activeElement.getAttribute("contenteditable") === "true"
   );
 
+export const shouldKeepFocusedChromeExpanded = (
+  activeElement: Element | null,
+  chromeElement: HTMLElement | null | undefined,
+) => shouldKeepPageChromeExpanded(activeElement)
+  || (
+    activeElement instanceof HTMLElement
+    && !!chromeElement?.contains(activeElement)
+    && activeElement.matches(":focus-visible")
+  );
+
+export const blurPointerFocusedChromeControl = (
+  activeElement: Element | null,
+  chromeElement: HTMLElement | null | undefined,
+) => {
+  if (
+    !(activeElement instanceof HTMLElement)
+    || !chromeElement?.contains(activeElement)
+    || shouldKeepFocusedChromeExpanded(activeElement, chromeElement)
+  ) return false;
+
+  activeElement.blur();
+  return true;
+};
+
 export const createPageChromeScrollState = (
   scrollTop = 0,
   collapsed = false,
@@ -95,6 +119,8 @@ export const advancePageChromeScroll = (
 interface UseCollapsiblePageChromeOptions extends Partial<PageChromeScrollOptions> {
   /** The mobile/tablet layout ends where the permanent desktop sidebar begins. */
   mediaQuery?: string;
+  /** Never hide a chrome subtree while it contains keyboard/focus state. */
+  keepExpandedWithinRef?: RefObject<HTMLElement | null>;
   /** Synchronises route-owned chrome with the shared application shell. */
   onCollapsedChange?: (collapsed: boolean) => void;
   /** Reinitialises both local and shared chrome when the route changes. */
@@ -105,6 +131,7 @@ export const useCollapsiblePageChrome = (
   scrollRef: RefObject<HTMLElement | null>,
   {
     collapseDistance = DEFAULT_PAGE_CHROME_SCROLL_OPTIONS.collapseDistance,
+    keepExpandedWithinRef,
     mediaQuery: mediaQueryValue = "(max-width: 1023px)",
     onCollapsedChange,
     resetKey,
@@ -132,6 +159,9 @@ export const useCollapsiblePageChrome = (
 
     const setChrome = (nextCollapsed: boolean) => {
       if (chromeIsCollapsed === nextCollapsed) return;
+      if (nextCollapsed) {
+        blurPointerFocusedChromeControl(document.activeElement, keepExpandedWithinRef?.current);
+      }
       chromeIsCollapsed = nextCollapsed;
       setCollapsed(nextCollapsed);
       onCollapsedChange?.(nextCollapsed);
@@ -147,9 +177,11 @@ export const useCollapsiblePageChrome = (
         return;
       }
 
-      // Software keyboards and focused editors can synthesize scroll events.
-      // Keep search controls stable while the member is typing.
-      if (shouldKeepPageChromeExpanded(document.activeElement)) {
+      // Editors remain stable while typing. Other chrome controls veto hiding
+      // only for keyboard-visible focus; a pointer/touch tap must not pin the
+      // header open for the user's next swipe.
+      const activeElement = document.activeElement;
+      if (shouldKeepFocusedChromeExpanded(activeElement, keepExpandedWithinRef?.current)) {
         setChrome(false);
         tracker = createPageChromeScrollState(scrollTop, false);
         return;
@@ -189,6 +221,7 @@ export const useCollapsiblePageChrome = (
     };
   }, [
     collapseDistance,
+    keepExpandedWithinRef,
     mediaQueryValue,
     onCollapsedChange,
     resetKey,

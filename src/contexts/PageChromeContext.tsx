@@ -7,6 +7,12 @@ const PageChromeRequestContext = createContext<PageChromeRequest>(() => undefine
 export const isCollapsiblePageChromeRoute = (pathname: string) =>
   /^\/(?:consult|jobs)(?:\/|$)/.test(pathname);
 
+// These routes deliberately own their only vertical scroll surface. AppLayout
+// must not add a second scroller around them or gestures can change owners at
+// the sticky-header boundary.
+export const isOwnedPageScrollRoute = (pathname: string) =>
+  /^\/(?:consult|jobs|calendar)(?:\/|$)/.test(pathname);
+
 // AppHeader's notification dialog is positioned inside the header. Keep that
 // header above the adjacent profile reminder while this wrapper is expanded.
 export const COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS = "relative z-50 [&>header]:z-50";

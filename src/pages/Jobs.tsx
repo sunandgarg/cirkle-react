@@ -16,6 +16,7 @@ import {
   useCollapsiblePageChrome,
 } from "@/hooks/useCollapsiblePageChrome";
 import { useSharedPageChromeRequest } from "@/contexts/PageChromeContext";
+import OwnedPageScrollRegion from "@/components/OwnedPageScrollRegion";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { recordJobEngagement } from "@/lib/jobAnalytics";
@@ -57,10 +58,11 @@ const Jobs = () => {
   const [search, setSearch] = useState("");
   const storageKey = `cirkle:saved-jobs:${user?.id || "guest"}`;
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
-  const pageScrollRef = useRef<HTMLElement>(null);
+  const pageScrollRef = useRef<HTMLDivElement>(null);
   const pageChromeRef = useRef<HTMLElement>(null);
   const requestSharedChrome = useSharedPageChromeRequest();
   const isPageChromeCollapsed = useCollapsiblePageChrome(pageScrollRef, {
+    keepExpandedWithinRef: pageChromeRef,
     onCollapsedChange: requestSharedChrome,
     resetKey: location.pathname,
   });
@@ -200,7 +202,7 @@ const Jobs = () => {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <OwnedPageScrollRegion ref={pageScrollRef} data-testid="jobs-scroll-region" className="bg-background">
       <header
         ref={pageChromeRef}
         aria-hidden={isPageChromeCollapsed || undefined}
@@ -221,11 +223,8 @@ const Jobs = () => {
         </div>
       </header>
 
-      <main
-        ref={pageScrollRef}
-        data-testid="jobs-scroll-region"
-        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain [-webkit-overflow-scrolling:touch] [touch-action:pan-y_pinch-zoom]"
-      >
+      {/* The header and results share one native scroll owner. */}
+      <div data-page-scroll-content="true">
         <div className={`${PAGE_CHROME_SCROLL_RUNWAY_CLASS} mx-auto max-w-3xl pb-1 sm:px-6 sm:py-4`}>
           {focusedJobId && focusedJobFetched && !focusedJob && !error ? <div role="status" className="mb-3 rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground">That job is no longer available.</div> : null}
           {error ? <div className="rounded-2xl border border-destructive/25 bg-destructive/5 p-6 text-center"><BriefcaseBusiness className="mx-auto h-8 w-8 text-destructive" /><h2 className="mt-3 text-sm font-bold">Jobs could not be loaded</h2><p className="mt-1 text-xs text-muted-foreground">Check your connection and try again. If this continues, the jobs database migration may still need deployment.</p><Button variant="outline" className="mt-4 rounded-xl" onClick={() => refetch()}><RefreshCw className="h-4 w-4" /> Try again</Button></div>
@@ -258,8 +257,8 @@ const Jobs = () => {
 
           {!user || !isVerified ? <div className="mt-4 rounded-2xl border border-primary/15 bg-primary/5 p-5 text-center"><Lock className="mx-auto h-6 w-6 text-primary" /><h3 className="mt-2 text-sm font-bold">{user ? "Verify once to apply" : "Join the verified community network"}</h3><p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">Browse every public opening now. {user ? "Complete your community verification before applying." : "Sign in to save your identity and apply to opportunities."}</p><Button className="mt-4 rounded-xl" onClick={() => navigate(user ? "/iit-verify" : "/auth")}>{user ? "Complete verification" : "Sign in"}</Button></div> : null}
         </div>
-      </main>
-    </div>
+      </div>
+    </OwnedPageScrollRegion>
   );
 };
 

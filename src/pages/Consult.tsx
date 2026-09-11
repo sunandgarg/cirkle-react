@@ -13,6 +13,7 @@ import {
   useCollapsiblePageChrome,
 } from "@/hooks/useCollapsiblePageChrome";
 import { useSharedPageChromeRequest } from "@/contexts/PageChromeContext";
+import OwnedPageScrollRegion from "@/components/OwnedPageScrollRegion";
 import { toast } from "sonner";
 
 const CATEGORIES = ["All", "Tech", "Finance", "Career", "Startups", "Research", "Design", "Legal"];
@@ -69,6 +70,7 @@ const Consult = () => {
   const pageChromeRef = useRef<HTMLDivElement>(null);
   const requestSharedChrome = useSharedPageChromeRequest();
   const isPageChromeCollapsed = useCollapsiblePageChrome(pageScrollRef, {
+    keepExpandedWithinRef: pageChromeRef,
     onCollapsedChange: requestSharedChrome,
     resetKey: location.pathname,
   });
@@ -225,7 +227,7 @@ const Consult = () => {
   }, [bookingExpert, experts, isVerified, searchParams, setSearchParams]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <>
       {/* Booking Modal - topmate.io style */}
       {bookingExpert && (
         <div className="fixed inset-0 z-[60] bg-background/80 backdrop-blur-sm flex items-end sm:items-center justify-center">
@@ -310,6 +312,7 @@ const Consult = () => {
         </div>
       )}
 
+      <OwnedPageScrollRegion ref={pageScrollRef} data-testid="consult-scroll-region" className="bg-background">
       {/* Sticky header */}
       <div
         ref={pageChromeRef}
@@ -372,13 +375,8 @@ const Consult = () => {
         )}
       </div>
 
-      {/* Scrollable content */}
-      <div
-        ref={pageScrollRef}
-        data-testid="consult-scroll-region"
-        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain [-webkit-overflow-scrolling:touch] [touch-action:pan-y_pinch-zoom]"
-      >
-        <main className={`${PAGE_CHROME_SCROLL_RUNWAY_CLASS} max-w-5xl mx-auto px-4 py-4 space-y-4 pb-4`}>
+      {/* The header and results share one native scroll owner. */}
+      <div data-page-scroll-content="true" className={`${PAGE_CHROME_SCROLL_RUNWAY_CLASS} max-w-5xl mx-auto px-4 py-4 space-y-4 pb-4`}>
           {activeTab === "bookings" && (
             <>
               {bookingsLoading ? (
@@ -570,9 +568,9 @@ const Consult = () => {
               )}
             </>
           )}
-        </main>
       </div>
-    </div>
+      </OwnedPageScrollRegion>
+    </>
   );
 };
 

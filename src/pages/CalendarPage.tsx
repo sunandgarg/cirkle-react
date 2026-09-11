@@ -5,6 +5,7 @@ import { Building2, Calendar as CalendarIcon, Check, ChevronLeft, ChevronRight, 
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import EmptyState from "@/components/EmptyState";
+import OwnedPageScrollRegion from "@/components/OwnedPageScrollRegion";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import type { Database } from "@/integrations/supabase/types";
@@ -286,7 +287,7 @@ const CalendarPage = () => {
   const listEventGroups = groupEventsByDate(listEvents, viewerIit, view === "past" ? "descending" : "ascending");
 
   return (
-    <div className="min-h-screen bg-background">
+    <OwnedPageScrollRegion data-testid="events-scroll-region" className="bg-background">
       <header className="sticky top-0 z-40 border-b border-border bg-card/95 px-4 py-3 backdrop-blur-xl">
         <div className="mx-auto flex max-w-3xl items-center justify-between">
           <div>
@@ -297,7 +298,7 @@ const CalendarPage = () => {
         </div>
       </header>
 
-      <main className="mx-auto max-w-3xl space-y-5 px-4 py-4 pb-24">
+      <div data-page-scroll-content="true" className="mx-auto max-w-3xl space-y-5 px-4 py-4 pb-24">
         {focusedEventId && focusedEventFetched && !focusedEvent ? <div role="status" className="rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground">That event is no longer available to your profile.</div> : null}
 
         {nextEvent ? (
@@ -365,8 +366,8 @@ const CalendarPage = () => {
             </div>
           )) : <EmptyState icon={CalendarIcon} title={view === "going" ? "Nothing saved yet" : "No events here"} description={selectedDate ? "Try another date or clear the date filter." : view === "going" ? "Mark an event as going and it will stay easy to find." : "New relevant events will appear here after an admin publishes them."} />}
         </section>
-      </main>
-    </div>
+      </div>
+    </OwnedPageScrollRegion>
   );
 };
 

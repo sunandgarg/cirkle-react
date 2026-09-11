@@ -15,6 +15,27 @@ export const TIMELINE_VIRTUALIZER_OPTIONS = {
 
 export type TimelineScrollState = "empty" | "scrollable";
 
+export type ForumTimelineScrollState = "static" | "scrollable";
+
+/**
+ * Forum rooms can contain a date marker, welcome copy, or a handful of short
+ * posts without actually overflowing. Row count alone therefore cannot tell
+ * us whether mobile panning is meaningful. A one-pixel tolerance avoids
+ * oscillating at fractional layout boundaries on zoomed/high-DPI screens.
+ */
+export const getForumTimelineScrollState = (
+  scrollHeight: number,
+  clientHeight: number,
+): ForumTimelineScrollState => (
+  Math.max(0, scrollHeight) > Math.max(0, clientHeight) + 1 ? "scrollable" : "static"
+);
+
+/** Safari can briefly report a rubber-band offset for a non-overflowing box. */
+export const normalizeForumTimelineScrollOffset = (
+  state: ForumTimelineScrollState,
+  scrollTop: number,
+): number => state === "static" ? 0 : scrollTop;
+
 /**
  * An empty message viewport has no valid vertical offset. Treating it as a
  * regular pan surface lets mobile browsers rubber-band the coincident top and

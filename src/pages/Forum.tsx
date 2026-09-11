@@ -64,12 +64,17 @@ import {
   appSyncRealtimeEnabled, getForumAppSyncChannels, subscribeAppSync,
 } from "@/lib/appsyncEvents";
 import { useRealtimeActivity } from "@/hooks/useRealtimeActivity";
+import { useForumTimelineScrollState } from "@/hooks/useForumTimelineScrollState";
 import { shouldAnchorLatestDuringKeyboard, useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
 import { safeHttpUrl } from "@/lib/safeUrl";
 import { forumPostProfileSignature, resolveForumPostProfile } from "@/lib/forumProfiles";
 import { uniqueIdentifiers } from "@/lib/identifiers";
 import { assertSmallFile, IMAGE_SOURCE_LIMIT_BYTES } from "@/lib/imageUtils";
-import { estimateForumPostRowHeight, TIMELINE_VIRTUALIZER_OPTIONS } from "@/lib/timelineLayout";
+import {
+  estimateForumPostRowHeight,
+  normalizeForumTimelineScrollOffset,
+  TIMELINE_VIRTUALIZER_OPTIONS,
+} from "@/lib/timelineLayout";
 
 const isDemoId = (id: string) => typeof id === "string" && (
   id.startsWith("demo-") || id.startsWith("test-") || id.startsWith("outbox-")
@@ -435,6 +440,7 @@ const Forum = () => {
   const remoteTypingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const timelineContentRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -870,6 +876,11 @@ const Forum = () => {
     return sortPostsChronologically([...persisted, ...roomOutbox, ...linked]);
   }, [postsData, olderPages, testRoomPosts, outboxPosts, activeScope.type, activeScope.key, deepLinkedPost]);
   const isEmptyChannel = !!postsData && !postsData.isDemo && (posts?.length || 0) === 0;
+  const timelineScrollState = useForumTimelineScrollState(
+    scrollContainerRef,
+    timelineContentRef,
+    `${activeScope.type}:${activeScope.key}:${isLoading ? "loading" : "ready"}:${posts?.length || 0}:${loadingOlder ? "older" : "idle"}:${hasMoreOlder ? "more" : "start"}`,
+  );
 
   const getCurrentSendSnapshot = (): ForumSendSnapshot => ({
     scopeType: activeScope.type,
@@ -1624,6 +1635,14 @@ const Forum = () => {
       scrollWorkFrameRef.current = null;
       const el = scrollContainerRef.current;
       if (!el) return;
+      const normalizedOffset = normalizeForumTimelineScrollOffset(timelineScrollState, el.scrollTop);
+      if (normalizedOffset !== el.scrollTop) el.scrollTop = normalizedOffset;
+      if (timelineScrollState === "static") {
+        shouldFollowLiveRef.current = true;
+        setShowScrollDown((current) => current ? false : current);
+        setNewMsgCount((current) => current === 0 ? current : 0);
+        return;
+      }
       const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       shouldFollowLiveRef.current = distFromBottom < 120;
       const shouldShowScrollDown = distFromBottom > 100;
@@ -1648,7 +1667,7 @@ const Forum = () => {
         void loadOlderMessages();
       }
     });
-  }, [activeScope.type, activeScope.key, loadOlderMessages, user?.id]);
+  }, [activeScope.type, activeScope.key, loadOlderMessages, timelineScrollState, user?.id]);
 
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -2164,11 +2183,13 @@ const Forum = () => {
         {/* ── Messages area ── */}
         <div
           ref={scrollContainerRef}
+          data-scroll-state={timelineScrollState}
+          data-testid="forum-scroll-region"
           onScroll={handleScroll}
           onPointerDown={dismissComposerOverlays}
           className="forum-chat-wallpaper forum-scroll-region flex-1"
         >
-          <div className="mx-auto w-full max-w-5xl px-0">
+          <div ref={timelineContentRef} className="mx-auto w-full max-w-5xl px-0">
             {/* Pagination: Beginning marker or spinner */}
             {!hasMoreOlder && posts && posts.length > 0 && (
               <div className="flex items-center justify-center py-6">

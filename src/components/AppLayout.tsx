@@ -14,6 +14,7 @@ import { shouldShowProfileCompletion } from "@/lib/profileCompletion";
 import { useVisualViewportFrame } from "@/hooks/useVisualViewportHeight";
 import {
   COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS,
+  isOwnedPageScrollRoute,
   PageChromeRequestProvider,
   useRouteScopedPageChrome,
 } from "@/contexts/PageChromeContext";
@@ -24,6 +25,7 @@ const AppLayout = () => {
   const [searchOpen, setSearchOpen] = useState(false);
   const visualViewport = useVisualViewportFrame();
   const isForum = location.pathname.startsWith("/cirkle-forum");
+  const ownsPageScroll = isOwnedPageScrollRoute(location.pathname);
   const routeChrome = useRouteScopedPageChrome(location.pathname);
   const sharedTopChromeRef = useRef<HTMLDivElement>(null);
   const showProfileCompletion = shouldShowProfileCompletion(location.pathname);
@@ -114,7 +116,7 @@ const AppLayout = () => {
         ) : sharedTopContent)}
         <main
           id="main-content"
-          className={`flex-1 min-h-0 ${isForum || routeChrome.eligible ? "overflow-hidden" : "app-scroll-region"}`}
+          className={`flex-1 min-h-0 ${isForum || ownsPageScroll ? "overflow-hidden" : "app-scroll-region"}`}
         >
           <PageChromeRequestProvider requestCollapsed={routeChrome.requestCollapsed}>
             <ErrorBoundary>

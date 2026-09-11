@@ -89,6 +89,11 @@ describe("Events calendar ordering", () => {
     expect(screen.getByRole("button", { name: /showing September 2026/i })).toHaveTextContent("September 2026");
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(3));
 
+    const scrollOwner = screen.getByTestId("events-scroll-region");
+    expect(screen.getByRole("heading", { name: "Events" }).closest("header")?.closest("[data-page-scroll-owner=true]")).toBe(scrollOwner);
+    expect(scrollOwner.querySelector(":scope > [data-page-scroll-content=true]")).toBeTruthy();
+    expect(screen.getAllByRole("article")[0].closest("[data-page-scroll-owner=true]")).toBe(scrollOwner);
+
     const orderedArticles = screen.getAllByRole("article");
     expect(orderedArticles.map((article) => within(article).getByRole("heading").textContent)).toEqual([
       "IIT Bombay event bombay-02",
