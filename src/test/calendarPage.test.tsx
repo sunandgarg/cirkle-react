@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import CalendarPage from "@/pages/CalendarPage";
+import { PageChromeRequestProvider } from "@/contexts/PageChromeContext";
 import type { Database } from "@/integrations/supabase/types";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
@@ -82,7 +83,14 @@ describe("Events calendar ordering", () => {
 
     render(
       <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={["/events"]}><CalendarPage /></MemoryRouter>
+        <MemoryRouter initialEntries={["/events"]}>
+          <PageChromeRequestProvider
+            requestCollapsed={vi.fn()}
+            sharedTopChrome={<div data-testid="shared-top-page-chrome">Global navigation</div>}
+          >
+            <CalendarPage />
+          </PageChromeRequestProvider>
+        </MemoryRouter>
       </QueryClientProvider>,
     );
 
@@ -90,6 +98,7 @@ describe("Events calendar ordering", () => {
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(3));
 
     const scrollOwner = screen.getByTestId("events-scroll-region");
+    expect(screen.getByTestId("shared-top-page-chrome").closest("[data-page-scroll-owner=true]")).toBe(scrollOwner);
     expect(screen.getByRole("heading", { name: "Events" }).closest("header")?.closest("[data-page-scroll-owner=true]")).toBe(scrollOwner);
     expect(scrollOwner.querySelector(":scope > [data-page-scroll-content=true]")).toBeTruthy();
     expect(screen.getAllByRole("article")[0].closest("[data-page-scroll-owner=true]")).toBe(scrollOwner);

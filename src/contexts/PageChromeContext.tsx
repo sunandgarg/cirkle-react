@@ -1,8 +1,17 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 type PageChromeRequest = (collapsed: boolean) => void;
 
 const PageChromeRequestContext = createContext<PageChromeRequest>(() => undefined);
+const SharedTopPageChromeContext = createContext<ReactNode>(null);
+const SharedTopPageChromeRefContext = createContext<RefObject<HTMLElement | null> | undefined>(undefined);
 
 export const isCollapsiblePageChromeRoute = (pathname: string) =>
   /^\/(?:consult|jobs)(?:\/|$)/.test(pathname);
@@ -38,13 +47,26 @@ export const useRouteScopedPageChrome = (pathname: string) => {
 export const PageChromeRequestProvider = ({
   children,
   requestCollapsed,
+  sharedTopChrome = null,
+  sharedTopChromeRef,
 }: {
   children: ReactNode;
   requestCollapsed: PageChromeRequest;
+  sharedTopChrome?: ReactNode;
+  sharedTopChromeRef?: RefObject<HTMLElement | null>;
 }) => (
-  <PageChromeRequestContext.Provider value={requestCollapsed}>
-    {children}
-  </PageChromeRequestContext.Provider>
+  <SharedTopPageChromeRefContext.Provider value={sharedTopChromeRef}>
+    <SharedTopPageChromeContext.Provider value={sharedTopChrome}>
+      <PageChromeRequestContext.Provider value={requestCollapsed}>
+        {children}
+      </PageChromeRequestContext.Provider>
+    </SharedTopPageChromeContext.Provider>
+  </SharedTopPageChromeRefContext.Provider>
 );
 
 export const useSharedPageChromeRequest = () => useContext(PageChromeRequestContext);
+export const useSharedTopPageChrome = () => useContext(SharedTopPageChromeContext);
+export const useSharedTopPageChromeRef = () => useContext(SharedTopPageChromeRefContext);
+
+/** Renders the layout-owned header at the route's chosen position. */
+export const SharedTopPageChrome = () => <>{useSharedTopPageChrome()}</>;

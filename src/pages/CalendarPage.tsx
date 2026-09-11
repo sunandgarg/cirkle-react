@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import EmptyState from "@/components/EmptyState";
 import OwnedPageScrollRegion from "@/components/OwnedPageScrollRegion";
+import { SharedTopPageChrome } from "@/contexts/PageChromeContext";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import type { Database } from "@/integrations/supabase/types";
@@ -288,6 +289,7 @@ const CalendarPage = () => {
 
   return (
     <OwnedPageScrollRegion data-testid="events-scroll-region" className="bg-background">
+      <SharedTopPageChrome />
       <header className="sticky top-0 z-40 border-b border-border bg-card/95 px-4 py-3 backdrop-blur-xl">
         <div className="mx-auto flex max-w-3xl items-center justify-between">
           <div>

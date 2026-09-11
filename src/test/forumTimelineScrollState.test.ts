@@ -21,11 +21,13 @@ describe("Forum short timeline scroll state", () => {
 
     const scroller = document.createElement("div");
     const content = document.createElement("div");
-    let scrollHeight = 500;
-    let clientHeight = 640;
+    const chrome = document.createElement("div");
+    const contentHeight = 500;
+    let chromeHeight = 64;
+    const clientHeight = 640;
     let scrollTop = 22;
     Object.defineProperties(scroller, {
-      scrollHeight: { configurable: true, get: () => scrollHeight },
+      scrollHeight: { configurable: true, get: () => contentHeight + chromeHeight },
       clientHeight: { configurable: true, get: () => clientHeight },
       scrollTop: {
         configurable: true,
@@ -36,28 +38,75 @@ describe("Forum short timeline scroll state", () => {
 
     const scrollRef = { current: scroller };
     const contentRef = { current: content };
+    const chromeRef = { current: chrome };
     const { result } = renderHook(() => useForumTimelineScrollState(
       scrollRef,
       contentRef,
+      chromeRef,
       "room-a:1",
     ));
 
     expect(result.current).toBe("static");
     expect(scrollTop).toBe(0);
-    expect(observed).toEqual(new Set([scroller, content]));
+    expect(observed).toEqual(new Set([scroller, content, chrome]));
 
     act(() => {
-      scrollHeight = 900;
+      // Opening only the sticky search/header chrome creates real overflow.
+      // The message content itself is unchanged.
+      chromeHeight = 180;
       notifyResize();
     });
     expect(result.current).toBe("scrollable");
 
     act(() => {
       scrollTop = 70;
-      clientHeight = 920;
+      chromeHeight = 64;
       notifyResize();
     });
     expect(result.current).toBe("static");
     expect(scrollTop).toBe(0);
+  });
+
+  it("remeasures synchronously when semantic chrome changes before the fallback frame", () => {
+    vi.stubGlobal("ResizeObserver", undefined);
+    const scheduledFrames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    }));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const scroller = document.createElement("div");
+    const content = document.createElement("div");
+    const chrome = document.createElement("div");
+    let scrollHeight = 500;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      clientHeight: { configurable: true, value: 600 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+    });
+
+    const scrollRef = { current: scroller };
+    const contentRef = { current: content };
+    const chromeRef = { current: chrome };
+    const { result, rerender } = renderHook(({ version }) => useForumTimelineScrollState(
+      scrollRef,
+      contentRef,
+      chromeRef,
+      version,
+    ), { initialProps: { version: "room" } });
+
+    expect(result.current).toBe("static");
+    act(() => {
+      scrollHeight = 760;
+      rerender({ version: "search" });
+    });
+    expect(result.current).toBe("scrollable");
+
+    act(() => {
+      scrollHeight = 500;
+      rerender({ version: "room" });
+    });
+    expect(result.current).toBe("static");
   });
 });

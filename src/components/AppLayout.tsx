@@ -82,6 +82,32 @@ const AppLayout = () => {
       )}
     </>
   );
+  // Owned routes place this inside their one native scroller. Consult and Jobs
+  // include it in their combined sticky/reveal stack; Events places it directly
+  // before its sticky local title. On every breakpoint a gesture on the global
+  // header therefore moves the same surface as local controls and results.
+  const sharedPageChrome = routeChrome.eligible ? (
+    <div
+      ref={sharedTopChromeRef}
+      aria-hidden={routeChrome.collapsed || undefined}
+      data-testid="shared-top-page-chrome"
+      className={`shrink-0 ${COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS} transition-[max-height,opacity,transform] duration-200 ease-out motion-reduce:transition-none lg:max-h-none lg:translate-y-0 lg:opacity-100 ${
+        routeChrome.collapsed
+          ? "pointer-events-none max-h-0 -translate-y-2 overflow-hidden opacity-0"
+          : "max-h-56 translate-y-0 overflow-visible opacity-100"
+      }`}
+    >
+      {sharedTopContent}
+    </div>
+  ) : (
+    <div
+      ref={sharedTopChromeRef}
+      data-testid="shared-top-page-chrome"
+      className={`shrink-0 ${COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS}`}
+    >
+      {sharedTopContent}
+    </div>
+  );
 
   // Show loading while profile is being fetched to prevent flash
   if (!profileResolved && user) {
@@ -100,26 +126,17 @@ const AppLayout = () => {
     >
       <DesktopSidebar />
       <div className="flex-1 flex flex-col min-w-0 max-w-full overflow-hidden">
-        {!isForum && (routeChrome.eligible ? (
-          <div
-            ref={sharedTopChromeRef}
-            aria-hidden={routeChrome.collapsed || undefined}
-            data-testid="shared-top-page-chrome"
-            className={`shrink-0 ${COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS} transition-[max-height,opacity,transform] duration-200 ease-out motion-reduce:transition-none lg:max-h-none lg:translate-y-0 lg:opacity-100 ${
-              routeChrome.collapsed
-                ? "pointer-events-none max-h-0 -translate-y-2 overflow-hidden opacity-0"
-                : "max-h-56 translate-y-0 overflow-visible opacity-100"
-            }`}
-          >
-            {sharedTopContent}
-          </div>
-        ) : sharedTopContent)}
+        {!isForum && !ownsPageScroll && sharedPageChrome}
         <main
           id="main-content"
           className={`flex-1 min-h-0 ${isForum || ownsPageScroll ? "overflow-hidden" : "app-scroll-region"}`}
         >
-          <PageChromeRequestProvider requestCollapsed={routeChrome.requestCollapsed}>
-            <ErrorBoundary>
+          <PageChromeRequestProvider
+            requestCollapsed={routeChrome.requestCollapsed}
+            sharedTopChrome={!isForum && ownsPageScroll ? sharedPageChrome : null}
+            sharedTopChromeRef={sharedTopChromeRef}
+          >
+            <ErrorBoundary fallbackPrefix={!isForum && ownsPageScroll ? sharedPageChrome : null}>
               <Outlet />
             </ErrorBoundary>
           </PageChromeRequestProvider>

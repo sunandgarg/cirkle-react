@@ -84,6 +84,10 @@ describe("mobile page chrome scroll direction", () => {
 
     matches.mockImplementation((selector) => selector === ":focus-visible");
     expect(shouldKeepFocusedChromeExpanded(filterButton, chrome)).toBe(true);
+
+    matches.mockReturnValue(false);
+    filterButton.setAttribute("aria-expanded", "true");
+    expect(shouldKeepFocusedChromeExpanded(document.body, chrome)).toBe(true);
   });
 
   it("blurs only pointer-focused controls before their chrome is hidden", () => {
@@ -253,6 +257,76 @@ describe("mobile page chrome scroll direction", () => {
         scroller.dispatchEvent(new Event("scroll"));
       });
       expect(result.current).toBe(true);
+      unmount();
+    } finally {
+      matches.mockRestore();
+      scroller.remove();
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
+  });
+
+  it("protects keyboard focus and releases pointer focus in shared top chrome", () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (query: string) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    });
+
+    const scroller = document.createElement("div");
+    const localChrome = document.createElement("header");
+    const sharedChrome = document.createElement("header");
+    const sharedButton = document.createElement("button");
+    sharedChrome.append(sharedButton);
+    scroller.append(sharedChrome, localChrome, document.createElement("div"));
+    document.body.append(scroller);
+    const scrollRef = { current: scroller };
+    const localChromeRef = { current: localChrome };
+    const sharedChromeRef = { current: sharedChrome };
+    const matches = vi.spyOn(sharedButton, "matches")
+      .mockImplementation((selector) => selector === ":focus-visible");
+
+    try {
+      const { result, unmount } = renderHook(() => useCollapsiblePageChrome(
+        scrollRef,
+        {
+          keepExpandedWithinRef: localChromeRef,
+          additionalKeepExpandedWithinRef: sharedChromeRef,
+        },
+      ));
+
+      sharedButton.focus();
+      act(() => {
+        scroller.scrollTop = 48;
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      expect(result.current).toBe(false);
+      expect(document.activeElement).toBe(sharedButton);
+
+      matches.mockReturnValue(false);
+      sharedButton.setAttribute("aria-expanded", "true");
+      act(() => {
+        scroller.scrollTop = 96;
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      expect(result.current).toBe(false);
+      expect(document.activeElement).toBe(sharedButton);
+
+      sharedButton.setAttribute("aria-expanded", "false");
+      act(() => {
+        scroller.scrollTop = 144;
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      expect(result.current).toBe(true);
+      expect(sharedChrome.contains(document.activeElement)).toBe(false);
       unmount();
     } finally {
       matches.mockRestore();

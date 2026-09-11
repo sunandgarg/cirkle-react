@@ -15,7 +15,11 @@ import {
   PAGE_CHROME_SCROLL_RUNWAY_CLASS,
   useCollapsiblePageChrome,
 } from "@/hooks/useCollapsiblePageChrome";
-import { useSharedPageChromeRequest } from "@/contexts/PageChromeContext";
+import {
+  SharedTopPageChrome,
+  useSharedPageChromeRequest,
+  useSharedTopPageChromeRef,
+} from "@/contexts/PageChromeContext";
 import OwnedPageScrollRegion from "@/components/OwnedPageScrollRegion";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -59,9 +63,11 @@ const Jobs = () => {
   const storageKey = `cirkle:saved-jobs:${user?.id || "guest"}`;
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const pageScrollRef = useRef<HTMLDivElement>(null);
-  const pageChromeRef = useRef<HTMLElement>(null);
+  const pageChromeRef = useRef<HTMLDivElement>(null);
   const requestSharedChrome = useSharedPageChromeRequest();
+  const sharedTopChromeRef = useSharedTopPageChromeRef();
   const isPageChromeCollapsed = useCollapsiblePageChrome(pageScrollRef, {
+    additionalKeepExpandedWithinRef: sharedTopChromeRef,
     keepExpandedWithinRef: pageChromeRef,
     onCollapsedChange: requestSharedChrome,
     resetKey: location.pathname,
@@ -203,25 +209,26 @@ const Jobs = () => {
 
   return (
     <OwnedPageScrollRegion ref={pageScrollRef} data-testid="jobs-scroll-region" className="bg-background">
-      <header
+      <div
         ref={pageChromeRef}
         aria-hidden={isPageChromeCollapsed || undefined}
         data-testid="jobs-scroll-chrome"
         className={`sticky top-0 z-20 shrink-0 overflow-hidden border-b bg-background/95 backdrop-blur-xl transition-[max-height,opacity,transform,border-color] duration-200 ease-out motion-reduce:transition-none lg:max-h-none lg:translate-y-0 lg:border-border/70 lg:opacity-100 ${
           isPageChromeCollapsed
             ? "pointer-events-none max-h-0 -translate-y-2 border-transparent opacity-0"
-            : "max-h-72 translate-y-0 border-border/70 opacity-100"
+            : "max-h-[28rem] translate-y-0 border-border/70 opacity-100"
         }`}
       >
-        <div className="mx-auto max-w-3xl px-4 pb-3 pt-4 sm:px-6">
+        <SharedTopPageChrome />
+        <header className="mx-auto max-w-3xl px-4 pb-3 pt-4 sm:px-6">
           <div className="flex items-start justify-between gap-3">
             <div><h1 className="text-xl font-bold tracking-tight text-foreground">Jobs</h1><p className="mt-0.5 text-xs text-muted-foreground">Verified opportunities for your community</p></div>
             <div className="flex items-center gap-2"><span className="rounded-full bg-secondary px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">{filteredJobs.length} open</span><button aria-label="Refresh jobs" onClick={() => refetch()} disabled={isFetching} className="rounded-full border border-border p-2 text-muted-foreground hover:text-primary"><RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} /></button></div>
           </div>
           <div className="relative mt-4"><Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search role, company, skill, or location" className="h-11 rounded-xl border-border bg-card pl-10" /></div>
           <div className="-mx-4 mt-3 overflow-x-auto px-4 scrollbar-hide sm:-mx-6 sm:px-6"><div className="flex w-max gap-2">{FILTERS.map((filter) => <button key={filter} onClick={() => { setActiveFilter(filter); if (user?.id && filter !== activeFilter) void recordJobEngagement("job_filter", null, { filter }); }} className={`min-h-9 whitespace-nowrap rounded-full px-3.5 text-xs font-semibold transition-colors ${activeFilter === filter ? "bg-primary text-primary-foreground shadow-sm" : "border border-border bg-card text-muted-foreground hover:text-foreground"}`}>{filter === "Saved" && <Bookmark className="mr-1 inline h-3 w-3" />}{filter}</button>)}</div></div>
-        </div>
-      </header>
+        </header>
+      </div>
 
       {/* The header and results share one native scroll owner. */}
       <div data-page-scroll-content="true">

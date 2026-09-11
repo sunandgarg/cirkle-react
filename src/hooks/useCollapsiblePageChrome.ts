@@ -39,10 +39,22 @@ export const shouldKeepPageChromeExpanded = (activeElement: Element | null) =>
     || activeElement.getAttribute("contenteditable") === "true"
   );
 
+const OPEN_CHROME_LAYER_SELECTOR = '[aria-expanded="true"], [data-state="open"], [role="dialog"]';
+
+const chromeContainsFocusOrOpenLayer = (
+  chromeElement: HTMLElement | null | undefined,
+  activeElement: Element | null,
+) => !!chromeElement
+  && (
+    chromeElement.contains(activeElement)
+    || !!chromeElement.querySelector(OPEN_CHROME_LAYER_SELECTOR)
+  );
+
 export const shouldKeepFocusedChromeExpanded = (
   activeElement: Element | null,
   chromeElement: HTMLElement | null | undefined,
 ) => shouldKeepPageChromeExpanded(activeElement)
+  || !!chromeElement?.querySelector(OPEN_CHROME_LAYER_SELECTOR)
   || (
     activeElement instanceof HTMLElement
     && !!chromeElement?.contains(activeElement)
@@ -121,6 +133,8 @@ interface UseCollapsiblePageChromeOptions extends Partial<PageChromeScrollOption
   mediaQuery?: string;
   /** Never hide a chrome subtree while it contains keyboard/focus state. */
   keepExpandedWithinRef?: RefObject<HTMLElement | null>;
+  /** A second chrome subtree, such as the shared application header. */
+  additionalKeepExpandedWithinRef?: RefObject<HTMLElement | null>;
   /** Synchronises route-owned chrome with the shared application shell. */
   onCollapsedChange?: (collapsed: boolean) => void;
   /** Reinitialises both local and shared chrome when the route changes. */
@@ -130,6 +144,7 @@ interface UseCollapsiblePageChromeOptions extends Partial<PageChromeScrollOption
 export const useCollapsiblePageChrome = (
   scrollRef: RefObject<HTMLElement | null>,
   {
+    additionalKeepExpandedWithinRef,
     collapseDistance = DEFAULT_PAGE_CHROME_SCROLL_OPTIONS.collapseDistance,
     keepExpandedWithinRef,
     mediaQuery: mediaQueryValue = "(max-width: 1023px)",
@@ -160,7 +175,12 @@ export const useCollapsiblePageChrome = (
     const setChrome = (nextCollapsed: boolean) => {
       if (chromeIsCollapsed === nextCollapsed) return;
       if (nextCollapsed) {
-        blurPointerFocusedChromeControl(document.activeElement, keepExpandedWithinRef?.current);
+        const activeElement = document.activeElement;
+        const focusedChrome = [
+          keepExpandedWithinRef?.current,
+          additionalKeepExpandedWithinRef?.current,
+        ].find((element) => chromeContainsFocusOrOpenLayer(element, activeElement));
+        blurPointerFocusedChromeControl(activeElement, focusedChrome);
       }
       chromeIsCollapsed = nextCollapsed;
       setCollapsed(nextCollapsed);
@@ -181,7 +201,11 @@ export const useCollapsiblePageChrome = (
       // only for keyboard-visible focus; a pointer/touch tap must not pin the
       // header open for the user's next swipe.
       const activeElement = document.activeElement;
-      if (shouldKeepFocusedChromeExpanded(activeElement, keepExpandedWithinRef?.current)) {
+      const focusedChrome = [
+        keepExpandedWithinRef?.current,
+        additionalKeepExpandedWithinRef?.current,
+      ].find((element) => chromeContainsFocusOrOpenLayer(element, activeElement));
+      if (shouldKeepFocusedChromeExpanded(activeElement, focusedChrome)) {
         setChrome(false);
         tracker = createPageChromeScrollState(scrollTop, false);
         return;
@@ -220,6 +244,7 @@ export const useCollapsiblePageChrome = (
       onCollapsedChange?.(false);
     };
   }, [
+    additionalKeepExpandedWithinRef,
     collapseDistance,
     keepExpandedWithinRef,
     mediaQueryValue,

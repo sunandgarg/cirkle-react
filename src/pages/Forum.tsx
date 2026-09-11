@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Textarea } from "@/components/ui/textarea";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
@@ -29,6 +29,7 @@ import FileAttachment from "@/components/forum/FileAttachment";
 import ThreadPanel from "@/components/forum/ThreadPanel";
 import ScopeNavigationItem from "@/components/forum/ScopeNavigationItem";
 import DirectMessageSidebar from "@/components/forum/DirectMessageSidebar";
+import ForumTimelineSurface from "@/components/forum/ForumTimelineSurface";
 import {
   getCachedPosts, setCachedPosts, getUnreadChannels, setChannelRead,
   getForumDraft, setForumDraft, getForumScroll, setForumScroll,
@@ -441,6 +442,7 @@ const Forum = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const timelineContentRef = useRef<HTMLDivElement>(null);
+  const timelineChromeRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -876,10 +878,12 @@ const Forum = () => {
     return sortPostsChronologically([...persisted, ...roomOutbox, ...linked]);
   }, [postsData, olderPages, testRoomPosts, outboxPosts, activeScope.type, activeScope.key, deepLinkedPost]);
   const isEmptyChannel = !!postsData && !postsData.isDemo && (posts?.length || 0) === 0;
+  const timelineLayoutVersion = `${activeScope.type}:${activeScope.key}:${isLoading ? "loading" : "ready"}:${posts?.length || 0}:${loadingOlder ? "older" : "idle"}:${hasMoreOlder ? "more" : "start"}:${showSearch ? "search" : "room"}:${slowModeEnabled ? "slow" : "normal"}:${adMessages?.[0]?.id || "no-ad"}:${visualViewport.height}:${visualViewport.offsetTop}`;
   const timelineScrollState = useForumTimelineScrollState(
     scrollContainerRef,
     timelineContentRef,
-    `${activeScope.type}:${activeScope.key}:${isLoading ? "loading" : "ready"}:${posts?.length || 0}:${loadingOlder ? "older" : "idle"}:${hasMoreOlder ? "more" : "start"}`,
+    timelineChromeRef,
+    timelineLayoutVersion,
   );
 
   const getCurrentSendSnapshot = (): ForumSendSnapshot => ({
@@ -2074,8 +2078,22 @@ const Forum = () => {
 
       {/* ═══ MAIN CHAT AREA ═══ */}
       <div className="flex-1 flex flex-col min-w-0 relative overflow-x-hidden">
-        {/* ── Compact, touch-safe group header ── */}
-        <div className="h-16 flex items-center gap-2.5 px-2.5 sm:px-3 border-b border-border/55 bg-card/[0.88] backdrop-blur-2xl flex-shrink-0 z-10 shadow-[0_8px_28px_-22px_hsl(var(--foreground)/0.55)]">
+        {/* Header, room controls and messages deliberately share one native
+            scroll owner. Keeping the chrome sticky preserves the fixed chat
+            layout while allowing a gesture that begins anywhere in the top
+            section to move the timeline instead of falling through to iOS
+            viewport rubber-band / pull-to-refresh. */}
+        <ForumTimelineSurface
+          scrollRef={scrollContainerRef}
+          chromeRef={timelineChromeRef}
+          contentRef={timelineContentRef}
+          scrollState={timelineScrollState}
+          onScroll={handleScroll}
+          onPointerDown={dismissComposerOverlays}
+          chrome={(
+            <>
+            {/* ── Compact, touch-safe group header ── */}
+            <div className="h-16 flex items-center gap-2.5 px-2.5 sm:px-3 border-b border-border/55 bg-card/[0.88] backdrop-blur-2xl flex-shrink-0 shadow-[0_8px_28px_-22px_hsl(var(--foreground)/0.55)]">
           <button onClick={() => setSidebarOpen(true)} className="lg:hidden w-11 h-11 flex items-center justify-center rounded-2xl hover:bg-accent active:scale-95 transition-all" aria-label="Open channels">
             <ArrowLeft className="w-5 h-5" />
           </button>
@@ -2126,70 +2144,64 @@ const Forum = () => {
               <Users className="w-4 h-4" />
             </button>
           </div>
-        </div>
-
-        {/* Slow mode banner */}
-        {slowModeEnabled && (
-          <div className="px-4 py-1 bg-warning/5 border-b border-warning/10 flex-shrink-0">
-            <div className="flex items-center gap-2 text-[11px] text-warning">
-              <Timer className="w-3 h-3 flex-shrink-0" />
-              <span className="font-medium">Slow mode · {slowModeSeconds}s</span>
-              {slowModeCooldown > 0 && <span className="ml-auto font-bold tabular-nums">{slowModeCooldown}s</span>}
             </div>
-          </div>
-        )}
 
-        {/* ── Search overlay ── */}
-        {showSearch && (
-          <div className="flex flex-col border-b border-border bg-card flex-shrink-0 animate-fade-in">
-            <div className="flex items-center gap-2 px-3 py-2">
-              <button onClick={() => { setShowSearch(false); setSearchQuery(""); }} className="w-8 h-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent flex-shrink-0">
-                <ArrowDown className="w-4 h-4 rotate-90" />
-              </button>
-              <div className="flex-1 relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-                  className="h-9 pl-9 pr-8 bg-accent border-0 rounded-lg text-sm" autoFocus />
-                {searchQuery && (
-                  <button onClick={() => setSearchQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-muted-foreground/20 flex items-center justify-center hover:bg-muted-foreground/30">
-                    <X className="w-3 h-3 text-foreground" />
-                  </button>
-                )}
+            {/* Slow mode banner */}
+            {slowModeEnabled && (
+              <div className="px-4 py-1 bg-warning/5 border-b border-warning/10 flex-shrink-0">
+                <div className="flex items-center gap-2 text-[11px] text-warning">
+                  <Timer className="w-3 h-3 flex-shrink-0" />
+                  <span className="font-medium">Slow mode · {slowModeSeconds}s</span>
+                  {slowModeCooldown > 0 && <span className="ml-auto font-bold tabular-nums">{slowModeCooldown}s</span>}
+                </div>
               </div>
-            </div>
+            )}
 
-            <div className="flex px-3 gap-0 overflow-x-auto scrollbar-hide">
-              {([
-                { key: "messages", label: "Messages", count: searchCounts.messages },
-                { key: "media", label: "Media", count: searchCounts.media },
-                { key: "pins", label: "Pins", count: searchCounts.pins },
-                { key: "links", label: "Links", count: searchCounts.links },
-              ] as const).map(tab => (
-                <button key={tab.key} onClick={() => setSearchTab(tab.key)}
-                  className={`px-3 py-2 text-[12px] font-semibold border-b-2 transition-all whitespace-nowrap flex items-center gap-1.5 ${
-                    searchTab === tab.key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
-                  }`}>
-                  {tab.label}
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${searchTab === tab.key ? "bg-primary/15 text-primary" : "bg-accent text-muted-foreground"}`}>
-                    {tab.count}
-                  </span>
-                </button>
-              ))}
-            </div>
+            {/* ── Search overlay ── */}
+            {showSearch && (
+              <div className="flex flex-col border-b border-border bg-card flex-shrink-0 animate-fade-in">
+                <div className="flex items-center gap-2 px-3 py-2">
+                  <button onClick={() => { setShowSearch(false); setSearchQuery(""); }} className="w-8 h-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent flex-shrink-0">
+                    <ArrowDown className="w-4 h-4 rotate-90" />
+                  </button>
+                  <div className="flex-1 relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                      className="h-9 pl-9 pr-8 bg-accent border-0 rounded-lg text-sm" autoFocus />
+                    {searchQuery && (
+                      <button onClick={() => setSearchQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-muted-foreground/20 flex items-center justify-center hover:bg-muted-foreground/30">
+                        <X className="w-3 h-3 text-foreground" />
+                      </button>
+                    )}
+                  </div>
+                </div>
 
-          </div>
-        )}
+                <div className="flex px-3 gap-0 overflow-x-auto scrollbar-hide">
+                  {([
+                    { key: "messages", label: "Messages", count: searchCounts.messages },
+                    { key: "media", label: "Media", count: searchCounts.media },
+                    { key: "pins", label: "Pins", count: searchCounts.pins },
+                    { key: "links", label: "Links", count: searchCounts.links },
+                  ] as const).map(tab => (
+                    <button key={tab.key} onClick={() => setSearchTab(tab.key)}
+                      className={`px-3 py-2 text-[12px] font-semibold border-b-2 transition-all whitespace-nowrap flex items-center gap-1.5 ${
+                        searchTab === tab.key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+                      }`}>
+                      {tab.label}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${searchTab === tab.key ? "bg-primary/15 text-primary" : "bg-accent text-muted-foreground"}`}>
+                        {tab.count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
 
-        {/* ── Messages area ── */}
-        <div
-          ref={scrollContainerRef}
-          data-scroll-state={timelineScrollState}
-          data-testid="forum-scroll-region"
-          onScroll={handleScroll}
-          onPointerDown={dismissComposerOverlays}
-          className="forum-chat-wallpaper forum-scroll-region flex-1"
+              </div>
+            )}
+            </>
+          )}
         >
-          <div ref={timelineContentRef} className="mx-auto w-full max-w-5xl px-0">
+
+          {/* ── Messages area ── */}
             {/* Pagination: Beginning marker or spinner */}
             {!hasMoreOlder && posts && posts.length > 0 && (
               <div className="flex items-center justify-center py-6">
@@ -2204,7 +2216,7 @@ const Forum = () => {
 
             {!isVerified && user ? (
               <MaskedContent>
-                <MessagesView isLoading={isLoading} groupedByDate={groupedByDate} messagesEndRef={messagesEndRef} scrollContainerRef={scrollContainerRef}
+                <MessagesView isLoading={isLoading} groupedByDate={groupedByDate} messagesEndRef={messagesEndRef} scrollContainerRef={scrollContainerRef} scrollLayoutVersion={timelineLayoutVersion}
                   onReply={handleReply} onReact={(postId, emoji) => toggleReaction.mutate({ postId, emoji })}
                   userId={user?.id} isAdmin={!!isAdmin}
                   onAdminPin={(id) => toggleAdminPin.mutate(id)}
@@ -2218,7 +2230,7 @@ const Forum = () => {
                   onImageClick={setLightboxImage} onThread={handleThread} onRetry={retryOutboxPost} />
               </MaskedContent>
             ) : (
-              <MessagesView isLoading={isLoading} groupedByDate={groupedByDate} messagesEndRef={messagesEndRef} scrollContainerRef={scrollContainerRef}
+              <MessagesView isLoading={isLoading} groupedByDate={groupedByDate} messagesEndRef={messagesEndRef} scrollContainerRef={scrollContainerRef} scrollLayoutVersion={timelineLayoutVersion}
                 onReply={handleReply} onReact={(postId, emoji) => toggleReaction.mutate({ postId, emoji })}
                 userId={user?.id} isAdmin={!!isAdmin}
                 onAdminPin={(id) => toggleAdminPin.mutate(id)}
@@ -2231,8 +2243,7 @@ const Forum = () => {
                 onCopy={handleCopy} profileMap={profileMap}
                 onImageClick={setLightboxImage} onThread={handleThread} onRetry={retryOutboxPost} />
             )}
-          </div>
-        </div>
+        </ForumTimelineSurface>
 
         {/* New messages pill (FIX 9) */}
         {newMsgCount > 0 && (
@@ -2650,9 +2661,10 @@ const ScopeList = ({ scopes, activeScope, unreadDots, onSelect, onToggle }: {
 /* ══════════════════════════════════════════════════ */
 /*              MESSAGES VIEW                        */
 /* ══════════════════════════════════════════════════ */
-const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContainerRef, onReply, onReact, userId, isAdmin, onAdminPin, onUserPin, userPinnedIds, navigate, messageRefs, highlightedPostId, onScrollToMessage, findParentPost, adMessages, activeScopeDef, isEmptyChannel, onStartFirst, onEdit, onDelete, onCopy, profileMap, onImageClick, onThread, onRetry }: {
+const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContainerRef, scrollLayoutVersion, onReply, onReact, userId, isAdmin, onAdminPin, onUserPin, userPinnedIds, navigate, messageRefs, highlightedPostId, onScrollToMessage, findParentPost, adMessages, activeScopeDef, isEmptyChannel, onStartFirst, onEdit, onDelete, onCopy, profileMap, onImageClick, onThread, onRetry }: {
   isLoading: boolean; groupedByDate: Record<string, any[]>; messagesEndRef: React.RefObject<HTMLDivElement>;
   scrollContainerRef: React.RefObject<HTMLDivElement>;
+  scrollLayoutVersion: string;
   onReply: (post: any) => void; onReact: (postId: string, emoji: string) => void; userId?: string;
   isAdmin: boolean; onAdminPin: (id: string) => void; onUserPin: (id: string) => void;
   userPinnedIds: string[]; navigate: (path: string) => void;
@@ -2668,6 +2680,7 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContaine
   onRetry: (post: any) => void;
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
   const timelineItems = useMemo(() => Object.entries(groupedByDate).flatMap(([date, datePosts]) => [
     { type: "date" as const, key: `date-${date}`, date },
     ...datePosts.map((post: any) => ({ type: "post" as const, key: post.id, post })),
@@ -2689,7 +2702,7 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContaine
     // move the mounted rows without routing every scroll pixel through React.
     overscan: 8,
     getItemKey: getTimelineItemKey,
-    scrollMargin: listRef.current?.offsetTop || 0,
+    scrollMargin,
     ...TIMELINE_VIRTUALIZER_OPTIONS,
     isScrollingResetDelay: 120,
   });
@@ -2697,6 +2710,14 @@ const MessagesView = ({ isLoading, groupedByDate, messagesEndRef, scrollContaine
     listRef.current = node;
     virtualizer.containerRef(node);
   }, [virtualizer]);
+  useLayoutEffect(() => {
+    // The sticky room chrome, beginning marker and ad slot all precede the
+    // virtual rows. Read their committed geometry before paint so virtual row
+    // transforms and scrollToIndex keep the same coordinate system when any
+    // of those sections opens, closes or resizes.
+    const nextMargin = Math.max(0, listRef.current?.offsetTop || 0);
+    setScrollMargin((current) => current === nextMargin ? current : nextMargin);
+  }, [scrollLayoutVersion]);
   useEffect(() => {
     if (!highlightedPostId) return;
     const targetIndex = timelineItems.findIndex((item) => item.type === "post" && item.post.id === highlightedPostId);

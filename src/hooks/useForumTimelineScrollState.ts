@@ -13,6 +13,7 @@ import {
 export const useForumTimelineScrollState = (
   scrollRef: RefObject<HTMLDivElement | null>,
   contentRef: RefObject<HTMLDivElement | null>,
+  chromeRef: RefObject<HTMLDivElement | null>,
   contentVersion: unknown,
 ): ForumTimelineScrollState => {
   const [state, setState] = useState<ForumTimelineScrollState>("static");
@@ -32,23 +33,26 @@ export const useForumTimelineScrollState = (
 
     const scroller = scrollRef.current;
     const content = contentRef.current;
+    const chrome = chromeRef.current;
     const observer = typeof ResizeObserver === "undefined"
       ? null
       : new ResizeObserver(measure);
     if (scroller) observer?.observe(scroller);
     if (content) observer?.observe(content);
+    if (chrome) observer?.observe(chrome);
 
     window.addEventListener("resize", measure, { passive: true });
     return () => {
       observer?.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [contentRef, measure, scrollRef]);
+  }, [chromeRef, contentRef, measure, scrollRef]);
 
   useLayoutEffect(() => {
     // React commits and virtualizer measurements do not necessarily happen in
     // the same frame. Recheck once after semantic timeline changes; subsequent
     // image/row resizing is covered by ResizeObserver.
+    measure();
     const frame = requestAnimationFrame(measure);
     return () => cancelAnimationFrame(frame);
   }, [contentVersion, measure]);

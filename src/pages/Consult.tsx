@@ -12,7 +12,11 @@ import {
   PAGE_CHROME_SCROLL_RUNWAY_CLASS,
   useCollapsiblePageChrome,
 } from "@/hooks/useCollapsiblePageChrome";
-import { useSharedPageChromeRequest } from "@/contexts/PageChromeContext";
+import {
+  SharedTopPageChrome,
+  useSharedPageChromeRequest,
+  useSharedTopPageChromeRef,
+} from "@/contexts/PageChromeContext";
 import OwnedPageScrollRegion from "@/components/OwnedPageScrollRegion";
 import { toast } from "sonner";
 
@@ -69,7 +73,9 @@ const Consult = () => {
   const pageScrollRef = useRef<HTMLDivElement>(null);
   const pageChromeRef = useRef<HTMLDivElement>(null);
   const requestSharedChrome = useSharedPageChromeRequest();
+  const sharedTopChromeRef = useSharedTopPageChromeRef();
   const isPageChromeCollapsed = useCollapsiblePageChrome(pageScrollRef, {
+    additionalKeepExpandedWithinRef: sharedTopChromeRef,
     keepExpandedWithinRef: pageChromeRef,
     onCollapsedChange: requestSharedChrome,
     resetKey: location.pathname,
@@ -321,9 +327,10 @@ const Consult = () => {
         className={`sticky top-0 z-10 flex-shrink-0 overflow-hidden bg-background/95 backdrop-blur-xl transition-[max-height,opacity,transform] duration-200 ease-out motion-reduce:transition-none lg:max-h-none lg:translate-y-0 lg:opacity-100 ${
           isPageChromeCollapsed
             ? "pointer-events-none max-h-0 -translate-y-2 opacity-0"
-            : "max-h-[22rem] translate-y-0 opacity-100"
+            : "max-h-[32rem] translate-y-0 opacity-100"
         }`}
       >
+        <SharedTopPageChrome />
         <div className="px-4 pt-4 pb-2">
           <div className="max-w-5xl mx-auto flex items-center justify-between">
             <div>
