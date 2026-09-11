@@ -9,7 +9,7 @@ export const isCollapsiblePageChromeRoute = (pathname: string) =>
 
 // AppHeader's notification dialog is positioned inside the header. Keep that
 // header above the adjacent profile reminder while this wrapper is expanded.
-export const COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS = "[&>header]:z-50";
+export const COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS = "relative z-50 [&>header]:z-50";
 
 /**
  * Shared-layout state is keyed by the exact route. A collapsed request from a

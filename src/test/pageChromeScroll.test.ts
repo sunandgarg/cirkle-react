@@ -77,7 +77,8 @@ describe("mobile page chrome scroll direction", () => {
   });
 
   it("keeps the expanded notification overlay above the profile reminder", () => {
-    expect(COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS).toBe("[&>header]:z-50");
+    expect(COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS).toContain("relative z-50");
+    expect(COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS).toContain("[&>header]:z-50");
   });
 
   it("resets shared chrome immediately when the route changes", () => {
