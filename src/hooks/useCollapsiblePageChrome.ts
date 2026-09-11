@@ -23,6 +23,12 @@ export const DEFAULT_PAGE_CHROME_SCROLL_OPTIONS: PageChromeScrollOptions = {
   revealAtTop: 2,
 };
 
+// Short/empty pages still need enough native travel for one collapse and one
+// reverse gesture. Because this minimum grows with the scroller, hiding the
+// surrounding chrome cannot clamp scrollTop back to zero.
+export const PAGE_CHROME_SCROLL_RUNWAY_PX = 64;
+export const PAGE_CHROME_SCROLL_RUNWAY_CLASS = "min-h-[calc(100%_+_4rem)] lg:min-h-0";
+
 const safeScrollTop = (value: number) => Number.isFinite(value) ? Math.max(0, value) : 0;
 
 export const shouldKeepPageChromeExpanded = (activeElement: Element | null) =>
@@ -89,8 +95,6 @@ export const advancePageChromeScroll = (
 interface UseCollapsiblePageChromeOptions extends Partial<PageChromeScrollOptions> {
   /** The mobile/tablet layout ends where the permanent desktop sidebar begins. */
   mediaQuery?: string;
-  /** Ignore scrollTop clamping caused by the chrome's own height transition. */
-  layoutSettleMs?: number;
   /** Synchronises route-owned chrome with the shared application shell. */
   onCollapsedChange?: (collapsed: boolean) => void;
   /** Reinitialises both local and shared chrome when the route changes. */
@@ -101,7 +105,6 @@ export const useCollapsiblePageChrome = (
   scrollRef: RefObject<HTMLElement | null>,
   {
     collapseDistance = DEFAULT_PAGE_CHROME_SCROLL_OPTIONS.collapseDistance,
-    layoutSettleMs = 220,
     mediaQuery: mediaQueryValue = "(max-width: 1023px)",
     onCollapsedChange,
     resetKey,
@@ -126,33 +129,20 @@ export const useCollapsiblePageChrome = (
     const mediaQuery = window.matchMedia(mediaQueryValue);
     let tracker = createPageChromeScrollState(scroller.scrollTop);
     let chromeIsCollapsed = false;
-    let ignoreLayoutScrollUntil = 0;
-    let animationFrame = 0;
 
-    const setChrome = (nextCollapsed: boolean, now: number) => {
+    const setChrome = (nextCollapsed: boolean) => {
       if (chromeIsCollapsed === nextCollapsed) return;
       chromeIsCollapsed = nextCollapsed;
       setCollapsed(nextCollapsed);
       onCollapsedChange?.(nextCollapsed);
-      ignoreLayoutScrollUntil = now + layoutSettleMs;
       tracker = createPageChromeScrollState(scroller.scrollTop, nextCollapsed);
     };
 
     const sampleScroll = () => {
-      animationFrame = 0;
       const scrollTop = safeScrollTop(scroller.scrollTop);
-      const now = performance.now();
 
       if (!mediaQuery.matches) {
-        setChrome(false, now);
-        tracker = createPageChromeScrollState(scrollTop, false);
-        return;
-      }
-
-      // The top is authoritative even during a layout transition or rubber-band
-      // overscroll, preventing a hidden header after returning to the start.
-      if (scrollTop <= resolvedOptions.revealAtTop) {
-        setChrome(false, now);
+        setChrome(false);
         tracker = createPageChromeScrollState(scrollTop, false);
         return;
       }
@@ -160,30 +150,33 @@ export const useCollapsiblePageChrome = (
       // Software keyboards and focused editors can synthesize scroll events.
       // Keep search controls stable while the member is typing.
       if (shouldKeepPageChromeExpanded(document.activeElement)) {
-        setChrome(false, now);
+        setChrome(false);
         tracker = createPageChromeScrollState(scrollTop, false);
         return;
       }
 
-      if (now < ignoreLayoutScrollUntil) {
-        tracker = createPageChromeScrollState(scrollTop, chromeIsCollapsed);
+      if (scrollTop <= resolvedOptions.revealAtTop) {
+        setChrome(false);
+        tracker = createPageChromeScrollState(scrollTop, false);
         return;
       }
 
       const next = advancePageChromeScroll(tracker, scrollTop, resolvedOptions);
       const changed = next.collapsed !== chromeIsCollapsed;
       tracker = next;
-      if (changed) setChrome(next.collapsed, now);
+      if (changed) setChrome(next.collapsed);
     };
 
     const handleScroll = () => {
-      if (animationFrame) return;
-      animationFrame = window.requestAnimationFrame(sampleScroll);
+      // The work above is constant-time and only commits React state when a
+      // threshold is crossed. Sampling the native event synchronously avoids
+      // losing the final position when mobile browsers pause animation frames
+      // during short momentum scrolls, tab transitions, or app switching.
+      sampleScroll();
     };
 
     const handleMediaChange = () => {
-      const now = performance.now();
-      if (!mediaQuery.matches) setChrome(false, now);
+      if (!mediaQuery.matches) setChrome(false);
       tracker = createPageChromeScrollState(scroller.scrollTop, mediaQuery.matches && chromeIsCollapsed);
     };
 
@@ -192,12 +185,10 @@ export const useCollapsiblePageChrome = (
     return () => {
       scroller.removeEventListener("scroll", handleScroll);
       mediaQuery.removeEventListener?.("change", handleMediaChange);
-      if (animationFrame) window.cancelAnimationFrame(animationFrame);
       onCollapsedChange?.(false);
     };
   }, [
     collapseDistance,
-    layoutSettleMs,
     mediaQueryValue,
     onCollapsedChange,
     resetKey,

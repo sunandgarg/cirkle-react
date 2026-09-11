@@ -11,7 +11,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { useCollapsiblePageChrome } from "@/hooks/useCollapsiblePageChrome";
+import {
+  PAGE_CHROME_SCROLL_RUNWAY_CLASS,
+  useCollapsiblePageChrome,
+} from "@/hooks/useCollapsiblePageChrome";
 import { useSharedPageChromeRequest } from "@/contexts/PageChromeContext";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -223,7 +226,7 @@ const Jobs = () => {
         data-testid="jobs-scroll-region"
         className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain [-webkit-overflow-scrolling:touch] [touch-action:pan-y_pinch-zoom]"
       >
-        <div className="mx-auto max-w-3xl pb-1 sm:px-6 sm:py-4">
+        <div className={`${PAGE_CHROME_SCROLL_RUNWAY_CLASS} mx-auto max-w-3xl pb-1 sm:px-6 sm:py-4`}>
           {focusedJobId && focusedJobFetched && !focusedJob && !error ? <div role="status" className="mb-3 rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground">That job is no longer available.</div> : null}
           {error ? <div className="rounded-2xl border border-destructive/25 bg-destructive/5 p-6 text-center"><BriefcaseBusiness className="mx-auto h-8 w-8 text-destructive" /><h2 className="mt-3 text-sm font-bold">Jobs could not be loaded</h2><p className="mt-1 text-xs text-muted-foreground">Check your connection and try again. If this continues, the jobs database migration may still need deployment.</p><Button variant="outline" className="mt-4 rounded-xl" onClick={() => refetch()}><RefreshCw className="h-4 w-4" /> Try again</Button></div>
             : isLoading ? <div className="divide-y divide-border border-y border-border bg-card sm:overflow-hidden sm:rounded-2xl sm:border">{[1, 2, 3, 4].map((item) => <div key={item} className="flex animate-pulse gap-3 px-4 py-5"><div className="h-12 w-12 rounded-lg bg-secondary" /><div className="flex-1"><div className="h-4 w-2/3 rounded bg-secondary" /><div className="mt-2 h-3 w-1/3 rounded bg-secondary" /><div className="mt-3 h-3 w-1/2 rounded bg-secondary" /></div></div>)}</div>

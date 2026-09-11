@@ -1,9 +1,13 @@
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   advancePageChromeScroll,
   createPageChromeScrollState,
+  DEFAULT_PAGE_CHROME_SCROLL_OPTIONS,
+  PAGE_CHROME_SCROLL_RUNWAY_CLASS,
+  PAGE_CHROME_SCROLL_RUNWAY_PX,
   shouldKeepPageChromeExpanded,
+  useCollapsiblePageChrome,
 } from "@/hooks/useCollapsiblePageChrome";
 import {
   COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS,
@@ -79,6 +83,55 @@ describe("mobile page chrome scroll direction", () => {
   it("keeps the expanded notification overlay above the profile reminder", () => {
     expect(COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS).toContain("relative z-50");
     expect(COLLAPSIBLE_PAGE_CHROME_STACKING_CLASS).toContain("[&>header]:z-50");
+  });
+
+  it("wires native scroll events to the collapsed state", () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (query: string) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    });
+
+    const scroller = document.createElement("main");
+    const scrollRef = { current: scroller };
+    const onCollapsedChange = vi.fn();
+    try {
+      const { result, unmount } = renderHook(() => useCollapsiblePageChrome(
+        scrollRef,
+        { onCollapsedChange },
+      ));
+
+      act(() => {
+        scroller.scrollTop = 48;
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+
+      expect(result.current).toBe(true);
+      expect(onCollapsedChange).toHaveBeenLastCalledWith(true);
+      unmount();
+    } finally {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
+  });
+
+  it("keeps a mobile runway longer than both gesture thresholds", () => {
+    expect(PAGE_CHROME_SCROLL_RUNWAY_PX).toBeGreaterThanOrEqual(
+      Math.max(
+        DEFAULT_PAGE_CHROME_SCROLL_OPTIONS.collapseDistance,
+        DEFAULT_PAGE_CHROME_SCROLL_OPTIONS.revealDistance,
+      ),
+    );
+    expect(PAGE_CHROME_SCROLL_RUNWAY_CLASS).toContain("min-h-[calc(100%_+_4rem)]");
+    expect(PAGE_CHROME_SCROLL_RUNWAY_CLASS).toContain("lg:min-h-0");
   });
 
   it("resets shared chrome immediately when the route changes", () => {

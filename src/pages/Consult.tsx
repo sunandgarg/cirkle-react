@@ -8,7 +8,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { useCollapsiblePageChrome } from "@/hooks/useCollapsiblePageChrome";
+import {
+  PAGE_CHROME_SCROLL_RUNWAY_CLASS,
+  useCollapsiblePageChrome,
+} from "@/hooks/useCollapsiblePageChrome";
 import { useSharedPageChromeRequest } from "@/contexts/PageChromeContext";
 import { toast } from "sonner";
 
@@ -375,7 +378,7 @@ const Consult = () => {
         data-testid="consult-scroll-region"
         className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain [-webkit-overflow-scrolling:touch] [touch-action:pan-y_pinch-zoom]"
       >
-        <main className="max-w-5xl mx-auto px-4 py-4 space-y-4 pb-4">
+        <main className={`${PAGE_CHROME_SCROLL_RUNWAY_CLASS} max-w-5xl mx-auto px-4 py-4 space-y-4 pb-4`}>
           {activeTab === "bookings" && (
             <>
               {bookingsLoading ? (
